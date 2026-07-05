@@ -1,7 +1,10 @@
-# Extraction output (the tool writes one JSON per widget + _structure.json here)
+# Extraction output (the tool writes one timestamped JSON per run here)
+extractions/
 swydo_out/
 out/
 *_out/
+# stray extraction files if run outside the default dir
+????-??-??-??-??-??-*.json
 
 # Local scratch / secrets
 *.local

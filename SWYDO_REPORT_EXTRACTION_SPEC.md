@@ -259,16 +259,42 @@ Verified by internal consistency (e.g. `cost_micros/1e6 ÷ clicks == average_cpc
 
 ## 9. Reference implementation
 
-`Get-SwydoReport.ps1` (alongside this spec) runs the whole flow: resolve → JWT (re-mints on 401) → live websocket (self-heartbeat + reconnect) → structure → per-widget pull with cache-warm retry (query + ~900 ms wait so a cold widget's async computation can land), `after` pagination, and a final **reconciliation sweep** (up to 3 rounds) that re-fetches any data widget still empty — cold widgets triggered in pass 1 have had time to compute by then. Writes one JSON file per widget + `_structure.json`, and warns if any widget never returned rows. Uses only .NET (`System.Net.WebSockets.ClientWebSocket`); no jq/node/python. Verified end-to-end: 21/21 data widgets, 3 TEXT, 2 PAGE_BREAK, no crash.
+`Get-SwydoReport.ps1` (alongside this spec) runs the whole flow: resolve → JWT (re-mints on 401) → live websocket (self-heartbeat + reconnect) → structure → per-widget pull with cache-warm retry (query + ~900 ms wait so a cold widget's async computation can land), `after` pagination, and a final **reconciliation sweep** (up to 3 rounds) that re-fetches any data widget still empty. It then **normalizes everything into one self-describing document** and writes a single file. Uses only .NET (`System.Net.WebSockets.ClientWebSocket`); no jq/node/python. Verified end-to-end (35-widget report: 32 data / 2 text / 1 page-break, no crash).
 
 ```
-.\Get-SwydoReport.ps1 -ShareUrl https://swy.do/shares/<KEY> -OutDir .\out [-Secret <password>] [-PageSize 500]
+.\Get-SwydoReport.ps1 -ShareUrl https://swy.do/shares/<KEY> -OutDir .\extractions [-Secret <password>] [-PageSize 500]
 ```
 
-**Environment caveats (Windows PowerShell 5.1):**
-- Output is written with `Set-Content -Encoding utf8`, which prepends a **UTF-8 BOM**. PowerShell's `Get-Content -Raw | ConvertFrom-Json` strips it transparently; a strict external parser may choke — re-emit BOM-less if piping elsewhere.
-- The script forces arrays (`@(…)`) so a 1-widget report doesn't misbehave, uses UTF-8 for the Basic-auth secret, and re-serializes date ranges at `-Depth 40/64`.
-- Interpretation/formatting (micros ÷1e6, CTR ×100, dim-name picking, dropping object metric columns, totals footer, ProseMirror flatten) is downstream; see the `build_report.ps1`/`parse.ps1` companions produced for the QCU pull.
+### 9.1 Output — one timestamped file per run (schemaVersion 1)
+
+Discipline: **one extraction = one file**, never a pile of per-widget fragments. Filename is `<OutDir>\YYYY-MM-DD-HH-MM-SS-<report-name-slug>.json` (local time; slug = report name lowercased, non-alphanumerics → `-`). BOM-less UTF-8. Fixed top-level keys `meta` / `report` / `widgets`; every widget has the same shape:
+
+```jsonc
+{
+  "meta":   { "tool","schemaVersion":1,"extractedAt"(ISO-8601),"shareUrl","shareKey",
+              "reportId","widgetCount","dataWidgets","warnings":[] },
+  "report": { "name","subtitle","client","author":{name,email},"team",
+              "dateRange","compareDateRange","sections":[{id,name}] },   // date ranges verbatim (see §7.4)
+  "widgets":[{
+      "id","visual","kind":"data|text|pageBreak","section","title","provider",
+      // kind=="text":  "text" (flattened ProseMirror)
+      // kind=="data":  "comparisonFormat",
+      //                "dimensions":[names],
+      //                "metrics":[{ "name","id","unit"? }],           // unit: "micros" | "fraction" | (absent = raw)
+      //                "rows":[{ "kind":"total|subtotal|data",
+      //                          "dimensions":{ DimName -> label },
+      //                          "metrics":{ MetricName -> { "current","compare" } } }]
+  }]
+}
+```
+
+Design rules that keep it consistent:
+- **Faithful, not interpreted.** Values are raw API numbers — money stays in **micros**, CTR/rate/share stay **fractions**. The per-metric `unit` hint (`micros`/`fraction`, best-effort from the metric id; absent = plain count) tells a downstream formatter what to do (÷1e6 or ×100). No lossy conversion is baked into the archive.
+- **Self-describing rows.** Each row is a `{kind, dimensions, metrics}` object keyed by human names — readable without this spec and order-preserving. Totals/subtotals are tagged by `kind` (they arrive at the head of the stream, §8).
+- **Object-valued echo metrics** (e.g. a keyword table's `Campaign`/`Ad group` metrics, §8) are preserved as-is under `current` (a nested object) — faithful; a formatter drops non-scalar metric values.
+- `warnings[]` lists any widget that never returned rows (cold cache the sweep couldn't warm).
+
+**Environment caveats (Windows PowerShell 5.1):** the script forces arrays (`@(…)`) so a 1-widget report doesn't misbehave, uses UTF-8 for the Basic-auth secret, writes BOM-less UTF-8 via `[IO.File]::WriteAllText`, and re-serializes at `-Depth 64`. Turning this normalized file into a formatted report (applying the `unit` hints, dropping echo columns, rendering the totals footer) is a downstream concern.
 
 ## 10. curl / bash quickstart
 
