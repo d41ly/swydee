@@ -1,0 +1,13 @@
+# Extraction output (the tool writes one JSON per widget + _structure.json here)
+swydo_out/
+out/
+*_out/
+
+# Local scratch / secrets
+*.local
+.env
+scratch/
+
+# OS / editor
+Thumbs.db
+.DS_Store
