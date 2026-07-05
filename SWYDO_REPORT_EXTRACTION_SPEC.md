@@ -247,11 +247,18 @@ Money is stored in **micros** (÷1,000,000 → currency, from `meta.currencyCode
 
 Verified by internal consistency (e.g. `cost_micros/1e6 ÷ clicks == average_cpc/1e6` to zero delta; `ctr == clicks/impressions`). Note the Facebook ids are `spend`/`cpc`/`costPerActionType::…`/`ctrLink` — **not** `amount_spent`/`cost_per_lead`/`cost_per_link_click` (those are display labels, not field ids).
 
-**Other providers (GA4, LinkedIn, Microsoft/Bing, TikTok, …) — UNVERIFIED.** The test report used only the two above. Do **not** assume micros for a provider not in this table. To infer units for a new provider: enumerate it via `source.parts.provider.id`, then cross-check a rendered KPI tile's value (from the browser, if available) against the raw `cell` to determine the divisor, or reason from the metric's nature (a per-click cost of `2037374` is almost certainly micros → $2.04; a `frequency` of `3.49` is a raw ratio).
+**Other providers (GA4, LinkedIn, Microsoft/Bing, TikTok, Pinterest, Snapchat, … ~30 total) — UNVERIFIED.** The test report used only the two above. Do **not** assume micros for a provider not in this table — Microsoft/Bing, LinkedIn, TikTok, Pinterest, Snapchat and GA4 report spend/cost in **actual account currency**, so a blind ÷1e6 turns $152.34 into $0.00015. To infer units for a new provider: enumerate it via `source.parts.provider.id`, then cross-check a rendered KPI tile's value (from the browser, if available) against the raw `cell`, or reason from the metric's nature.
+
+**Unit contract emitted by the extractor (schemaVersion 2).** `metric.unit` is a **scale hint, not a money flag**:
+- `"micros"` → divide by 1e6 to reach the **base unit** (currency **or** e.g. GA4 `engagement_time_micros` → seconds). Use `currencyCode` (surfaced per data widget) to know whether the base unit is money.
+- `"fraction"` → multiply by 100 for a percentage.
+- **absent** → render raw, never convert.
+
+The extractor only *infers* a unit for the **verified providers** `google-adwords` and `facebook-ads` (listed in `meta.unitBasis`); for any other provider it emits **no** `unit` and adds a `meta.warnings[]` note. The one universal rule is the self-documenting `_micros$` suffix (any provider). This deliberately trades false-positive corruption (v1 tagged every `:spend`/`:cpc`/`:cpm` and `_rate` as convertible, provider-blind) for honest silence on the unverified.
 
 ### 8.2 Visual types (`visual.id`)
 
-`KPI` (single tile, one metric), `TABLE`, `PIE_CHART`, `LINE_CHART`, `COLUMN_CHART`, `TEXT` (ProseMirror `content`), `PAGE_BREAK`.
+Seen live: `KPI`, `TABLE`, `PIE_CHART`, `LINE_CHART`, `COLUMN_CHART`, `TEXT` (ProseMirror `content`), `PAGE_BREAK`. Confirmed in the bundle but **not** in the test report: `BAR_CHART`, `AREA_CHART`, `IMAGE`, `HEATMAP`, `MAP` (and likely more in lazy chunks). Because the set is open, the extractor classifies by **shape, not by a visual-name allowlist** (§9.1 `kind`): `visual` is always preserved verbatim, but any data-backed viz (has a `source`) normalizes as `data` regardless of type, and an unrecognized non-data widget becomes `kind:"unknown"` with its raw node preserved — so a new Swydo chart type is never silently dropped or mis-coerced.
 
 ### 8.3 TEXT widgets
 
@@ -265,36 +272,47 @@ Verified by internal consistency (e.g. `cost_micros/1e6 ÷ clicks == average_cpc
 .\Get-SwydoReport.ps1 -ShareUrl https://swy.do/shares/<KEY> -OutDir .\extractions [-Secret <password>] [-PageSize 500]
 ```
 
-### 9.1 Output — one timestamped file per run (schemaVersion 1)
+### 9.1 Output — one timestamped file per run (schemaVersion 2)
 
 Discipline: **one extraction = one file**, never a pile of per-widget fragments. Filename is `<OutDir>\YYYY-MM-DD-HH-MM-SS-<report-name-slug>.json` (local time; slug = report name lowercased, non-alphanumerics → `-`). BOM-less UTF-8. Fixed top-level keys `meta` / `report` / `widgets`; every widget has the same shape:
 
 ```jsonc
 {
-  "meta":   { "tool","schemaVersion":1,"extractedAt"(ISO-8601),"shareUrl","shareKey",
-              "reportId","widgetCount","dataWidgets","warnings":[] },
-  "report": { "name","subtitle","client","author":{name,email},"team",
-              "dateRange","compareDateRange","sections":[{id,name}] },   // date ranges verbatim (see §7.4)
+  "meta":   { "tool","schemaVersion":2,"extractedAt"(ISO-8601),"shareUrl","shareKey",
+              "reportId","widgetCount","dataWidgets",
+              "unitBasis":["google-adwords","facebook-ads"],  // providers whose units were inferred
+              "warnings":[] },
+  "report": { "name","subtitle","orientation","client","author":{name,email},"team",
+              "dateRange","compareDateRange","sections":[{id,name}],"custom" },  // ranges verbatim (§7.4)
   "widgets":[{
-      "id","visual","kind":"data|text|pageBreak","section","title","provider",
+      "id","visual","kind":"data|text|pageBreak|manualKpi|unknown","section","title",
+      "provider",                       // first part's name (readable)
+      "providers":[{ "id","name" }],     // every source.part (blended/multi-source safe)
+      // manualKpiOptions present (any kind): "manualKpi":{ "value","compareValue" }
       // kind=="text":  "text" (flattened ProseMirror)
-      // kind=="data":  "comparisonFormat",
+      // kind=="data":  "comparisonFormat","currencyCode",
+      //                "target":{ "value" },        // KPI goal, present only when set
       //                "dimensions":[names],
-      //                "metrics":[{ "name","id","unit"? }],           // unit: "micros" | "fraction" | (absent = raw)
+      //                "metrics":[{ "name","id","unit"? }],   // unit: "micros"|"fraction"; absent = render raw
       //                "rows":[{ "kind":"total|subtotal|data",
       //                          "dimensions":{ DimName -> label },
       //                          "metrics":{ MetricName -> { "current","compare" } } }]
+      "raw": { ...untouched GraphQL widget node... }   // ALWAYS: lossless escape hatch
   }]
 }
 ```
 
-Design rules that keep it consistent:
-- **Faithful, not interpreted.** Values are raw API numbers — money stays in **micros**, CTR/rate/share stay **fractions**. The per-metric `unit` hint (`micros`/`fraction`, best-effort from the metric id; absent = plain count) tells a downstream formatter what to do (÷1e6 or ×100). No lossy conversion is baked into the archive.
-- **Self-describing rows.** Each row is a `{kind, dimensions, metrics}` object keyed by human names — readable without this spec and order-preserving. Totals/subtotals are tagged by `kind` (they arrive at the head of the stream, §8).
-- **Object-valued echo metrics** (e.g. a keyword table's `Campaign`/`Ad group` metrics, §8) are preserved as-is under `current` (a nested object) — faithful; a formatter drops non-scalar metric values.
-- `warnings[]` lists any widget that never returned rows (cold cache the sweep couldn't warm).
+Design rules that keep it consistent and flexible to the unseen:
+- **Faithful, not interpreted.** Values are raw API numbers; the per-metric `unit` is a **scale hint** (§8.1) applied only for verified providers — never a guess that could corrupt an unseen platform's numbers.
+- **`raw` escape hatch.** Every widget carries its untouched GraphQL node, so nothing *queried* is ever silently dropped — including the nested `node.rows` (a grouped/drill-down container the normalized view flattens) and object-valued cells. `raw` is post-pagination (holds all merged rows). Still **not** queried (documented boundary): `visualOptions`, `sort`, `style`, `hash`, `edges.cursor`.
+- **Shape-based `kind`, open to new visuals.** `TEXT`→text, `PAGE_BREAK`→pageBreak, `source!=null`→data (any viz type), `manualKpiOptions!=null`→manualKpi, else `unknown`. `visual` is preserved verbatim; an unrecognized widget is `unknown` + `raw`, never coerced. `manualKpi` is emitted whenever `manualKpiOptions` is present, independent of `kind`.
+- **Collision-safe rows.** Row maps are keyed by display name; on a duplicate (blended table with Google + Facebook "Clicks", or two same-named dims) the key is disambiguated (`"Clicks [facebook-ads:clicks]"`, then `[id #idx]`) so no column is silently overwritten. `raw` remains the ordered-cells source of truth.
+- **Object-valued echo metrics** preserved as-is under `current`; a formatter drops non-scalar metric values.
+- `warnings[]` lists widgets that never returned rows (cold cache) and any provider outside `unitBasis` (units not inferred).
 
-**Environment caveats (Windows PowerShell 5.1):** the script forces arrays (`@(…)`) so a 1-widget report doesn't misbehave, uses UTF-8 for the Basic-auth secret, writes BOM-less UTF-8 via `[IO.File]::WriteAllText`, and re-serializes at `-Depth 64`. Turning this normalized file into a formatted report (applying the `unit` hints, dropping echo columns, rendering the totals footer) is a downstream concern.
+**Forward-compat contract.** Additive minor changes bump `schemaVersion` additively; only a breaking rename bumps major. Consumers **must ignore** unknown `widget.kind` values and unknown keys, and treat `kind:"unknown"` as "read `raw`."
+
+**Environment caveats (Windows PowerShell 5.1):** functions are defined first with a `-DefineOnly` switch (dot-source for unit tests without running); the script forces arrays, uses UTF-8 for the secret, writes BOM-less UTF-8 via `[IO.File]::WriteAllText`, and serializes at `-Depth 100`. Turning this normalized file into a formatted report (applying `unit` hints + `currencyCode`, dropping echo columns, rendering totals) is a downstream concern.
 
 ## 10. curl / bash quickstart
 
