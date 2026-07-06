@@ -35,6 +35,16 @@ $script:CategoryMap = @{
   'mailchimp'='email-crm'; 'klaviyo'='email-crm'; 'activecampaign'='email-crm'; 'hubspot'='email-crm'
   'shopify'='ecommerce'; 'callrail'='calls'; 'ctm'='calls'
 }
+# Per-category rule config (spec 13.12): effort->result pairs (metric-part regexes) generalize
+# "effort with no result"; 'constrained'/'ranking' drive category-special rules. Metric-parts are lowercased.
+$script:RuleCfg = @{
+  'ads'           = @{ effort=@(@{e='(cost_micros|(^|_)cost$|spend)';r='(conversion|lead)'}, @{e='impression';r='(conversion|lead)'}); constrained='(search_lost_is|impression_share)' }
+  'web-analytics' = @{ effort=@(@{e='session';r='conversion'}, @{e='(^|_)user';r='conversion'}) }
+  'seo'           = @{ effort=@(@{e='impression';r='click'}); ranking='((^|_)position|(^|_)rank)' }
+  'email-crm'     = @{ effort=@(@{e='send';r='open'}, @{e='open';r='click'}) }
+  'ecommerce'     = @{ effort=@(@{e='session';r='order'}, @{e='add_to_cart';r='order'}) }
+  'calls'         = @{ effort=@(@{e='(^|_)call';r='(qualified|converted)'}) }
+}
 # ============================ pure helpers ============================
 function Get-MetricPart($id){ if($null -eq $id){ return '' }; $s=($id -split ':',2); $p=if($s.Count -gt 1){$s[1]}else{$s[0]}; return $p.ToLower() }
 function Get-ProviderId($id){ if($null -eq $id){ return '' }; return ($id -split ':')[0] }
@@ -92,6 +102,11 @@ function Get-DimLabel($c){
   return $cands[-1].v
 }
 function Test-GroupRow($label){ return ($null -eq $label -or $label -eq '(group)' -or $label -eq 'All') }
+# first metric in a widget whose metric-part matches a regex (for config-driven rules)
+function Find-Metric($w,$pat){ if($w.metrics){ foreach($m in $w.metrics){ if((Get-MetricPart $m.id) -match $pat){ return $m } } } return $null }
+function Row-Cur($row,$name){ $c=$row.metrics.$name; if($c -and ($c.current -is [double] -or $c.current -is [int] -or $c.current -is [long] -or $c.current -is [decimal])){ return [double]$c.current } return $null }
+function Row-Cmp($row,$name){ $c=$row.metrics.$name; if($c -and ($c.compare -is [double] -or $c.compare -is [int] -or $c.compare -is [long] -or $c.compare -is [decimal])){ return [double]$c.compare } return $null }
+function Row-Label($row){ $ps=@($row.dimensions.PSObject.Properties); if($ps.Count -gt 0){ return $ps[0].Value } return $null }
 # period derivation from extractedAt + dateRange.primary (ignore compareDateRange.period)
 function Derive-Periods($extractedAt,$dateRange){
   $out=[ordered]@{ current='current'; previous='previous'; label='current vs previous'; confidence='unconfirmed' }
@@ -125,7 +140,7 @@ if(-not $InFile){ throw "InFile is required" }
 if(-not $OutDir){ $OutDir = Split-Path -Parent $InFile }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
-$doc = (Get-Content $InFile -Raw) | ConvertFrom-Json
+$doc = [IO.File]::ReadAllText($InFile) | ConvertFrom-Json   # .NET UTF-8 (Get-Content -Raw mis-reads BOM-less UTF-8 as ANSI in PS 5.1)
 # schema gate
 if($doc.meta.schemaVersion -ne 2){ throw "unsupported schemaVersion (need 2, got '$($doc.meta.schemaVersion)') - re-extract with the current tool" }
 if(-not $doc.report -or -not $doc.report.name -or -not $doc.widgets){ throw "not a valid v2 extraction (missing report/widgets)" }
@@ -216,6 +231,48 @@ foreach($key in $byMetric.Keys){
     $perWord = if($per -eq 'cur'){ 'current' } else { 'previous' }
     $perLabel = if($per -eq 'cur'){ $periods.current } else { $periods.previous }
     if($mismatch){ [void]$disc.Add([ordered]@{ ruleId='DISC_CROSS_WIDGET'; severity='major'; metric=$mid; period=$perLabel; statement="'$mid' ($perWord) differs across same-scope widgets: $mn..$mx" }) }
+  }
+}
+
+# ---- row-level breakdown rules: concentration, effort->result, share-mismatch (per-category, config-driven) ----
+foreach($w in $dataWidgets){
+  $wdims=@($w.dimensions); if($wdims.Count -eq 0){ continue }   # only breakdown widgets
+  $tr=Total-Row $w; if(-not $tr){ continue }
+  $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
+  $wcat = Get-Category $wprov
+  $pname = if($w.providers -and $w.providers.Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $wprov }
+  $cc=$w.currencyCode; $dimName=$wdims[0]
+  $detail=@($w.rows | Where-Object { $_.kind -eq 'data' -and -not (Test-GroupRow (Row-Label $_)) })
+  if($detail.Count -eq 0){ continue }
+
+  # ANOM_CONCENTRATION: one row >= 50% of a higher-better additive metric's total
+  $primary=$null; foreach($m in @($w.metrics)){ if((Get-Direction $m.id) -eq 'higher-better' -and (Test-Additive $m.id)){ $primary=$m; break } }
+  if($primary){ $tot=Row-Cur $tr $primary.name
+    if($tot -and $tot -gt 0){ foreach($r in $detail){ $v=Row-Cur $r $primary.name; if($null -ne $v -and ($v/$tot) -ge 0.5){ $sh=[math]::Round(($v/$tot)*100,0)
+      [void]$anoms.Add([ordered]@{ ruleId='ANOM_CONCENTRATION'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is $sh% of $($primary.name) ($(Format-Metric $primary.id $primary.unit $v $cc) of $(Format-Metric $primary.id $primary.unit $tot $cc))"; evidence=[ordered]@{ share="$sh%" } }); break } } } }
+
+  # config-driven effort->result (no-result) and share-mismatch
+  $cfg=$script:RuleCfg[$wcat]
+  if($cfg -and $cfg.effort){
+    foreach($pair in $cfg.effort){
+      $em=Find-Metric $w $pair.e; $rm=Find-Metric $w $pair.r
+      if(-not $em -or -not $rm -or $em.id -eq $rm.id){ continue }
+      $totE=Row-Cur $tr $em.name; $totR=Row-Cur $tr $rm.name
+      if(-not $totE -or $totE -le 0){ continue }
+      $nEmpty=0
+      foreach($r in $detail){
+        $re=Row-Cur $r $em.name; $rr=Row-Cur $r $rm.name
+        if($null -eq $re){ continue }
+        $eShare=$re/$totE
+        if($eShare -ge 0.02 -and $rr -eq 0){ if($nEmpty -lt 8){ $nEmpty++
+          [void]$anoms.Add([ordered]@{ ruleId='ANOM_EFFORT_NO_RESULT'; severity='major'; platform=$pname; widget=$dimName; requiresDownstreamData=$false; statement="${pname}: '$(Row-Label $r)' used $([math]::Round($eShare*100,0))% of $($em.name) ($(Format-Metric $em.id $em.unit $re $cc)) with 0 $($rm.name)"; evidence=[ordered]@{ effort=(Format-Metric $em.id $em.unit $re $cc); result='0'; effortShare="$([math]::Round($eShare*100,0))%" } }) } }
+        elseif($totR -and $totR -gt 0 -and $null -ne $rr -and $rr -gt 0 -and $eShare -ge 0.10){
+          $rShare=$rr/$totR
+          if(($eShare/$rShare) -ge 3){ $hint=([string](Row-Label $r)) -match '(?i)awareness|brand|video|launch|opening'; $sev=if($hint){'info'}else{'major'}
+            [void]$anoms.Add([ordered]@{ ruleId='ANOM_SHARE_MISMATCH'; severity=$sev; platform=$pname; widget=$dimName; requiresDownstreamData=$true; statement="${pname}: '$(Row-Label $r)' is $([math]::Round($eShare*100,0))% of $($em.name) but only $([math]::Round($rShare*100,1))% of $($rm.name)$(if($hint){' (looks upper-funnel/awareness)'})"; evidence=[ordered]@{ effortShare="$([math]::Round($eShare*100,0))%"; resultShare="$([math]::Round($rShare*100,1))%" } }) }
+        }
+      }
+    }
   }
 }
 

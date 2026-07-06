@@ -67,6 +67,18 @@ A ((Get-DimLabel ([pscustomobject]@{campaign_id='1';campaign_name='Auto Loans'})
 A ((Get-DimLabel 'MOBILE') -eq 'MOBILE') "dim label string passthrough"
 A (Test-GroupRow (Get-DimLabel ([pscustomobject]@{count=3}))) "id-only object => (group)"
 
+Write-Host "== Find-Metric / Row helpers =="
+$w=[pscustomobject]@{ metrics=@([pscustomobject]@{name='Impr';id='google-adwords:impressions'},[pscustomobject]@{name='Cost';id='google-adwords:cost_micros'},[pscustomobject]@{name='Conv';id='google-adwords:conversions'}) }
+A ((Find-Metric $w '(cost_micros|(^|_)cost$|spend)').name -eq 'Cost') "Find-Metric cost pattern"
+A ((Find-Metric $w '(conversion|lead)').name -eq 'Conv') "Find-Metric conversion pattern"
+A ((Find-Metric $w 'impression').name -eq 'Impr') "Find-Metric impression pattern"
+A ($null -eq (Find-Metric $w 'nonexistent')) "Find-Metric miss => null"
+$row=[pscustomobject]@{ dimensions=[pscustomobject]@{ Campaign='HELOC' }; metrics=[pscustomobject]@{ Cost=[pscustomobject]@{current=1312576559;compare=$null}; Conv=[pscustomobject]@{current=34.3;compare=0} } }
+A ((Row-Cur $row 'Cost') -eq 1312576559) "Row-Cur scalar"
+A ($null -eq (Row-Cur $row 'Missing')) "Row-Cur missing => null"
+A ((Row-Cmp $row 'Conv') -eq 0) "Row-Cmp reads compare"
+A ((Row-Label $row) -eq 'HELOC') "Row-Label first dimension"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
