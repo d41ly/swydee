@@ -31,16 +31,21 @@ For each platform in `meta.providers`:
 ## <client-facing platform name, e.g. Google Ads / Meta>
 <!-- platform:<providerId> -->
 
-| Metric | <meta.currentPeriod> | <meta.previousPeriod> | Δ |
-|---|---|---|---|
-| <headline metric> | <displayCurrent> | <displayPrevious> | <displayDelta> |
-...   (previous/Δ columns only if hasComparison)
+- <Metric> was/were <displayCurrent> in <meta.currentPeriod> against <displayPrevious> in <meta.previousPeriod> (a <qualifier> <increase|decrease|improvement> of <displayDelta>).
+- ...one bullet per headline metric worth featuring...
 
 One-line takeaway.
 
-<optional: a key breakdown table from breakdowns[] — top rows + the "top N of M" note;
- intra-period pacing/CPL ONLY from timeSeries (pacing.series, derived.CPL).>
+<optional: intra-period pacing/CPL ONLY from timeSeries (pacing.series, derived.CPL), and a short
+ prose call-out of a key breakdown row — again as prose, not a table.>
 ```
+**Present per-platform QoQ comparisons as BULLET-POINT PROSE, not a table** — the client already sees the
+tabular view as a Swydo widget, so the report's job is the narrative, not a second table. One bullet per
+featured metric, e.g. *"Impressions were 95,302 in Q2 against 53,398 in Q1 (a whopping increase of 78.5%)."*
+The qualifier ("whopping/strong/healthy/concerning") carries the voice; the three numbers are verbatim facts
+display strings (`displayCurrent`, `displayPrevious`, `displayDelta` — drop the delta's sign in prose, the
+increase/decrease word carries direction). Only include the against-last-period clause for metrics whose
+fact has `hasComparison:true`.
 
 Then:
 
