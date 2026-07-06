@@ -42,6 +42,11 @@ Run `${CLAUDE_SKILL_DIR}/scripts/Test-ReportNumbers.ps1 -Report <draft.md> -Fact
 ### 6. Deliver
 Deliver the published `<out>\<stamp>-<slug>-report.md` (anchor-free, credential-free). Keep the `.draft.md` as the audit/re-verify source. Tell the user the report path and the facts path; summarize the headline in one or two sentences.
 
+### 7. Retain + clean up
+- **Keep the facts JSON as the record of provenance** — archive it next to the delivered report (e.g. `<report>.facts.json`). It's scrubbed and small; it keeps the report re-verifiable by the closer and is the input for later QoQ/YoY trend comparisons. Ad-platform data is mutable (attribution restates, rolling windows shift), so re-scraping later will NOT reproduce today's numbers — the facts snapshot is the only faithful record of what was reported.
+- **The raw extraction carries the share credential in cleartext.** Once Analyze has produced the facts, the raw has served its purpose: delete it, OR — if you want a lossless point-in-time source for re-derivation — scrub the credential (drop `meta.shareKey`/`meta.shareUrl` and any `swy.do/shares/...`) and archive only the scrubbed copy. NEVER leave a credential-bearing extraction on disk or in any shared/durable location.
+- Keep the `.draft.md` (anchored audit copy), the facts JSON, and the delivered report together per engagement/period.
+
 ## Notes
 - Coverage: surface every finding with `confidence` normal and every anomaly in the insights section; every `dataGaps`/`discrepancies` finding of severity ≥ major and every `meta.comparisonCaveats` MUST appear (the closer enforces the major ones).
 - If Mode A extraction returns warnings (`meta.warnings`) or empty widgets, surface them as data gaps — never present a clean report over incomplete data.
