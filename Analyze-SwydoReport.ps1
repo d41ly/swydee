@@ -231,7 +231,7 @@ function Get-Breakdown($w, $cap, $mustLabels){
       if($null -eq $cur){ continue }   # scalar-guard (echo objects)
       $cell=[ordered]@{ display=(Format-Metric $m.id $m.unit $cur $cc); type=(Metric-Type $m.id $m.unit $cc) }
       $cmp=Row-Cmp $r $m.name
-      if($null -ne $cmp){ $cell.hasComparison=$true; $d=Get-DeltaPct $cur $cmp; if($null -ne $d){ $cell.delta=(Format-Delta $d) } } else { $cell.hasComparison=$false }
+      if($null -ne $cmp){ $cell.hasComparison=$true; $cell.displayPrevious=(Format-Metric $m.id $m.unit $cmp $cc); $d=Get-DeltaPct $cur $cmp; if($null -ne $d){ $cell.delta=(Format-Delta $d) } } else { $cell.hasComparison=$false }
       $vals[[string]$m.name]=$cell
     }
     $rows+=[ordered]@{ label=[string](Row-Label $r); values=$vals }
@@ -430,6 +430,10 @@ foreach($w in $dataWidgets){
   $ts = Get-TimeSeries $w
   if($ts){ if(-not $platforms[$wprov].Contains('timeSeries')){ $platforms[$wprov]['timeSeries']=[System.Collections.ArrayList]@() }; [void]$platforms[$wprov]['timeSeries'].Add($ts) }
 }
+
+# stable unique fid per finding (ruleId#ordinal) so the report can echo it and the closer can verify surfacing
+$fidCounts=@{}
+foreach($arr in @($wins,$losses,$anoms,$disc,$gaps)){ foreach($fnd in $arr){ $rid=if($fnd.ruleId){$fnd.ruleId}else{'F'}; if(-not $fidCounts.ContainsKey($rid)){ $fidCounts[$rid]=0 }; $fidCounts[$rid]++; $fnd.fid="$rid#$($fidCounts[$rid])" } }
 
 $findings.wins=@($wins); $findings.losses=@($losses); $findings.anomalies=@($anoms); $findings.discrepancies=@($disc); $findings.dataGaps=@($gaps)
 
