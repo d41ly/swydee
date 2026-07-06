@@ -4,7 +4,7 @@
   money/format/delta/period/scrub). Dot-sources via -DefineOnly (no I/O). Run: .\Test-Analyze.ps1
 #>
 $ErrorActionPreference="Stop"
-. "$PSScriptRoot\Analyze-SwydoReport.ps1" -DefineOnly
+. "$PSScriptRoot\skill\scripts\Analyze-SwydoReport.ps1" -DefineOnly
 $pass=0;$fail=0
 function A($c,$m){ if($c){$script:pass++}else{$script:fail++;Write-Host "  FAIL: $m" -ForegroundColor Red} }
 

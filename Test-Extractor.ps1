@@ -6,7 +6,7 @@
   unknown-kind classification, null-safety. Run: .\Test-Extractor.ps1
 #>
 $ErrorActionPreference = "Stop"
-. "$PSScriptRoot\Get-SwydoReport.ps1" -DefineOnly    # loads the REAL functions, runs nothing
+. "$PSScriptRoot\skill\scripts\Get-SwydoReport.ps1" -DefineOnly    # loads the REAL functions, runs nothing
 $script:secMap = @{ s1 = "Section 1" }
 
 $pass=0; $fail=0

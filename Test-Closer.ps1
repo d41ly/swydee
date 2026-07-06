@@ -1,6 +1,6 @@
 # Offline unit tests for Test-ReportNumbers.ps1 (dot-source with -DefineOnly).
 # PS 5.1. Run: powershell -File Test-Closer.ps1
-. "$PSScriptRoot\Test-ReportNumbers.ps1" -DefineOnly
+. "$PSScriptRoot\skill\scripts\Test-ReportNumbers.ps1" -DefineOnly
 
 $script:pass = 0; $script:fail = 0
 function Ok($cond,$name){ if($cond){ $script:pass++ } else { $script:fail++; Write-Host "FAIL: $name" } }
