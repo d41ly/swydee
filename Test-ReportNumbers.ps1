@@ -40,14 +40,20 @@ $ErrorActionPreference = 'Stop'
 $script:CurClass = '[\$' + [char]0x20AC + [char]0xA3 + ']'          # $ EUR GBP
 $script:DashRx  = '[' + [char]0x2212 + [char]0x2013 + [char]0x2014 + ']'   # minus / en / em dash
 $script:TildeRx = '[~' + [char]0x2248 + ']'                                # ~ / approx
-# Master token regex - ordered alternation, exempt shapes first so "25-34"/"3x"/"2026" win.
+# A leading +/- is a sign ONLY at a sign position (start / after space or "(") - never when it is a
+# word-joiner or range hyphen ("Ad Group-3.75", "$500-$600", "5%-10%").
+$script:SignRx = '(?:(?<![\w.,$%)-])[+-])?'
+# A bare number must not be glued to a preceding word (identifiers/labels: "Group-3.75", "Q3", "v1.5").
+$script:LabelGuard = '(?<![A-Za-z])(?<![A-Za-z][-_/.])'
+# Master token regex - ordered alternation, exempt shapes first so dates/"25-34"/"3x"/"2026" win.
 $script:TokRx = '(?<mult>\d+(?:\.\d+)?\s*[xX])' +
+                '|(?<date>(?<![\d-])(?:19|20)\d\d-\d{1,2}(?:-\d{1,2})?(?![\d-]))' +
                 '|(?<range>\d+\s*-\s*\d+)' +
                 '|(?<bucket>\d+\+)' +
-                '|(?<cur>[+-]?' + $script:CurClass + '\s?-?\d[\d,]*(?:\.\d+)?\s*[KMB]?)' +
-                '|(?<pct>[+-]?\d[\d,]*(?:\.\d+)?\s*%)' +
+                '|(?<cur>' + $script:SignRx + $script:CurClass + '\s?\d[\d,]*(?:\.\d+)?\s*[KMB]?)' +
+                '|(?<pct>' + $script:SignRx + '\d[\d,]*(?:\.\d+)?\s*%)' +
                 '|(?<year>20\d\d)' +
-                '|(?<bare>[+-]?\d[\d,]*(?:\.\d+)?\s*[KMB]?)'
+                '|(?<bare>' + $script:LabelGuard + $script:SignRx + '\d[\d,]*(?:\.\d+)?\s*[KMB]?)'
 # Comparative verbs (conservative - excludes idiomatic bare up/down to avoid false positives).
 $script:CmpRx = '(?i)\b(grew|grow|grown|growth|fell|fall|fallen|rose|rise|risen|declin\w*|' +
                 'increas\w*|decreas\w*|higher|lower|improv\w*|worse|worsen\w*|dropp?\w*|' +
@@ -120,7 +126,7 @@ function Get-MeasureTokens($text){
   $norm = ([string]$text) -replace $script:DashRx,'-'
   foreach($mm in [regex]::Matches($norm,$script:TokRx)){
     $g = $mm.Groups
-    if($g['year'].Success){ continue }
+    if($g['year'].Success -or $g['date'].Success){ continue }   # calendar years and ISO date labels
     $end = $mm.Index + $mm.Length
     if($g['mult'].Success -or $g['range'].Success -or $g['bucket'].Success){
       # buckets/ranges/multipliers are demographic/ROAS shapes and are exempt ONLY when small
@@ -153,7 +159,7 @@ function Get-MeasureTokens($text){
     if(-not $isMeasure){ continue }
     $v = Normalize-Num $raw
     if($null -eq $v){ continue }
-    [void]$out.Add([ordered]@{ raw=$raw; value=$v; type=$type; index=$mm.Index; end=$end; signed=($raw -match '[+\-]') })
+    [void]$out.Add([ordered]@{ raw=$raw; value=$v; type=$type; index=$mm.Index; end=$end; signed=($raw -match '^[+-]') })
   }
   return $out
 }
@@ -317,9 +323,23 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
       }
       $ctxPlatform = $eff; $ctxLevel = $sec.level
     } else {
-      $named = $null; $nmatch = 0
-      foreach($pn in $index.nameToId.Keys){ if($pn -and $sec.header.ToLower().Contains(([string]$pn).ToLower())){ $named = $index.nameToId[$pn]; $nmatch++ } }
-      if($nmatch -eq 1){ $eff = $named; $ctxPlatform = $eff; $ctxLevel = $sec.level }
+      # Resolve by header text, but ONLY when the header plausibly IS a platform section (names exactly
+      # one platform, word-boundary, not a comparison/portfolio header). Nested names (Google / Google
+      # Ads) collapse to the most specific; a header naming several distinct platforms stays global.
+      $named = $null
+      $isCompare = ($sec.header -match '(?i)\b(vs|versus|compar\w*|across|combined|portfolio|blended|overall|total)\b')
+      if(-not $isCompare){
+        $nm = @()
+        foreach($pn in $index.nameToId.Keys){
+          if($pn -and ($sec.header -match ('(?i)(?<![A-Za-z0-9])' + [regex]::Escape([string]$pn) + '(?![A-Za-z0-9])'))){ $nm += [string]$pn }
+        }
+        if($nm.Count -gt 0){
+          $longest = @($nm | Sort-Object { $_.Length } -Descending)[0]
+          $distinct = @($nm | Where-Object { -not $longest.ToLower().Contains($_.ToLower()) })
+          if($distinct.Count -eq 0){ $named = $index.nameToId[$longest] }   # nested -> most specific; else global
+        }
+      }
+      if($named){ $eff = $named; $ctxPlatform = $eff; $ctxLevel = $sec.level }
       elseif($ctxPlatform -and $sec.level -gt $ctxLevel){ $eff = $ctxPlatform }   # deeper subsection inherits
       else { $eff = $null; if($sec.level -le $ctxLevel){ $ctxPlatform = $null; $ctxLevel = $sec.level } }
     }

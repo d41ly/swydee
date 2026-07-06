@@ -68,6 +68,15 @@ Ok ((NMeasures 'the last 45000 conversions') -eq 1) 'large context integer still
 # signed currency/count tokens capture their sign
 $sc1 = @(Get-MeasureTokens 'gained +1,234 net leads'); Ok ($sc1.Count -eq 1 -and $sc1[0].signed) 'bare +1,234 captured as signed'; Eqd $sc1[0].value 1234 'signed +1,234 value'
 $sc2 = @(Get-MeasureTokens 'a -$2,500.00 swing'); Ok ($sc2[0].signed) '-$2,500 captured as signed'; Eqd $sc2[0].value -2500 '-$2,500 value'
+# a sign is captured ONLY at a sign position - never a joiner/range hyphen (round-4 regression fix)
+Ok ((NMeasures '2026-04') -eq 0) 'ISO year-month date is exempt'
+Ok ((NMeasures 'launched on 2024-01-15 exactly') -eq 0) 'ISO full date is exempt'
+Ok ((NMeasures 'Ad Group-3.75 performed') -eq 0) 'number glued to a label word is not a measure'
+Ok ((NMeasures 'Q3 was strong') -eq 0) 'Q3 identifier is not a measure'
+$rg1 = @(Get-MeasureTokens 'cost ranged $500-$600 total'); Ok ($rg1.Count -eq 2 -and -not $rg1[0].signed -and -not $rg1[1].signed) 'currency range $500-$600 -> two UNSIGNED tokens'
+$rg2 = @(Get-MeasureTokens 'a 5%-10% band'); Ok ($rg2.Count -eq 2) 'percent range 5%-10% -> two tokens'
+$es1 = @(Get-MeasureTokens 'net +1,234 change'); Ok ($es1[0].signed) 'space-preceded +1,234 is signed'
+$es2 = @(Get-MeasureTokens 'delta (-2.2%) noted'); Ok ($es2[0].signed) 'paren-preceded -2.2% is signed'
 # ---------- Get-MeasureTokens: measures ----------
 Ok ((NMeasures 'spend was $10,864.72 total') -eq 1) 'measure currency'
 Ok ((NMeasures 'CTR of 14.4% held') -eq 1) 'measure percent'
@@ -258,6 +267,33 @@ $vGen = @'
 Across accounts, Meta spend was $555.00 while Google cost $10,864.72.
 '@
 Ok (-not (HasT (Invoke-Closer $vGen $factsObj) 'untraceable-number')) 'general (non-platform) section uses global scope: cross-platform numbers trace'
+# comparison header stays global (does not narrow to the one platform it names)
+$vCmp = @'
+## How Google Ads compares to the rest
+Google cost $10,864.72 but Meta only spent $555.00.
+'@
+Ok (-not (HasT (Invoke-Closer $vCmp $factsObj) 'untraceable-number')) 'comparison header stays global (cross-platform numbers trace)'
+# ISO date labels in a platform section are not flagged
+$vDate = @'
+## Google Ads
+<!-- platform:google_ads -->
+Data covers 2026-04 through 2026-06.
+'@
+Ok (-not (HasT (Invoke-Closer $vDate $factsObj) 'untraceable-number')) 'ISO date labels are not flagged untraceable'
+# nested platform names (Google / Google Ads): anchorless "## Google Ads" scopes to Ads, not global
+$fNest = '{ "meta":{}, "platforms":[ {"id":"ga4","name":"Google","hasComparison":false,"headline":{"u":{"type":"number","hasComparison":false,"displayCurrent":"9,001"}},"breakdowns":[],"timeSeries":[]}, {"id":"gads","name":"Google Ads","hasComparison":false,"headline":{"c":{"type":"currency","hasComparison":false,"displayCurrent":"$10,864.72"}},"breakdowns":[],"timeSeries":[]} ], "findings":{"wins":[],"losses":[],"anomalies":[],"discrepancies":[],"dataGaps":[]} }' | ConvertFrom-Json
+$vNest = @'
+## Google Ads
+We drove 9,001 conversions.
+'@
+Ok (HasT (Invoke-Closer $vNest $fNest) 'untraceable-number') 'nested names: "## Google Ads" scopes to Ads (GA4-only 9,001 untraceable), not global'
+# short platform name ("Meta") must not match inside "Metadata" -> section stays global, Google traces
+$fMeta = '{ "meta":{}, "platforms":[ {"id":"meta_ads","name":"Meta","hasComparison":false,"headline":{"s":{"type":"currency","hasComparison":false,"displayCurrent":"$555.00"}},"breakdowns":[],"timeSeries":[]}, {"id":"gads","name":"Google Ads","hasComparison":false,"headline":{"c":{"type":"currency","hasComparison":false,"displayCurrent":"$10,864.72"}},"breakdowns":[],"timeSeries":[]} ], "findings":{"wins":[],"losses":[],"anomalies":[],"discrepancies":[],"dataGaps":[]} }' | ConvertFrom-Json
+$vMeta = @'
+## Metadata quality review
+Google cost was $10,864.72 in this review.
+'@
+Ok (-not (HasT (Invoke-Closer $vMeta $fMeta) 'untraceable-number')) 'short name "Meta" does not match inside "Metadata" (Google number traces)'
 
 # comparison guard does not taint an unrelated no-comparison metric across a clause break
 $clauseReport = @'
