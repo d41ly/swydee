@@ -153,6 +153,39 @@ $ok = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords
 $f=Get-BreakdownFindings $ok
 A (-not (HasRule $f 'ANOM_EFFORT_NO_RESULT') -and -not (HasRule $f 'ANOM_CONCENTRATION') -and -not (HasRule $f 'ANOM_PAUSED')) "healthy balanced widget: no false anomalies (got $(@($f).Count))"
 
+Write-Host "== Metric-Type =="
+$mt=@{ 'google-adwords:cost_micros'=@('micros','USD','currency'); 'x:ctr'=@('fraction',$null,'percent'); 'x:clicks'=@($null,$null,'number')
+       'ga4:engagement_time_micros'=@('micros','USD','number'); 'google-adwords:quality_info_quality_score'=@($null,$null,'ratio')
+       'x:frequency'=@($null,$null,'ratio'); 'x:roas'=@($null,$null,'ratio'); 'google-adwords:search_lost_is_budget'=@('fraction',$null,'percent')
+       'x:conversions'=@($null,$null,'number'); 'facebook-ads:spend'=@('micros','USD','currency'); 'x:average_impression_frequency_per_user'=@($null,$null,'ratio') }
+foreach($k in $mt.Keys){ $v=$mt[$k]; A ((Metric-Type $k $v[0] $v[1]) -eq $v[2]) "Metric-Type $k => $(Metric-Type $k $v[0] $v[1]) exp $($v[2])" }
+
+Write-Host "== Get-Breakdown =="
+# F1: letter-less age buckets must NOT collapse (Row-Label, not Get-DimLabel)
+$age = Wgt 'facebook-ads' 'Facebook Ads' 'Age' @((Met 'Clicks' 'facebook-ads:clicks')) @(
+  (Rw 'total' $null 'Age' @{Clicks=@(4525,$null)}),(Rw 'data' '65+' 'Age' @{Clicks=@(2379,$null)}),
+  (Rw 'data' '55-64' 'Age' @{Clicks=@(914,$null)}),(Rw 'data' '18-24' 'Age' @{Clicks=@(25,$null)}))
+$bd=Get-Breakdown $age 20 $null
+A ($bd.rows.Count -eq 3) "age breakdown keeps all 3 rows (F1: not collapsed to group)"
+A ($bd.rows[0].label -eq '65+') "row label via Row-Label = '65+', ordered desc"
+$cell=$bd.rows[0].values.Clicks
+A ($null -ne $cell.display -and -not $cell.Contains('current')) "cell is display-only, no raw current (F7)"
+A ($cell.type -eq 'number') "cell type tagged"
+# F2: force-include a finding-referenced row past the cap
+$rm=[System.Collections.ArrayList]@(); [void]$rm.Add((Rw 'total' $null 'Kw' @{Impr=@(10000,$null)}))
+foreach($i in 1..25){ $v=(30-$i)*10+5; [void]$rm.Add((Rw 'data' "kw$i" 'Kw' @{Impr=@($v,$null)})) }
+$rm=@($rm)
+$kw=Wgt 'google-adwords' 'Google Ads' 'Kw' @((Met 'Impr' 'google-adwords:impressions')) $rm
+$bd2=Get-Breakdown $kw 5 @('kw25')
+A (@($bd2.rows | Where-Object { $_.label -eq 'kw25' }).Count -eq 1) "finding-referenced low row force-included past cap (F2)"
+A ($bd2.note -match 'of 25') "note reports rowCount ($($bd2.note))"
+# F8: time widget sorts chronologically, not by metric
+$mon=Wgt 'facebook-ads' 'Facebook Ads' 'Month' @((Met 'Impr' 'facebook-ads:impressions')) @(
+  (Rw 'total' $null 'Month' @{Impr=@(407553,$null)}),(Rw 'data' '2026-06' 'Month' @{Impr=@(75054,$null)}),
+  (Rw 'data' '2026-04' 'Month' @{Impr=@(225032,$null)}),(Rw 'data' '2026-05' 'Month' @{Impr=@(107467,$null)}))
+$bd3=Get-Breakdown $mon 20 $null
+A ($bd3.rows[0].label -eq '2026-04' -and $bd3.rows[2].label -eq '2026-06') "time widget sorted chronologically (F8)"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

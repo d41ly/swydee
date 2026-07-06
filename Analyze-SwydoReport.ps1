@@ -69,6 +69,15 @@ function Test-Money($id,$unit,$currency){
   $p = Get-MetricPart $id
   return [bool]($p -match '(cost|spend|cpc|cpm|cpa|cpl|revenue|budget|amount_spent|cost_per)')
 }
+# What FORM the value takes in prose, so the closer can require prose-token type to match (kills $1.1 vs 1.1%).
+# Order matters: fraction first, then ratio-like, then money (id-gated + non-money-micros denylist), else number.
+function Metric-Type($id,$unit,$currency){
+  $p = Get-MetricPart $id
+  if($unit -eq 'fraction'){ return 'percent' }
+  if($p -match 'roas|frequency|(^|_)score|quality|(^|_)position|(^|_)rank|aov|per_user|(^|_)ratio$'){ return 'ratio' }
+  if($p -notmatch 'engagement_time|_time_micros|duration|(^|_)seconds' -and $p -match 'cost|spend|cpc|cpm|cpa|cpl|revenue|budget|amount_spent|cost_per'){ return 'currency' }
+  return 'number'
+}
 $script:CurSym = @{ USD='$'; EUR=([char]0x20AC); GBP=([char]0xA3); CAD='CA$'; AUD='A$' }  # char-codes: keep source pure-ASCII (PS 5.1 reads UTF-8-no-BOM as ANSI)
 function Format-Metric($id,$unit,$value,$currency){
   if($null -eq $value){ return $null }
@@ -195,6 +204,42 @@ function Scrub-Credential($doc){
 }
 $script:KeyPattern = 'swy\.do/shares/[A-Za-z0-9]+|/g/[A-Za-z0-9]{20,}/reports/'
 function Assert-NoCredential($text){ if($text -match $script:KeyPattern){ throw "CREDENTIAL LEAK: share key/url found in output" } }
+# Per-widget breakdown table for the facts: top-`cap` rows (display-only, tagged), force-including
+# any label in $mustLabels (finding-referenced). Row labels via Row-Label (NOT Get-DimLabel).
+function Get-Breakdown($w, $cap, $mustLabels){
+  if(@($w.dimensions).Count -eq 0){ return $null }
+  $cc=$w.currencyCode; $wdims=@($w.dimensions); $dimName=$wdims[0]
+  $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
+  $wcat = Get-Category $wprov
+  $mets=@($w.metrics)
+  $detail=@($w.rows | Where-Object { $_.kind -eq 'data' -and -not (Test-GroupRow (Row-Label $_)) })
+  if($detail.Count -eq 0){ return $null }
+  $isTime = ($dimName -match '(?i)day|week|month|date')
+  $orderMet=$null
+  if($wcat -eq 'ads'){ foreach($m in $mets){ if((Get-MetricPart $m.id) -match '(cost_micros|(^|_)cost$|spend)'){ $orderMet=$m; break } } }
+  if(-not $orderMet){ foreach($m in $mets){ if((Get-Direction $m.id) -eq 'higher-better' -and (Test-Additive $m.id)){ $orderMet=$m; break } } }
+  if($isTime){ $sorted=@($detail | Sort-Object { [string](Row-Label $_) }) }
+  elseif($orderMet){ $sorted=@($detail | Sort-Object { $v=Row-Cur $_ $orderMet.name; if($null -eq $v){0}else{[double]$v} } -Descending) }
+  else { $sorted=@($detail) }
+  $top=@($sorted | Select-Object -First $cap)
+  if($mustLabels){ foreach($r in $sorted){ $lbl=[string](Row-Label $r); if(($mustLabels -contains $lbl) -and -not @($top | Where-Object { [string](Row-Label $_) -eq $lbl })){ $top+=$r } } }
+  $rows=@()
+  foreach($r in $top){
+    $vals=[ordered]@{}
+    foreach($m in $mets){
+      $cur=Row-Cur $r $m.name
+      if($null -eq $cur){ continue }   # scalar-guard (echo objects)
+      $cell=[ordered]@{ display=(Format-Metric $m.id $m.unit $cur $cc); type=(Metric-Type $m.id $m.unit $cc) }
+      $cmp=Row-Cmp $r $m.name
+      if($null -ne $cmp){ $cell.hasComparison=$true; $d=Get-DeltaPct $cur $cmp; if($null -ne $d){ $cell.delta=(Format-Delta $d) } } else { $cell.hasComparison=$false }
+      $vals[[string]$m.name]=$cell
+    }
+    $rows+=[ordered]@{ label=[string](Row-Label $r); values=$vals }
+  }
+  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{$_.name}); rowCount=$detail.Count; shown=$rows.Count; rows=$rows }
+  if($detail.Count -gt $rows.Count){ $out.note="showing top $($rows.Count) of $($detail.Count) rows" }
+  return $out
+}
 
 if($DefineOnly){ return }   # dot-source stops here
 
@@ -234,7 +279,7 @@ foreach($w in $dataWidgets){
     $hasCmp = ($null -ne $cell.compare)
     if($hasCmp){ $platforms[$prov].headline.hasComparison=$true; $platforms[$prov].hasComparison=$true }
     $platforms[$prov].headline[$key]=[ordered]@{
-      metric=$m.name; id=$m.id; unit=$m.unit; direction=$dir; currency=$cc
+      metric=$m.name; id=$m.id; unit=$m.unit; type=(Metric-Type $m.id $m.unit $cc); direction=$dir; currency=$cc
       current=$cell.current; previous=$cell.compare; deltaPct=$delta; hasComparison=$hasCmp
       displayCurrent=(Format-Metric $m.id $m.unit $cell.current $cc)
       displayPrevious=(Format-Metric $m.id $m.unit $cell.compare $cc)
@@ -311,6 +356,17 @@ foreach($key in $byMetric.Keys){
 # ---- row-level breakdown rules (per-category, config-driven; see Get-BreakdownFindings) ----
 foreach($w in $dataWidgets){ foreach($fnd in (Get-BreakdownFindings $w)){ [void]$anoms.Add($fnd) } }
 
+# ---- breakdown tables into facts (force-include finding-referenced rows) ----
+$plLabels=@{}
+foreach($fnd in $anoms){ if($fnd.platform -and $fnd.statement){ foreach($mm in [regex]::Matches([string]$fnd.statement,"'([^']+)'")){ $lbl=$mm.Groups[1].Value; if(-not $plLabels.ContainsKey($fnd.platform)){ $plLabels[$fnd.platform]=@() }; if($plLabels[$fnd.platform] -notcontains $lbl){ $plLabels[$fnd.platform]+=$lbl } } } }
+foreach($w in $dataWidgets){
+  if(@($w.dimensions).Count -eq 0){ continue }
+  $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
+  if(-not $platforms.ContainsKey($wprov)){ continue }
+  $bd = Get-Breakdown $w 20 $plLabels[$platforms[$wprov].name]
+  if($bd){ if(-not $platforms[$wprov].Contains('breakdowns')){ $platforms[$wprov]['breakdowns']=[System.Collections.ArrayList]@() }; [void]$platforms[$wprov]['breakdowns'].Add($bd) }
+}
+
 $findings.wins=@($wins); $findings.losses=@($losses); $findings.anomalies=@($anoms); $findings.discrepancies=@($disc); $findings.dataGaps=@($gaps)
 
 # seasonality caveat: adjacent-period comparisons (QoQ/MoM/WoW) can reflect seasonality, not performance.
@@ -332,7 +388,7 @@ $facts=[ordered]@{
   platforms=@($platforms.Values)
   findings=$findings
 }
-$json = $facts | ConvertTo-Json -Depth 40
+$json = $facts | ConvertTo-Json -Depth 40 -Compress   # machine-consumed (report model + closer); compress to cut context load
 Assert-NoCredential $json
 $stamp=(Get-Date).ToString('yyyy-MM-dd-HH-mm-ss')
 $slug=($doc.report.name -replace '[^A-Za-z0-9]+','-').Trim('-').ToLower(); if(-not $slug){$slug='report'}
