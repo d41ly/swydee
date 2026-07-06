@@ -43,8 +43,10 @@ $script:TildeRx = '[~' + [char]0x2248 + ']'                                # ~ /
 # A leading +/- is a sign ONLY at a sign position (start / after space or "(") - never when it is a
 # word-joiner or range hyphen ("Ad Group-3.75", "$500-$600", "5%-10%").
 $script:SignRx = '(?:(?<![\w.,$%)-])[+-])?'
-# A bare number must not be glued to a preceding word (identifiers/labels: "Group-3.75", "Q3", "v1.5").
-$script:LabelGuard = '(?<![A-Za-z])(?<![A-Za-z][-_/.])'
+# A bare number must not be glued to a preceding word/identifier (labels: "Group-3.75", "Q3", "v1.5",
+# "ID12345"). The first lookbehind rejects a preceding letter OR digit so a match cannot start in the
+# middle of a letter-led alphanumeric run (which would leak/truncate a phantom tail like ID12345 -> 2345).
+$script:LabelGuard = '(?<![A-Za-z0-9])(?<![A-Za-z][-_/.])'
 # Master token regex - ordered alternation, exempt shapes first so dates/"25-34"/"3x"/"2026" win.
 $script:TokRx = '(?<mult>\d+(?:\.\d+)?\s*[xX])' +
                 '|(?<date>(?<![\d-])(?:19|20)\d\d-\d{1,2}(?:-\d{1,2})?(?![\d-]))' +
