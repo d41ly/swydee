@@ -50,7 +50,7 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # Canonical Swydo share-key pattern (matches Analyze / Test-ReportNumbers; key alphabet broadened to _-).
-$script:CredRx   = '(?i)swy\.do/shares/[A-Za-z0-9_-]+|/g/[A-Za-z0-9_-]{20,}/reports/'
+$script:CredRx   = '(?i)swy\.do/shares/[A-Za-z0-9_-]+|/g/[A-Za-z0-9_-]+/reports/'   # /g/ key can be short - extractor captures [^/]+
 $script:StampRx  = '^\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}$'
 $script:Sentinel = '.swydee-archive'
 
@@ -90,9 +90,11 @@ function Get-StampDate($folderName){
 function Get-EntryAgeDate($archivedAtStr,$folderName,$now){
   # Age basis = manifest archivedAt (tool-written, authoritative) with folder-stamp fallback.
   # Future-dated => treated as undated (fail-safe: kept). Returns a Date or $null.
+  # DateTimeOffset.Date keeps the STORE's offset, so a cleanup machine in a different tz/DST reads the
+  # same calendar date (avoids boundary drift). Falls back to the folder stamp.
   $d = $null
-  $dt = [datetime]::MinValue
-  if($archivedAtStr -and [datetime]::TryParse([string]$archivedAtStr,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::RoundtripKind,[ref]$dt)){ $d = $dt.Date }
+  $dto = [DateTimeOffset]::MinValue
+  if($archivedAtStr -and [DateTimeOffset]::TryParse([string]$archivedAtStr,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::None,[ref]$dto)){ $d = $dto.Date }
   if($null -eq $d){ $s = Get-StampDate $folderName; if($s){ $d = $s.Date } }
   if($null -eq $d){ return $null }
   if($d -gt $now.Date.AddDays(1)){ return $null }
@@ -131,10 +133,25 @@ function Assert-NoCredential($text){
   if([string]$text -match $script:CredRx){ throw "credential pattern detected - refusing (share key must never enter the archive)" }
 }
 
+function Test-CredName($name){
+  # normalized (strip non-alnum, lowercase) match against credential-like field names.
+  $x = (([string]$name) -replace '[^A-Za-z0-9]','').ToLower()
+  return ($x -in @('sharekey','shareurl','apikey','apitoken','accesstoken','accesskey','bearertoken','authtoken','secret','clientsecret','password','token','bearer','jwt'))
+}
 function Test-HasCredProps($obj){
-  if($null -eq $obj -or $null -eq $obj.meta){ return $false }
-  $n = @($obj.meta.PSObject.Properties.Name)
-  return (($n -contains 'shareKey') -or ($n -contains 'shareUrl'))
+  # RECURSIVE over the whole parsed object (not just .meta): true if ANY property name anywhere is
+  # credential-like. Catches a top-level or renamed key (share_key/apiToken/token) that a swy.do-URL
+  # regex misses. (URL-shaped values are caught separately by Assert-NoCredential over the file text.)
+  if($null -eq $obj -or $obj -is [string] -or $obj -is [ValueType]){ return $false }
+  if($obj -is [System.Collections.IEnumerable] -and -not ($obj -is [System.Collections.IDictionary])){
+    foreach($i in $obj){ if(Test-HasCredProps $i){ return $true } }; return $false
+  }
+  $names=@(); $vals=New-Object System.Collections.ArrayList
+  if($obj -is [System.Collections.IDictionary]){ foreach($k in $obj.Keys){ $names+=[string]$k; [void]$vals.Add($obj[$k]) } }
+  elseif($obj.PSObject){ foreach($pp in $obj.PSObject.Properties){ $names+=[string]$pp.Name; [void]$vals.Add($pp.Value) } }
+  foreach($nm in $names){ if(Test-CredName $nm){ return $true } }
+  foreach($v in $vals){ if(Test-HasCredProps $v){ return $true } }
+  return $false
 }
 
 # ---------------- FS helpers (I/O; used only in the run section) ----------------
@@ -149,6 +166,26 @@ function Test-EntryHasReparse($entryPath){
   if(Test-IsReparse $entryPath){ return $true }
   $rp = @(Get-ChildItem -LiteralPath $entryPath -Recurse -Force -ErrorAction SilentlyContinue | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 })
   return ($rp.Count -gt 0)
+}
+
+function Test-ChainSafe($entryFull,$rootFull){
+  # TRUE only if NO reparse point sits on the ANCESTOR chain from the entry up to (not incl) root.
+  # A junction at the client-dir level would otherwise let [IO.Directory]::Delete traverse OUT of the
+  # archive (containment on the non-dereferenced path can't see it). Root is verified non-reparse earlier.
+  $rootN = ([string]$rootFull).TrimEnd('\','/')
+  $cur = ([string]$entryFull).TrimEnd('\','/')
+  $guard = 0
+  while($true){
+    if(Test-IsReparse $cur){ return $false }
+    $parent = Split-Path $cur -Parent
+    if(-not $parent){ return $false }
+    $parentN = ([string]$parent).TrimEnd('\','/')
+    if($parentN.Equals($rootN,[StringComparison]::OrdinalIgnoreCase)){ break }
+    if($parentN.Length -ge $cur.Length){ return $false }
+    $cur = $parentN
+    if(++$guard -gt 64){ return $false }
+  }
+  return $true
 }
 
 function Read-Manifest($entryDir){
@@ -202,7 +239,14 @@ if($Store){
     if(-not (Test-Path -LiteralPath $p)){ Die "$role not found: $p" 2 }
     $txt = [IO.File]::ReadAllText($p)
     try { Assert-NoCredential $txt } catch { Die ("$role file '$p' contains a share credential - refusing to archive. Pass the scrubbed copy.") 3 }
-    if($p -match '\.json$'){ try { if(Test-HasCredProps ([IO.File]::ReadAllText($p) | ConvertFrom-Json)){ Die "$role '$p' still has meta.shareKey/shareUrl - refusing." 3 } } catch {} }
+    # structural check on ANY input that parses as JSON (not gated on the .json extension - Copy-Item
+    # archives whatever is passed, so a .txt/.dat with credential fields must not slip through).
+    $parsed=$null; try { $parsed = $txt | ConvertFrom-Json } catch { $parsed=$null }
+    if($null -ne $parsed){
+      if(Test-HasCredProps $parsed){ Die "$role '$p' has a credential-like field (shareKey/shareUrl/token/secret...) - refusing. Scrub it (remove those fields)." 3 }
+      # re-serialize to de-escape \u sequences, then regex again - catches a share URL hidden as escaped JSON.
+      try { Assert-NoCredential ($parsed | ConvertTo-Json -Depth 100 -Compress) } catch { Die "$role '$p' embeds a share URL in its data (possibly escaped) - refusing." 3 }
+    }
     $inputs += ,@($role,$p)
   }
   $clientName = if($Client){ $Client } elseif($factsObj.meta.reportName){ [string]$factsObj.meta.reportName } else { 'client' }
@@ -224,26 +268,33 @@ if($Store){
   $stamp = $now.ToString('yyyy-MM-dd-HH-mm-ss'); $entryDir = Join-Path $slugDir $stamp; $n=2
   while(Test-Path -LiteralPath $entryDir){ $entryDir = Join-Path $slugDir "$stamp-$n"; $n++ }
   New-Item -ItemType Directory -Force -Path $entryDir | Out-Null
-  $files = New-Object System.Collections.ArrayList
-  foreach($pair in $inputs){
-    $role=$pair[0]; $p=$pair[1]; $dest = Join-Path $entryDir (Split-Path $p -Leaf)
-    Copy-Item -LiteralPath $p -Destination $dest -Force
-    $sha = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLower()
-    [void]$files.Add([ordered]@{ name=(Split-Path $dest -Leaf); role=$role; bytes=(Get-Item -LiteralPath $dest).Length; sha256=$sha })
+  # everything past dir-creation is wrapped: on ANY failure, roll back the partial entry so a
+  # half-written entry (esp. one holding a copied credential file) can never be left behind.
+  try {
+    $files = New-Object System.Collections.ArrayList
+    foreach($pair in $inputs){
+      $role=$pair[0]; $p=$pair[1]; $dest = Join-Path $entryDir (Split-Path $p -Leaf)
+      Copy-Item -LiteralPath $p -Destination $dest -Force
+      $sha = (Get-FileHash -LiteralPath $dest -Algorithm SHA256).Hash.ToLower()
+      [void]$files.Add([ordered]@{ name=(Split-Path $dest -Leaf); role=$role; bytes=(Get-Item -LiteralPath $dest).Length; sha256=$sha })
+    }
+    $manifest = [ordered]@{
+      manifestVersion = 1
+      client          = $clientName
+      clientSlug      = $slug
+      reportName      = (Get-ClientSlug $factsObj.meta.reportName)   # slugified; no raw operator text
+      periodLabel     = [string]$factsObj.meta.periodLabel
+      scrapeDate      = [string]$factsObj.meta.extractedAt
+      archivedAt      = $now.ToString('o')
+      files           = @($files)
+    }
+    $mjson = $manifest | ConvertTo-Json -Depth 20
+    Assert-NoCredential $mjson                                      # never let the manifest carry a credential
+    [IO.File]::WriteAllText((Join-Path $entryDir 'manifest.json'),$mjson,(New-Object Text.UTF8Encoding($false)))
+  } catch {
+    try { [IO.Directory]::Delete($entryDir,$true) } catch {}        # rollback the partial entry
+    Die ("store failed, rolled back partial entry: " + $_.Exception.Message) 3
   }
-  $manifest = [ordered]@{
-    manifestVersion = 1
-    client          = $clientName
-    clientSlug      = $slug
-    reportName      = (Get-ClientSlug $factsObj.meta.reportName)   # slugified; no raw operator text
-    periodLabel     = [string]$factsObj.meta.periodLabel
-    scrapeDate      = [string]$factsObj.meta.extractedAt
-    archivedAt      = $now.ToString('o')
-    files           = @($files)
-  }
-  $mjson = $manifest | ConvertTo-Json -Depth 20
-  Assert-NoCredential $mjson                                        # never let the manifest carry a credential
-  [IO.File]::WriteAllText((Join-Path $entryDir 'manifest.json'),$mjson,(New-Object Text.UTF8Encoding($false)))
   Write-Host ("stored -> {0}\{1}\{2}  ({3} file(s), client '{4}')" -f (Split-Path $rootFull -Leaf),$slug,(Split-Path $entryDir -Leaf),$files.Count,$clientName)
   exit 0
 }
@@ -311,6 +362,7 @@ if($Cleanup){
     $entryFull = $null
     try { $entryFull = Resolve-Full $e.path } catch { Write-Host ("  SKIP (unresolvable): {0}" -f $e.stamp); $failed++; continue }
     if(-not (Test-PathWithinRoot $entryFull $rootFull)){ Write-Host ("  SKIP (outside archive root): {0}" -f $entryFull); $failed++; continue }
+    if(-not (Test-ChainSafe $entryFull $rootFull)){ Write-Host ("  SKIP (a parent folder is a junction/symlink - would delete outside the archive): {0}\{1}" -f $e.slug,$e.stamp); $failed++; continue }
     if(Test-EntryHasReparse $entryFull){ Write-Host ("  SKIP (contains a junction/symlink - remove it by hand): {0}\{1}" -f $e.slug,$e.stamp); $failed++; continue }
     try {
       foreach($f in @(Get-ChildItem -LiteralPath $entryFull -Recurse -Force -File -ErrorAction SilentlyContinue)){ if($f.IsReadOnly){ $f.IsReadOnly=$false } }

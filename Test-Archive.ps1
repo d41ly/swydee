@@ -56,6 +56,15 @@ Ok (-not (Threw { Assert-NoCredential 'clean marketing prose, no keys' })) 'cred
 Ok (Test-HasCredProps ([pscustomobject]@{ meta=[pscustomobject]@{ shareKey='x' } })) 'credprops: shareKey detected'
 Ok (Test-HasCredProps ([pscustomobject]@{ meta=[pscustomobject]@{ shareUrl='x' } })) 'credprops: shareUrl detected'
 Ok (-not (Test-HasCredProps ([pscustomobject]@{ meta=[pscustomobject]@{ reportName='x' } }))) 'credprops: clean meta ok'
+Ok (Test-CredName 'shareKey') 'credname: shareKey'
+Ok (Test-CredName 'share_key') 'credname: share_key normalized'
+Ok (Test-CredName 'apiToken') 'credname: apiToken'
+Ok (-not (Test-CredName 'reportName')) 'credname: reportName is not credential-like'
+Ok (Test-HasCredProps ([pscustomobject]@{ shareKey='K' })) 'credprops: TOP-LEVEL shareKey (no meta) detected'
+Ok (Test-HasCredProps ([pscustomobject]@{ meta=[pscustomobject]@{ share_key='K' } })) 'credprops: renamed share_key detected'
+Ok (Test-HasCredProps ([pscustomobject]@{ a=[pscustomobject]@{ b=[pscustomobject]@{ apiToken='K' } } })) 'credprops: deeply-nested token detected'
+Ok (Threw { Assert-NoCredential 'app.swydo.com/g/short/reports/RID99' }) 'cred: short /g/ key now caught (regex floor dropped)'
+Ok ((Get-EntryAgeDate '2026-06-06T00:30:00+13:00' 'x' $now) -eq ([datetime]'2026-06-06')) 'agedate: store-frame date from offset (tz-stable)'
 
 # ---------------- FS integration (subprocess) ----------------
 function RunTool { param([string[]]$a)
@@ -90,6 +99,20 @@ try {
   $r2 = RunTool @('-Store','-Facts',$cleanFacts,'-Extraction',$dirtyExtract,'-Client','Acme Bank','-ArchiveRoot',$root)
   Ok ($r2.code -ne 0) 'store: credential-bearing extraction refused (non-zero)'
   Ok (@(Get-ChildItem -Recurse -Filter manifest.json $root).Count -eq 1) 'store: refusal archived nothing new'
+  # a credential-bearing extraction with a NON-.json extension is still refused (structural check is not gated on extension)
+  $dirtyTxt = Join-Path $tmp 'raw.extraction.txt'
+  [IO.File]::WriteAllText($dirtyTxt, '{"meta":{"shareKey":"LIVEKEY_txt"}}', (New-Object Text.UTF8Encoding($false)))
+  $r3 = RunTool @('-Store','-Facts',$cleanFacts,'-Extraction',$dirtyTxt,'-Client','Acme Bank','-ArchiveRoot',$root)
+  Ok ($r3.code -ne 0) 'store: .txt extraction with a key field refused (extension-independent)'
+  Ok (@(Get-ChildItem -Recurse -Filter manifest.json $root).Count -eq 1) 'store: .txt refusal archived nothing new'
+  # a share URL hidden as \u-escaped JSON in a value: raw-text grep misses it, re-serialize catches it; no orphan left
+  $escFacts = Join-Path $tmp 'esc.facts.json'
+  # a share URL embedded in a facts VALUE (not just meta.shareUrl) must be refused, and must leave no
+  # orphan entry behind (input gate fires before the entry dir is created; rollback covers late failures).
+  [IO.File]::WriteAllText($escFacts, '{"meta":{"reportName":"r","periodLabel":"see https://swy.do/shares/LiveKey123456","extractedAt":"2026-07-06T10:00:00Z"}}', (New-Object Text.UTF8Encoding($false)))
+  $r4 = RunTool @('-Store','-Facts',$escFacts,'-Client','EscTest','-ArchiveRoot',$root)
+  Ok ($r4.code -ne 0) 'store: share URL in a facts value refused'
+  Ok (-not (Test-Path (Join-Path $root 'esctest'))) 'store: refusal left NO orphan entry'
 
   # Build aged/undated entries by hand (Store always stamps "now"), + sentinel already present
   function New-AgedEntry($slug,$stamp,$client,$archivedAt){
@@ -130,6 +153,19 @@ try {
   Ok (Test-Path $canary) 'cleanup execute: junction victim canary INTACT (C2 - no traversal out of root)'
   if($junctionMade){ Ok ((Test-Path $old) -and ($ex.out -match 'junction|symlink')) 'cleanup execute: entry with a junction is SKIPPED, not deleted' }
   else { Ok (-not (Test-Path $old)) 'cleanup execute: old entry removed (junction unavailable, plain delete)' }
+
+  # CRITICAL (ancestor junction): a junction at the CLIENT-DIR level must not let -Execute delete outside the root
+  $victim2 = Join-Path $tmp 'victim2'; $vEntry = Join-Path $victim2 '2025-01-01-00-00-00'
+  New-Item -ItemType Directory -Force $vEntry | Out-Null
+  [IO.File]::WriteAllText((Join-Path $vEntry 'manifest.json'), (@{ manifestVersion=1; client='BigClient'; clientSlug='bigclient'; archivedAt=((Get-Date).AddMonths(-6).ToString('o')); periodLabel='x'; files=@() } | ConvertTo-Json), (New-Object Text.UTF8Encoding($false)))
+  $canary2 = Join-Path $vEntry 'report.md'; [IO.File]::WriteAllText($canary2,'OUTSIDE-ROOT canary',(New-Object Text.UTF8Encoding($false)))
+  $ancJunc=$false
+  try { New-Item -ItemType Junction -Path (Join-Path $root 'bigclient') -Target $victim2 -ErrorAction Stop | Out-Null; $ancJunc=$true } catch {}
+  if($ancJunc){
+    $exA = RunTool @('-Cleanup','-OlderThan','1mo','-Client','BigClient','-Execute','-ArchiveRoot',$root)
+    Ok (Test-Path $canary2) 'CRITICAL: ancestor-junction victim OUTSIDE root SURVIVES -Execute'
+    Ok ($exA.out -match 'parent folder is a junction') 'ancestor-junction entry SKIPPED with clear reason'
+  } else { Write-Host '  (ancestor-junction test skipped: could not create junction)' }
 }
 finally {
   # best-effort cleanup of the test tree (remove any junctions first so we do not follow them)

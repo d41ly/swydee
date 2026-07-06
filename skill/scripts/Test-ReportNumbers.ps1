@@ -63,7 +63,7 @@ $script:CmpRx = '(?i)\b(grew|grow|grown|growth|fell|fall|fallen|rose|rise|risen|
                 'climb\w*|surg\w*|plung\w*|gained?|lost|vs\.?|year-over-year|' +
                 'quarter-over-quarter|QoQ|YoY|compared)\b'
 # Credential leak patterns (fail-closed; case-insensitive so SWY.DO/... can't slip through).
-$script:CredRx = '(?i)swy\.do/shares/[A-Za-z0-9]+|/g/[A-Za-z0-9]{20,}/reports/'
+$script:CredRx = '(?i)swy\.do/shares/[A-Za-z0-9_-]+|/g/[A-Za-z0-9_-]+/reports/'
 # Downstream / lead-quality clause (for requiresDownstreamData findings).
 $script:DownRx = '(?i)(downstream|lead[- ]quality|lead quality|conversion quality|' +
                  'qualit\w* of (the )?leads|confirm\w*.{0,40}(sales|crm|close|revenue))'

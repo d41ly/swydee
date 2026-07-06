@@ -202,7 +202,7 @@ function Scrub-Credential($doc){
   if($doc.meta){ 'shareKey','shareUrl' | ForEach-Object { if($doc.meta.PSObject.Properties.Name -contains $_){ $doc.meta.PSObject.Properties.Remove($_) } } }
   return $doc
 }
-$script:KeyPattern = 'swy\.do/shares/[A-Za-z0-9]+|/g/[A-Za-z0-9]{20,}/reports/'
+$script:KeyPattern = '(?i)swy\.do/shares/[A-Za-z0-9_-]+|/g/[A-Za-z0-9_-]+/reports/'
 function Assert-NoCredential($text){ if($text -match $script:KeyPattern){ throw "CREDENTIAL LEAK: share key/url found in output" } }
 # Per-widget breakdown table for the facts: top-`cap` rows (display-only, tagged), force-including
 # any label in $mustLabels (finding-referenced). Row labels via Row-Label (NOT Get-DimLabel).
