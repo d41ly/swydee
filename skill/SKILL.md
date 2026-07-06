@@ -31,14 +31,14 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 - Count distinct `meta.providers[].category`. **Single-pass** if 1 category (and not `--thorough`). **Fan-out** if ≥ 2 distinct categories (or `--thorough`); `--fast` forces single-pass.
 - Fan-out: write one facts-slice file per category (the facts subset for that category's platforms) to the out dir, spawn one analyst subagent per category **passing only the slice file path** (never the extraction), plus one cross-cutting agent for portfolio/cross-platform notes; then synthesize. Completeness gate: every `meta.providers` platform appears exactly once in the report.
 
-### 4. Write the report — follow `report-template.md` exactly
-Fill the template from the facts in the selected voice profile (default `causal`). Obey every hard rule in it (verbatim numbers, mandatory caveats, `<!-- platform:id -->` / `<!-- finding:fid -->` / `<!-- caveat:id -->` anchors, no arithmetic). The voice changes only tone and attribution confidence — never the numbers or caveats.
+### 4. Write the report DRAFT — follow `report-template.md` exactly
+Write the **draft** (with anchors) to a working path `<out>\<stamp>-<slug>-report.draft.md`. Fill the template from the facts in the selected voice profile (default `causal`). Obey every hard rule in it: verbatim numbers; ALL comparisons narrated as prose (no tables/charts); mandatory caveats; the `<!-- platform:id -->` / `<!-- finding:fid -->` / `<!-- caveat:id -->` anchors (these are the verifier's scaffold and get stripped from the delivered file). The voice changes only tone and attribution confidence — never the numbers or caveats.
 
-### 5. Verify — run the closer, fail-closed
-Run `Test-ReportNumbers.ps1 -Report <report.md> -Facts <facts.json>`. If it exits non-zero, read the violations and **fix the report** (remove/correct untraceable numbers, add missing caveats/gaps, fix comparison claims, remove leaked credentials), then re-run. Do NOT deliver a report the closer rejects.
+### 5. Verify + publish — run the closer, fail-closed
+Run `Test-ReportNumbers.ps1 -Report <draft.md> -Facts <facts.json> -PublishTo <out>\<stamp>-<slug>-report.md`. On PASS the closer writes the client copy with all anchors stripped to `-PublishTo` (deterministic strip → the delivered file is the verified text minus comments). If it exits non-zero, it publishes NOTHING — read the violations, **fix the draft** (untraceable numbers, missing caveats/gaps, comparison claims, leaked credentials), and re-run. Never hand-strip anchors or deliver a report the closer rejects.
 
 ### 6. Deliver
-Save `<out>\<stamp>-<report-slug>-report.md` (credential-free). Tell the user the report path and the facts path (for audit). Summarize the headline in one or two sentences.
+Deliver the published `<out>\<stamp>-<slug>-report.md` (anchor-free, credential-free). Keep the `.draft.md` as the audit/re-verify source. Tell the user the report path and the facts path; summarize the headline in one or two sentences.
 
 ## Notes
 - Coverage: surface every finding with `confidence` normal and every anomaly in the insights section; every `dataGaps`/`discrepancies` finding of severity ≥ major and every `meta.comparisonCaveats` MUST appear (the closer enforces the major ones).

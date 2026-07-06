@@ -317,6 +317,21 @@ $fCav2 = '{ "meta":{ "comparisonCaveats":[ {"id":"s1","text":"a"},{"id":"s10","t
 $rCav2 = Invoke-Closer "## Notes`nSee note. <!-- caveat:s10 -->`n" $fCav2
 Ok (HasT $rCav2 'missing-caveat') 's1 caveat not masked by echoed s10 (delimited anchor)'
 
+# Strip-Anchors: the published client copy has no machine anchors but keeps prose + numbers verbatim
+$anchoredRep = @'
+## Google Ads
+<!-- platform:google-adwords -->
+
+Impressions were 95,302 in Q2 against 53,398 in Q1 (a whopping increase of 78.5%). <!-- finding:WIN#10 -->
+
+Given seasonality, validate against last year. <!-- caveat:seasonality -->
+'@
+$clean = Strip-Anchors $anchoredRep
+Ok (-not ($clean -match '<!--')) 'Strip-Anchors removes every HTML anchor comment'
+Ok ($clean -match 'Impressions were 95,302 in Q2 against 53,398 in Q1 \(a whopping increase of 78\.5%\)\.') 'Strip-Anchors keeps prose + numbers verbatim'
+Ok (-not ($clean -match '\n{3,}')) 'Strip-Anchors collapses the blank runs left by anchor-only lines'
+Ok (-not ($clean -match '[ \t]+\n')) 'Strip-Anchors trims trailing whitespace left by inline anchors'
+
 Write-Host ''
 Write-Host ("Test-Closer: {0} passed, {1} failed." -f $script:pass,$script:fail)
 if($script:fail -gt 0){ exit 1 }

@@ -31,6 +31,7 @@
 param(
   [string]$Report,
   [string]$Facts,
+  [string]$PublishTo,          # on PASS, write a client copy with the machine anchors stripped
   [switch]$TraceRecommendations,
   [switch]$DefineOnly
 )
@@ -444,6 +445,16 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   return [ordered]@{ measuresChecked=$measured; traced=$traced; violations=$violations }
 }
 
+function Strip-Anchors($text){
+  # Produce the client-facing copy: remove the machine anchors (<!-- platform/finding/caveat:... -->,
+  # and any HTML comment), trim the trailing whitespace they leave, and collapse the resulting blank
+  # runs. Deterministic: the published file is the VERIFIED text minus comments - no number can change.
+  $t = ([string]$text) -replace "`r`n","`n"
+  $t = $t -replace '(?s)<!--.*?-->',''
+  $t = ($t -split "`n" | ForEach-Object { $_ -replace '[ \t]+$','' }) -join "`n"
+  return ($t -replace '\n{3,}', "`n`n")
+}
+
 if($DefineOnly){ return }
 
 # ---- run ----
@@ -462,8 +473,14 @@ $res = Invoke-Closer $reportText $factsObj -TraceRecs:$TraceRecommendations
 Write-Host ("Test-ReportNumbers: {0} measure numbers checked, {1} traced, {2} violation(s)." -f $res.measuresChecked,$res.traced,$res.violations.Count)
 if($res.violations.Count -eq 0){
   Write-Host 'PASS - all numbers trace; required findings/caveats present; no credential leak.'
+  if($PublishTo){
+    [IO.File]::WriteAllText($PublishTo, (Strip-Anchors $reportText), (New-Object Text.UTF8Encoding($false)))
+    Write-Host ("published client report (anchors stripped) -> {0}" -f $PublishTo)
+  }
   exit 0
 }
+# NB: on FAIL we deliberately do NOT publish - no clean deliverable is produced for a report that
+# hasn't passed verification.
 $byType = $res.violations | Group-Object { $_.type }   # script-block: reads the key off the ordered-dict
 foreach($grp in $byType){
   Write-Host ''

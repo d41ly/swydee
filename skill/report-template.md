@@ -19,7 +19,7 @@ If `voice:<type>` names an unknown profile, fall back to `causal` and say so in 
 2. **No blended/portfolio numbers** (there is no portfolio total in the facts) — report each platform separately. **No hand-summed segment figures** (cite the single-bucket concentration the facts give, e.g. "65+ = 53% of clicks", not a summed "55+ = 73%").
 3. Reproduce **every** `meta.comparisonCaveats[]` at least once — write its `.text` and put its anchor `<!-- caveat:<id> -->` (e.g. `<!-- caveat:seasonality -->`) on that line so the verifier can confirm it. For every surfaced finding with `requiresDownstreamData:true`, its point/recommendation carries a "confirm downstream / lead-quality before acting" clause.
 4. Surface every `dataGaps`/`discrepancies` finding (sev ≥ major) and every `GAP_UNIT_UNCONFIRMED`.
-5. **Anchors** (machine-read; keep exactly): each platform gets its own `##` section header with `<!-- platform:<providerId> -->` immediately under it — **exactly one** platform anchor per section (two in one section is flagged, and an anchor whose id isn't in the facts is flagged). Put `<!-- finding:<fid> -->` on the **same line** as that finding's numbers (a finding's figures only trace on the line carrying its fid — don't split the comment onto its own line), and `<!-- caveat:<id> -->` on the caveat's line. These let the verifier scope numbers and confirm surfacing; the prose around them is free to paraphrase.
+5. **Anchors** (machine-read verification scaffold; keep exactly in the draft). These are HTML comments the verifier uses to scope numbers and confirm surfacing — they are **stripped from the delivered client report** (the closer's `-PublishTo` writes the clean copy on PASS), so they never reach the client; include them in the draft anyway. Each platform gets its own `##` section header with `<!-- platform:<providerId> -->` immediately under it — **exactly one** platform anchor per section (two in one section is flagged, and an anchor whose id isn't in the facts is flagged). Put `<!-- finding:<fid> -->` on the **same line** as that finding's numbers (a finding's figures only trace on the line carrying its fid — don't split the comment onto its own line), and `<!-- caveat:<id> -->` on the caveat's line. The prose around them is free to paraphrase.
 
 ## Structure
 
@@ -39,13 +39,15 @@ One-line takeaway.
 <optional: intra-period pacing/CPL ONLY from timeSeries (pacing.series, derived.CPL), and a short
  prose call-out of a key breakdown row — again as prose, not a table.>
 ```
-**Present per-platform QoQ comparisons as BULLET-POINT PROSE, not a table** — the client already sees the
-tabular view as a Swydo widget, so the report's job is the narrative, not a second table. One bullet per
-featured metric, e.g. *"Impressions were 95,302 in Q2 against 53,398 in Q1 (a whopping increase of 78.5%)."*
-The qualifier ("whopping/strong/healthy/concerning") carries the voice; the three numbers are verbatim facts
-display strings (`displayCurrent`, `displayPrevious`, `displayDelta` — drop the delta's sign in prose, the
-increase/decrease word carries direction). Only include the against-last-period clause for metrics whose
-fact has `hasComparison:true`.
+**Narrate EVERY comparison as prose — never a table, chart, or other structured format.** This applies to
+the per-platform QoQ headline, breakdown/segment comparisons, pacing, and any period-over-period or
+across-segment contrast. The client already sees the tabular/visual layer as Swydo widgets, so the report's
+job is the narrative. Use bullets or sentences, one point per featured metric, e.g. *"Impressions were
+95,302 in Q2 against 53,398 in Q1 (a whopping increase of 78.5%)."* The qualifier
+("whopping/strong/healthy/concerning") carries the voice; the numbers are verbatim facts display strings
+(`displayCurrent`, `displayPrevious`, `displayDelta` — drop the delta's sign in prose, the increase/decrease
+word carries direction). Only include the against-last-period clause for metrics whose fact has
+`hasComparison:true`. Do not emit markdown tables anywhere in the report.
 
 Then:
 
