@@ -107,6 +107,69 @@ function Find-Metric($w,$pat){ if($w.metrics){ foreach($m in $w.metrics){ if((Ge
 function Row-Cur($row,$name){ $c=$row.metrics.$name; if($c -and ($c.current -is [double] -or $c.current -is [int] -or $c.current -is [long] -or $c.current -is [decimal])){ return [double]$c.current } return $null }
 function Row-Cmp($row,$name){ $c=$row.metrics.$name; if($c -and ($c.compare -is [double] -or $c.compare -is [int] -or $c.compare -is [long] -or $c.compare -is [decimal])){ return [double]$c.compare } return $null }
 function Row-Label($row){ $ps=@($row.dimensions.PSObject.Properties); if($ps.Count -gt 0){ return $ps[0].Value } return $null }
+function Total-Row($w){ $t=@($w.rows | Where-Object { $_.kind -eq 'total' }); if($t.Count -gt 0){ return $t[0] }; $t=@($w.rows|Where-Object{$_.kind -eq 'data'}); if($t.Count -gt 0){return $t[0]}; return $null }
+# Row-level breakdown findings for ONE widget (concentration, new/paused, segment-divergence,
+# effort->result, share-mismatch). Pure over the widget + $script:RuleCfg; returns a findings array.
+function Get-BreakdownFindings($w){
+  $out=[System.Collections.ArrayList]@()
+  $wdims=@($w.dimensions); if($wdims.Count -eq 0){ return @() }
+  $tr=Total-Row $w; if(-not $tr){ return @() }
+  $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
+  $wcat = Get-Category $wprov
+  $pname = if($w.providers -and $w.providers.Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $wprov }
+  $cc=$w.currencyCode; $dimName=$wdims[0]
+  $detail=@($w.rows | Where-Object { $_.kind -eq 'data' -and -not (Test-GroupRow (Row-Label $_)) })
+  if($detail.Count -eq 0){ return @() }
+  # ANOM_CONCENTRATION
+  $primary=$null; foreach($m in @($w.metrics)){ if((Get-Direction $m.id) -eq 'higher-better' -and (Test-Additive $m.id)){ $primary=$m; break } }
+  if($primary){ $tot=Row-Cur $tr $primary.name
+    if($tot -and $tot -gt 0){ foreach($r in $detail){ $v=Row-Cur $r $primary.name; if($null -ne $v -and ($v/$tot) -ge 0.5){ $sh=[math]::Round(($v/$tot)*100,0)
+      [void]$out.Add([ordered]@{ ruleId='ANOM_CONCENTRATION'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is $sh% of $($primary.name) ($(Format-Metric $primary.id $primary.unit $v $cc) of $(Format-Metric $primary.id $primary.unit $tot $cc))"; evidence=[ordered]@{ share="$sh%" } }); break } } } }
+  # ANOM_SEGMENT_DIVERGENCE + NEW/PAUSED (comparison-gated, grain-capped)
+  if($primary){
+    $ptot=Row-Cur $tr $primary.name; $ptotPrev=Row-Cmp $tr $primary.name
+    $totDelta=Get-DeltaPct $ptot $ptotPrev
+    $nNP=0; $nDiv=0
+    foreach($r in $detail){
+      $rv=Row-Cur $r $primary.name; $rp=Row-Cmp $r $primary.name
+      if($null -eq $rv -or $null -eq $rp){ continue }
+      $share=if($ptot -and $ptot -gt 0){ $rv/$ptot } else { 0 }
+      if($rv -gt 0 -and $rp -eq 0 -and $share -ge 0.05 -and $nNP -lt 5){ $nNP++
+        [void]$out.Add([ordered]@{ ruleId='ANOM_NEW'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is new this period ($($primary.name) $(Format-Metric $primary.id $primary.unit $rv $cc), was 0)" }) }
+      elseif($rv -eq 0 -and $rp -gt 0 -and $nNP -lt 5){ $nNP++
+        [void]$out.Add([ordered]@{ ruleId='ANOM_PAUSED'; severity='major'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' stopped ($($primary.name) 0 this period, was $(Format-Metric $primary.id $primary.unit $rp $cc))" }) }
+      elseif($rv -gt 0 -and $rp -gt 0 -and $share -ge 0.15 -and $null -ne $totDelta -and $nDiv -lt 5){
+        $rd=Get-DeltaPct $rv $rp
+        if($null -ne $rd){ $diverges=(($rd -gt 0) -ne ($totDelta -gt 0)) -or ([math]::Abs($rd-$totDelta) -ge 50)
+          if($diverges){ $nDiv++
+            [void]$out.Add([ordered]@{ ruleId='ANOM_SEGMENT_DIVERGENCE'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' $($primary.name) moved $(Format-Delta $rd) vs the $($primary.name) total $(Format-Delta $totDelta)"; evidence=[ordered]@{ rowDelta=(Format-Delta $rd); totalDelta=(Format-Delta $totDelta) } }) } } }
+    }
+  }
+  # config-driven effort->result + share-mismatch
+  $cfg=$script:RuleCfg[$wcat]
+  if($cfg -and $cfg.effort){
+    foreach($pair in $cfg.effort){
+      $em=Find-Metric $w $pair.e; $rm=Find-Metric $w $pair.r
+      if(-not $em -or -not $rm -or $em.id -eq $rm.id){ continue }
+      $totE=Row-Cur $tr $em.name; $totR=Row-Cur $tr $rm.name
+      if(-not $totE -or $totE -le 0){ continue }
+      $nEmpty=0
+      foreach($r in $detail){
+        $re=Row-Cur $r $em.name; $rr=Row-Cur $r $rm.name
+        if($null -eq $re){ continue }
+        $eShare=$re/$totE
+        if($eShare -ge 0.02 -and $rr -eq 0){ if($nEmpty -lt 8){ $nEmpty++
+          [void]$out.Add([ordered]@{ ruleId='ANOM_EFFORT_NO_RESULT'; severity='major'; platform=$pname; widget=$dimName; requiresDownstreamData=$false; statement="${pname}: '$(Row-Label $r)' used $([math]::Round($eShare*100,0))% of $($em.name) ($(Format-Metric $em.id $em.unit $re $cc)) with 0 $($rm.name)"; evidence=[ordered]@{ effort=(Format-Metric $em.id $em.unit $re $cc); result='0'; effortShare="$([math]::Round($eShare*100,0))%" } }) } }
+        elseif($totR -and $totR -gt 0 -and $null -ne $rr -and $rr -gt 0 -and $eShare -ge 0.10){
+          $rShare=$rr/$totR
+          if(($eShare/$rShare) -ge 3){ $hint=([string](Row-Label $r)) -match '(?i)awareness|brand|video|launch|opening'; $sev=if($hint){'info'}else{'major'}
+            [void]$out.Add([ordered]@{ ruleId='ANOM_SHARE_MISMATCH'; severity=$sev; platform=$pname; widget=$dimName; requiresDownstreamData=$true; statement="${pname}: '$(Row-Label $r)' is $([math]::Round($eShare*100,0))% of $($em.name) but only $([math]::Round($rShare*100,1))% of $($rm.name)$(if($hint){' (looks upper-funnel/awareness)'})"; evidence=[ordered]@{ effortShare="$([math]::Round($eShare*100,0))%"; resultShare="$([math]::Round($rShare*100,1))%" } }) }
+        }
+      }
+    }
+  }
+  return @($out)
+}
 # period derivation from extractedAt + dateRange.primary (ignore compareDateRange.period)
 function Derive-Periods($extractedAt,$dateRange){
   $out=[ordered]@{ current='current'; previous='previous'; label='current vs previous'; confidence='unconfirmed' }
@@ -150,7 +213,6 @@ $periods = Derive-Periods $doc.meta.extractedAt $doc.report.dateRange
 $dataWidgets = @($doc.widgets | Where-Object { $_.kind -eq 'data' })
 if($dataWidgets.Count -eq 0){ throw "no data widgets to analyze (all text/empty)" }
 
-function Total-Row($w){ $t=@($w.rows | Where-Object { $_.kind -eq 'total' }); if($t.Count -gt 0){ return $t[0] } ; $t=@($w.rows|Where-Object{$_.kind -eq 'data'}); if($t.Count -gt 0){return $t[0]}; return $null }
 
 # per-platform headline (role-qualified) + provider discovery
 $platforms=@{}
@@ -246,68 +308,8 @@ foreach($key in $byMetric.Keys){
   }
 }
 
-# ---- row-level breakdown rules: concentration, effort->result, share-mismatch (per-category, config-driven) ----
-foreach($w in $dataWidgets){
-  $wdims=@($w.dimensions); if($wdims.Count -eq 0){ continue }   # only breakdown widgets
-  $tr=Total-Row $w; if(-not $tr){ continue }
-  $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
-  $wcat = Get-Category $wprov
-  $pname = if($w.providers -and $w.providers.Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $wprov }
-  $cc=$w.currencyCode; $dimName=$wdims[0]
-  $detail=@($w.rows | Where-Object { $_.kind -eq 'data' -and -not (Test-GroupRow (Row-Label $_)) })
-  if($detail.Count -eq 0){ continue }
-
-  # ANOM_CONCENTRATION: one row >= 50% of a higher-better additive metric's total
-  $primary=$null; foreach($m in @($w.metrics)){ if((Get-Direction $m.id) -eq 'higher-better' -and (Test-Additive $m.id)){ $primary=$m; break } }
-  if($primary){ $tot=Row-Cur $tr $primary.name
-    if($tot -and $tot -gt 0){ foreach($r in $detail){ $v=Row-Cur $r $primary.name; if($null -ne $v -and ($v/$tot) -ge 0.5){ $sh=[math]::Round(($v/$tot)*100,0)
-      [void]$anoms.Add([ordered]@{ ruleId='ANOM_CONCENTRATION'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is $sh% of $($primary.name) ($(Format-Metric $primary.id $primary.unit $v $cc) of $(Format-Metric $primary.id $primary.unit $tot $cc))"; evidence=[ordered]@{ share="$sh%" } }); break } } } }
-
-  # ANOM_SEGMENT_DIVERGENCE + NEW/PAUSED on the primary metric (comparison-gated, grain-capped)
-  if($primary){
-    $ptot=Row-Cur $tr $primary.name; $ptotPrev=Row-Cmp $tr $primary.name
-    $totDelta=Get-DeltaPct $ptot $ptotPrev
-    $nNP=0; $nDiv=0
-    foreach($r in $detail){
-      $rv=Row-Cur $r $primary.name; $rp=Row-Cmp $r $primary.name
-      if($null -eq $rv -or $null -eq $rp){ continue }
-      $share=if($ptot -and $ptot -gt 0){ $rv/$ptot } else { 0 }
-      if($rv -gt 0 -and $rp -eq 0 -and $share -ge 0.05 -and $nNP -lt 5){ $nNP++
-        [void]$anoms.Add([ordered]@{ ruleId='ANOM_NEW'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is new this period ($($primary.name) $(Format-Metric $primary.id $primary.unit $rv $cc), was 0)" }) }
-      elseif($rv -eq 0 -and $rp -gt 0 -and $nNP -lt 5){ $nNP++
-        [void]$anoms.Add([ordered]@{ ruleId='ANOM_PAUSED'; severity='major'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' stopped ($($primary.name) 0 this period, was $(Format-Metric $primary.id $primary.unit $rp $cc))" }) }
-      elseif($rv -gt 0 -and $rp -gt 0 -and $share -ge 0.15 -and $null -ne $totDelta -and $nDiv -lt 5){
-        $rd=Get-DeltaPct $rv $rp
-        if($null -ne $rd){ $diverges=(($rd -gt 0) -ne ($totDelta -gt 0)) -or ([math]::Abs($rd-$totDelta) -ge 50)
-          if($diverges){ $nDiv++
-            [void]$anoms.Add([ordered]@{ ruleId='ANOM_SEGMENT_DIVERGENCE'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' $($primary.name) moved $(Format-Delta $rd) vs the $($primary.name) total $(Format-Delta $totDelta)"; evidence=[ordered]@{ rowDelta=(Format-Delta $rd); totalDelta=(Format-Delta $totDelta) } }) } } }
-    }
-  }
-
-  # config-driven effort->result (no-result) and share-mismatch
-  $cfg=$script:RuleCfg[$wcat]
-  if($cfg -and $cfg.effort){
-    foreach($pair in $cfg.effort){
-      $em=Find-Metric $w $pair.e; $rm=Find-Metric $w $pair.r
-      if(-not $em -or -not $rm -or $em.id -eq $rm.id){ continue }
-      $totE=Row-Cur $tr $em.name; $totR=Row-Cur $tr $rm.name
-      if(-not $totE -or $totE -le 0){ continue }
-      $nEmpty=0
-      foreach($r in $detail){
-        $re=Row-Cur $r $em.name; $rr=Row-Cur $r $rm.name
-        if($null -eq $re){ continue }
-        $eShare=$re/$totE
-        if($eShare -ge 0.02 -and $rr -eq 0){ if($nEmpty -lt 8){ $nEmpty++
-          [void]$anoms.Add([ordered]@{ ruleId='ANOM_EFFORT_NO_RESULT'; severity='major'; platform=$pname; widget=$dimName; requiresDownstreamData=$false; statement="${pname}: '$(Row-Label $r)' used $([math]::Round($eShare*100,0))% of $($em.name) ($(Format-Metric $em.id $em.unit $re $cc)) with 0 $($rm.name)"; evidence=[ordered]@{ effort=(Format-Metric $em.id $em.unit $re $cc); result='0'; effortShare="$([math]::Round($eShare*100,0))%" } }) } }
-        elseif($totR -and $totR -gt 0 -and $null -ne $rr -and $rr -gt 0 -and $eShare -ge 0.10){
-          $rShare=$rr/$totR
-          if(($eShare/$rShare) -ge 3){ $hint=([string](Row-Label $r)) -match '(?i)awareness|brand|video|launch|opening'; $sev=if($hint){'info'}else{'major'}
-            [void]$anoms.Add([ordered]@{ ruleId='ANOM_SHARE_MISMATCH'; severity=$sev; platform=$pname; widget=$dimName; requiresDownstreamData=$true; statement="${pname}: '$(Row-Label $r)' is $([math]::Round($eShare*100,0))% of $($em.name) but only $([math]::Round($rShare*100,1))% of $($rm.name)$(if($hint){' (looks upper-funnel/awareness)'})"; evidence=[ordered]@{ effortShare="$([math]::Round($eShare*100,0))%"; resultShare="$([math]::Round($rShare*100,1))%" } }) }
-        }
-      }
-    }
-  }
-}
+# ---- row-level breakdown rules (per-category, config-driven; see Get-BreakdownFindings) ----
+foreach($w in $dataWidgets){ foreach($fnd in (Get-BreakdownFindings $w)){ [void]$anoms.Add($fnd) } }
 
 $findings.wins=@($wins); $findings.losses=@($losses); $findings.anomalies=@($anoms); $findings.discrepancies=@($disc); $findings.dataGaps=@($gaps)
 
