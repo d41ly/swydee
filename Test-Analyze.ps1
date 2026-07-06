@@ -80,7 +80,7 @@ A ((Row-Cmp $row 'Conv') -eq 0) "Row-Cmp reads compare"
 A ((Row-Label $row) -eq 'HELOC') "Row-Label first dimension"
 
 Write-Host "== Get-BreakdownFindings (per-category synthetic fixtures) =="
-function Met($n,$id){ [pscustomobject]@{name=$n;id=$id;unit=$null} }
+function Met($n,$id,$unit=$null){ [pscustomobject]@{name=$n;id=$id;unit=$unit} }
 function Rw($kind,$label,$dimName,$mv){ $dm=[ordered]@{}; $dm[$dimName]=$label; $mm=[ordered]@{}; foreach($k in $mv.Keys){ $mm[$k]=[pscustomobject]@{current=$mv[$k][0];compare=$mv[$k][1]} }; [pscustomobject]@{ kind=$kind; dimensions=[pscustomobject]$dm; metrics=[pscustomobject]$mm } }
 function Wgt($prov,$pname,$dim,$mets,$rows){ [pscustomobject]@{ providers=@([pscustomobject]@{id=$prov;name=$pname}); currencyCode='USD'; dimensions=@($dim); metrics=$mets; rows=$rows } }
 function HasRule($fs,$id){ [bool](@($fs | Where-Object { $_.ruleId -eq $id }).Count) }
@@ -185,6 +185,35 @@ $mon=Wgt 'facebook-ads' 'Facebook Ads' 'Month' @((Met 'Impr' 'facebook-ads:impre
   (Rw 'data' '2026-04' 'Month' @{Impr=@(225032,$null)}),(Rw 'data' '2026-05' 'Month' @{Impr=@(107467,$null)}))
 $bd3=Get-Breakdown $mon 20 $null
 A ($bd3.rows[0].label -eq '2026-04' -and $bd3.rows[2].label -eq '2026-06') "time widget sorted chronologically (F8)"
+
+Write-Host "== Format-Money / Get-TimeSeries =="
+A ((Format-Money 1000 'USD') -eq '$1,000.00') "Format-Money USD"
+A ($null -eq (Format-Money $null 'USD')) "Format-Money null => null"
+A ((Format-Money 5 'SEK') -eq 'SEK 5.00') "Format-Money unknown currency code-prefix"
+# FB month widget: derived CPL per bucket + impressions pacing
+$fbm = Wgt 'facebook-ads' 'Facebook Ads' 'Month' @((Met 'Impr' 'facebook-ads:impressions'),(Met 'Leads' 'facebook-ads:actions::lead'),(Met 'Spend' 'facebook-ads:spend' 'micros')) @(
+  (Rw 'total' $null 'Month' @{Impr=@(407553,$null);Leads=@(432,$null);Spend=@(7075800000,$null)}),
+  (Rw 'data' '2026-06' 'Month' @{Impr=@(75054,$null);Leads=@(100,$null);Spend=@(2312960000,$null)}),
+  (Rw 'data' '2026-04' 'Month' @{Impr=@(225032,$null);Leads=@(149,$null);Spend=@(2274250000,$null)}),
+  (Rw 'data' '2026-05' 'Month' @{Impr=@(107467,$null);Leads=@(183,$null);Spend=@(2488590000,$null)}))
+$ts=Get-TimeSeries $fbm
+A ($ts.buckets[0].label -eq '2026-04' -and $ts.buckets[2].label -eq '2026-06') "timeSeries chronological (Apr..Jun)"
+A ($ts.buckets[0].derived.CPL -eq '$15.26') "Apr CPL = $15.26 (spend micros/1e6 / leads, denom raw)"
+A ($ts.buckets[1].derived.CPL -eq '$13.60') "May CPL = $13.60"
+A ($ts.buckets[2].derived.CPL -eq '$23.13') "Jun CPL = $23.13 (the spike)"
+A ($ts.pacing.metric -eq 'Impr') "pacing on primary (Impressions)"
+A ($ts.pacing.maxVsMinRatio -eq '3.0x') "April 3.0x June impressions"
+A ($ts.pacing.trend -eq 'declining' -and $ts.pacing.series.Count -eq 3) "front-loaded => declining; ordered series exposed"
+# zero-denominator bucket => null + gap (not silent)
+$fbz = Wgt 'facebook-ads' 'Facebook Ads' 'Month' @((Met 'Leads' 'facebook-ads:actions::lead'),(Met 'Spend' 'facebook-ads:spend' 'micros')) @(
+  (Rw 'total' $null 'Month' @{Leads=@(10,$null);Spend=@(1000000000,$null)}),
+  (Rw 'data' '2026-04' 'Month' @{Leads=@(0,$null);Spend=@(500000000,$null)}),
+  (Rw 'data' '2026-05' 'Month' @{Leads=@(10,$null);Spend=@(500000000,$null)}))
+$tsz=Get-TimeSeries $fbz
+A ($null -eq $tsz.buckets[0].derived.CPL -and @($tsz.buckets[0].derivedGaps).Count -ge 1) "zero-leads bucket => CPL null + derivedGap (F2)"
+# non-time widget => null
+$ntw = Wgt 'facebook-ads' 'Facebook Ads' 'Campaign' @((Met 'Leads' 'facebook-ads:actions::lead')) @((Rw 'total' $null 'Campaign' @{Leads=@(10,$null)}),(Rw 'data' 'X' 'Campaign' @{Leads=@(10,$null)}))
+A ($null -eq (Get-TimeSeries $ntw)) "non-time widget => no timeSeries"
 
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})

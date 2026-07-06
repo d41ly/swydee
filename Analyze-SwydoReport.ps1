@@ -241,6 +241,68 @@ function Get-Breakdown($w, $cap, $mustLabels){
   return $out
 }
 
+function Format-Money($val,$currency){ if($null -eq $val){ return $null }; $sym=if($currency -and $script:CurSym[$currency]){ $script:CurSym[$currency] } elseif($currency){ "$currency " } else { '$' }; return ("{0}{1:N2}" -f $sym,$val) }
+# Time-series derived metrics + pacing for a time-dimension widget. Derived = ONLY metrics with no
+# native equivalent (in practice CPL / cost-per-conv), category-gated. Pacing exposes the ordered series.
+function Get-TimeSeries($w){
+  $wdims=@($w.dimensions); if($wdims.Count -eq 0){ return $null }
+  $dimName=$wdims[0]
+  if($dimName -notmatch '(?i)^(day|week|month|date)$'){ return $null }
+  $cc=$w.currencyCode
+  $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
+  $wcat = Get-Category $wprov
+  $detail=@($w.rows | Where-Object { $_.kind -eq 'data' -and -not (Test-GroupRow (Row-Label $_)) })
+  if($detail.Count -lt 2){ return $null }
+  $labels=@($detail | ForEach-Object { [string](Row-Label $_) })
+  $orderConf = if(@($labels | Where-Object { $_ -notmatch '^\d{4}-\d{2}(-\d{2})?$|^\d{6}$' }).Count -eq 0){ 'confirmed' } else { 'unconfirmed' }
+  $sorted=@($detail | Sort-Object { [string](Row-Label $_) })
+  # derived defs: only NON-native, category-gated to ads/ecommerce
+  $derivedDefs=@()
+  if($wcat -eq 'ads' -or $wcat -eq 'ecommerce'){
+    $money=Find-Metric $w '(cost_micros|(^|_)cost$|spend|revenue)'
+    $leadM=Find-Metric $w '(^|_)lead|actions::lead'
+    $convM=Find-Metric $w '(^|:)conversions$'
+    if($money -and $leadM -and -not (Find-Metric $w 'cost_per.*lead|costperactiontype::lead')){ $derivedDefs+=@{name='CPL'; num=$money; den=$leadM} }
+    if($money -and $convM -and -not (Find-Metric $w 'cost_per_conversion')){ $derivedDefs+=@{name='cost/conv'; num=$money; den=$convM} }
+  }
+  $buckets=@()
+  foreach($r in $sorted){
+    $b=[ordered]@{ label=[string](Row-Label $r) }
+    if($derivedDefs.Count -gt 0){
+      $der=[ordered]@{}; $gaps=@()
+      foreach($dd in $derivedDefs){
+        $numv=Row-Cur $r $dd.num.name; $denv=Row-Cur $r $dd.den.name
+        if($null -eq $numv){ continue }
+        if($null -eq $denv -or $denv -eq 0){ $der[$dd.name]=$null; $gaps+="$($dd.name): 0 $($dd.den.name)"; continue }
+        $numBase = if($dd.num.unit -eq 'micros'){ [double]$numv/1e6 } else { [double]$numv }   # denominator RAW
+        $der[$dd.name] = Format-Money ($numBase/[double]$denv) $cc
+      }
+      if($der.Count -gt 0){ $b.derived=$der }
+      if($gaps.Count -gt 0){ $b.derivedGaps=$gaps }
+    }
+    $buckets+=$b
+  }
+  # pacing on the primary (higher-better additive, else money, else first)
+  $primary=$null; foreach($m in @($w.metrics)){ if((Get-Direction $m.id) -eq 'higher-better' -and (Test-Additive $m.id)){ $primary=$m; break } }
+  if(-not $primary){ foreach($m in @($w.metrics)){ if((Get-MetricPart $m.id) -match '(cost_micros|(^|_)cost$|spend|revenue)'){ $primary=$m; break } } }
+  if(-not $primary -and @($w.metrics).Count -gt 0){ $primary=@($w.metrics)[0] }
+  $out=[ordered]@{ widgetId=$w.id; dimension=$dimName; buckets=$buckets }
+  if($primary){
+    $seq=@(); foreach($r in $sorted){ $v=Row-Cur $r $primary.name; $seq+=[ordered]@{ label=[string](Row-Label $r); display=(Format-Metric $primary.id $primary.unit $v $cc) } }
+    $nn=@($sorted | ForEach-Object { Row-Cur $_ $primary.name } | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ })
+    $pacing=[ordered]@{ metric=$primary.name; series=$seq; orderConfidence=$orderConf }
+    if($nn.Count -ge 2){
+      $firstV=Row-Cur $sorted[0] $primary.name; $lastV=Row-Cur $sorted[-1] $primary.name
+      $mn=($nn|Measure-Object -Minimum).Minimum; $mx=($nn|Measure-Object -Maximum).Maximum
+      if($mn -gt 0){ $pacing.maxVsMinRatio=("{0:N1}x" -f ($mx/$mn)) }
+      $net=Get-DeltaPct $lastV $firstV
+      if($null -ne $net){ $pacing.netChange=(Format-Delta $net); $pacing.trend = if($net -gt 5){'rising'}elseif($net -lt -5){'declining'}else{'flat'} }
+    }
+    $out.pacing=$pacing
+  }
+  return $out
+}
+
 if($DefineOnly){ return }   # dot-source stops here
 
 # ============================ run ============================
@@ -365,6 +427,8 @@ foreach($w in $dataWidgets){
   if(-not $platforms.ContainsKey($wprov)){ continue }
   $bd = Get-Breakdown $w 20 $plLabels[$platforms[$wprov].name]
   if($bd){ if(-not $platforms[$wprov].Contains('breakdowns')){ $platforms[$wprov]['breakdowns']=[System.Collections.ArrayList]@() }; [void]$platforms[$wprov]['breakdowns'].Add($bd) }
+  $ts = Get-TimeSeries $w
+  if($ts){ if(-not $platforms[$wprov].Contains('timeSeries')){ $platforms[$wprov]['timeSeries']=[System.Collections.ArrayList]@() }; [void]$platforms[$wprov]['timeSeries'].Add($ts) }
 }
 
 $findings.wins=@($wins); $findings.losses=@($losses); $findings.anomalies=@($anoms); $findings.discrepancies=@($disc); $findings.dataGaps=@($gaps)
