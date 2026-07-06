@@ -205,6 +205,18 @@ foreach($pk in $platforms.Keys){
     }
   }
 }
+# ANOM_BUDGET_CONSTRAINED: category-special (ads) - impressions lost to budget past threshold
+foreach($pk in $platforms.Keys){
+  $pf=$platforms[$pk]; $cfg=$script:RuleCfg[$pf.category]
+  if(-not $cfg -or -not $cfg.constrained){ continue }
+  foreach($hk in $pf.headline.Keys){
+    $h=$pf.headline[$hk]
+    if((Get-MetricPart $h.id) -match 'search_lost_is' -and $null -ne $h.current -and [double]$h.current -ge 0.10){
+      $isTxt=''; foreach($hk2 in $pf.headline.Keys){ if((Get-MetricPart $pf.headline[$hk2].id) -match 'impression_share'){ $isTxt=" (impression share $($pf.headline[$hk2].displayCurrent))" } }
+      [void]$anoms.Add([ordered]@{ ruleId='ANOM_BUDGET_CONSTRAINED'; severity='major'; platform=$pf.name; metric=$h.metric; statement="$($pf.name) is budget-constrained: $($h.displayCurrent) of impressions lost to budget$isTxt"; evidence=[ordered]@{ lostToBudget=$h.displayCurrent } })
+    }
+  }
+}
 # DISC_CROSS_WIDGET: a metric's total disagrees across widgets THAT MEASURE THE SAME POPULATION.
 # Key on metricId + dimension-signature: a keyword table (dims Keyword,Ad group) and the account
 # KPI (no dims) legitimately differ in scope, so we only compare widgets with identical dim sets.
@@ -251,6 +263,27 @@ foreach($w in $dataWidgets){
     if($tot -and $tot -gt 0){ foreach($r in $detail){ $v=Row-Cur $r $primary.name; if($null -ne $v -and ($v/$tot) -ge 0.5){ $sh=[math]::Round(($v/$tot)*100,0)
       [void]$anoms.Add([ordered]@{ ruleId='ANOM_CONCENTRATION'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is $sh% of $($primary.name) ($(Format-Metric $primary.id $primary.unit $v $cc) of $(Format-Metric $primary.id $primary.unit $tot $cc))"; evidence=[ordered]@{ share="$sh%" } }); break } } } }
 
+  # ANOM_SEGMENT_DIVERGENCE + NEW/PAUSED on the primary metric (comparison-gated, grain-capped)
+  if($primary){
+    $ptot=Row-Cur $tr $primary.name; $ptotPrev=Row-Cmp $tr $primary.name
+    $totDelta=Get-DeltaPct $ptot $ptotPrev
+    $nNP=0; $nDiv=0
+    foreach($r in $detail){
+      $rv=Row-Cur $r $primary.name; $rp=Row-Cmp $r $primary.name
+      if($null -eq $rv -or $null -eq $rp){ continue }
+      $share=if($ptot -and $ptot -gt 0){ $rv/$ptot } else { 0 }
+      if($rv -gt 0 -and $rp -eq 0 -and $share -ge 0.05 -and $nNP -lt 5){ $nNP++
+        [void]$anoms.Add([ordered]@{ ruleId='ANOM_NEW'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is new this period ($($primary.name) $(Format-Metric $primary.id $primary.unit $rv $cc), was 0)" }) }
+      elseif($rv -eq 0 -and $rp -gt 0 -and $nNP -lt 5){ $nNP++
+        [void]$anoms.Add([ordered]@{ ruleId='ANOM_PAUSED'; severity='major'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' stopped ($($primary.name) 0 this period, was $(Format-Metric $primary.id $primary.unit $rp $cc))" }) }
+      elseif($rv -gt 0 -and $rp -gt 0 -and $share -ge 0.15 -and $null -ne $totDelta -and $nDiv -lt 5){
+        $rd=Get-DeltaPct $rv $rp
+        if($null -ne $rd){ $diverges=(($rd -gt 0) -ne ($totDelta -gt 0)) -or ([math]::Abs($rd-$totDelta) -ge 50)
+          if($diverges){ $nDiv++
+            [void]$anoms.Add([ordered]@{ ruleId='ANOM_SEGMENT_DIVERGENCE'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' $($primary.name) moved $(Format-Delta $rd) vs the $($primary.name) total $(Format-Delta $totDelta)"; evidence=[ordered]@{ rowDelta=(Format-Delta $rd); totalDelta=(Format-Delta $totDelta) } }) } } }
+    }
+  }
+
   # config-driven effort->result (no-result) and share-mismatch
   $cfg=$script:RuleCfg[$wcat]
   if($cfg -and $cfg.effort){
@@ -278,13 +311,19 @@ foreach($w in $dataWidgets){
 
 $findings.wins=@($wins); $findings.losses=@($losses); $findings.anomalies=@($anoms); $findings.discrepancies=@($disc); $findings.dataGaps=@($gaps)
 
-# portfolio totals (same-currency additive money + counts) - informational
+# seasonality caveat: adjacent-period comparisons (QoQ/MoM/WoW) can reflect seasonality, not performance.
+# Can't detect from one period, so flag the possibility deterministically (spec 13.3).
+$hasCmp=[bool](@($platforms.Values|Where-Object{$_.hasComparison}).Count)
+$caveats=@()
+if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','week')){
+  $caveats += "Comparison is $($periods.label), an adjacent $($doc.report.dateRange.primary.measure)-over-$($doc.report.dateRange.primary.measure). Adjacent-period comparisons can reflect seasonality (e.g. Q1 tax season, Q4 holidays), not just performance - validate against the same period a year earlier before attributing changes to the campaigns."
+}
 $facts=[ordered]@{
   meta=[ordered]@{
     tool='Analyze-SwydoReport.ps1'; factsVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; extractedAt=$doc.meta.extractedAt
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence
-    hasComparison=([bool](@($platforms.Values|Where-Object{$_.hasComparison}).Count));
+    hasComparison=$hasCmp; comparisonCaveats=$caveats;
     providers=@($platforms.Values | ForEach-Object { [ordered]@{ id=$_.id; name=$_.name; category=$_.category } })
     dataWidgets=$dataWidgets.Count; unitBasis=$doc.meta.unitBasis
   }
