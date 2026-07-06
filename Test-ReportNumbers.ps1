@@ -120,7 +120,17 @@ function Get-MeasureTokens($text){
   $norm = ([string]$text) -replace $script:DashRx,'-'
   foreach($mm in [regex]::Matches($norm,$script:TokRx)){
     $g = $mm.Groups
-    if($g['mult'].Success -or $g['range'].Success -or $g['bucket'].Success -or $g['year'].Success){ continue }
+    if($g['year'].Success){ continue }
+    if($g['mult'].Success -or $g['range'].Success -or $g['bucket'].Success){
+      # buckets/ranges/multipliers are demographic/ROAS shapes and are exempt ONLY when small
+      # (65+, 25-34, 3x). A large "40000+" / "25000-30000" / "12500x" is a measure smuggled past the
+      # tokenizer by trivial phrasing - fall through and require its leading number to trace.
+      $enums = @([regex]::Matches($mm.Value,'\d[\d,]*(?:\.\d+)?') | ForEach-Object { Normalize-Num $_.Value })
+      $emax = ($enums | Measure-Object -Maximum).Maximum
+      if($null -eq $emax -or $emax -lt 1000){ continue }
+      if($null -ne $enums[0]){ [void]$out.Add([ordered]@{ raw=$mm.Value.Trim(); value=$enums[0]; type='number'; index=$mm.Index; signed=$false }) }
+      continue
+    }
     $raw = $mm.Value.Trim()
     $type = 'number'; $isMeasure = $false
     if($g['cur'].Success){ $type='currency'; $isMeasure=$true }
@@ -129,7 +139,11 @@ function Get-MeasureTokens($text){
       $type='number'
       $hasSep = ($raw -match ',') -or ($raw -match '\.') -or ($raw -match '(?i)[kmb]$')
       $val0 = Normalize-Num $raw
-      if($hasSep -or ($null -ne $val0 -and [math]::Abs($val0) -ge 100)){ $isMeasure=$true }
+      # list-size / lookback context integers ("top 100", "first 200", "past 90 days") are not measures
+      $pre = if($mm.Index -gt 0){ $norm.Substring([math]::Max(0,$mm.Index-8), [math]::Min(8,$mm.Index)) } else { '' }
+      $isContext = ($pre -match '(?i)(top|first|last|next|past|page)\s*$')
+      if(-not $hasSep -and $isContext){ $isMeasure=$false }
+      elseif($hasSep -or ($null -ne $val0 -and [math]::Abs($val0) -ge 100)){ $isMeasure=$true }
     }
     if(-not $isMeasure){ continue }
     $v = Normalize-Num $raw
@@ -220,18 +234,20 @@ function Build-FactIndex($facts){
 }
 
 function Find-Candidates($tok,$cands){
-  # match = same type AND |a-b| within display tolerance. Tolerance = half the COARSER display's ULP:
-  # the coarser string rounds the true value by <= half its ULP, the finer is ~exact. This flags
-  # off-by-one on equal-precision integers (432 vs 433) yet allows K/M rounding (15.6K vs 15,627).
+  # match = same TYPE and value within tolerance = half the REPORT TOKEN's ULP. Keying tolerance to
+  # the token (not the coarser of the two) means a report stating more precision than a coarse fact
+  # ("1,249,000" vs "1.2M") must round TO the fact and is otherwise flagged, while a coarse report
+  # token ("1.2M") still matches a precise fact within its own coarse step, and off-by-one on
+  # equal-precision integers (432 vs 433) is caught.
+  # Explicitly-signed tokens (+/-x%) must match on SIGNED value - a "+12.5%" claim cannot trace a
+  # -12.5% fact; unsigned tokens match on magnitude (prose "down 12.5%" legitimately drops the sign).
   $hits = New-Object System.Collections.ArrayList
-  $a = [math]::Abs($tok.value)
-  $tulp = Get-Ulp $tok.raw
+  $tol = [math]::Max(0.5 * (Get-Ulp $tok.raw), 0.001)
   foreach($c in $cands){
     if($c.type -ne $tok.type){ continue }
-    $b = [math]::Abs($c.value)
-    $cu = if($null -ne $c.ulp){ [double]$c.ulp } else { 1.0 }
-    $tol = [math]::Max(0.5*[math]::Max($tulp,$cu), 0.001)
-    if([math]::Abs($a-$b) -le $tol){ [void]$hits.Add($c) }
+    if($tok.signed){ $d = [math]::Abs([double]$tok.value - [double]$c.value) }
+    else { $d = [math]::Abs([math]::Abs([double]$tok.value) - [math]::Abs([double]$c.value)) }
+    if($d -le $tol){ [void]$hits.Add($c) }
   }
   return $hits
 }
@@ -269,7 +285,10 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   $index = Build-FactIndex $facts
   $sections = Split-Sections $reportText
 
-  # 1 + 2: per-section number tracing + comparison guard, paragraph-scoped for finding numbers
+  # 1 + 2: per-LINE number tracing + comparison guard. A finding's numbers (byFid) are in scope ONLY
+  # for the line that echoes its <!-- finding:fid --> - the finding's numbers and the fid must sit on
+  # the same line (per report-template). Line scope (not paragraph) stops a fabricated number on a
+  # sibling line from borrowing a co-located finding's number.
   foreach($sec in $sections){
     if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ continue }
     # C1: more than one platform anchor in one section is ambiguous (silent-take-first would mis-scope)
@@ -287,15 +306,13 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
         [void]$violations.Add([ordered]@{ type='unknown-platform-anchor'; section=$sec.header; detail="platform anchor '$($sec.platformId)' not in facts.platforms"; snippet=[string]$sec.platformId })
       }
     }
-    # C3: split into paragraphs; a finding's statement/evidence numbers are in scope ONLY for the
-    # paragraph that echoes its <!-- finding:fid --> (not platform-wide, not global).
-    foreach($para in [regex]::Split($sec.text,'\n[ \t]*\n')){
-      $fids = @(); foreach($fm in [regex]::Matches($para,'<!--\s*finding:([^\s]+?)\s*-->')){ $fids += $fm.Groups[1].Value }
+    foreach($line in (($sec.text -replace "`r`n","`n") -split "`n")){
+      $fids = @(); foreach($fm in [regex]::Matches($line,'<!--\s*finding:([^\s]+?)\s*-->')){ $fids += $fm.Groups[1].Value }
       $cands = New-Object System.Collections.ArrayList
       foreach($c in $base){ [void]$cands.Add($c) }
       foreach($fid in $fids){ if($index.byFid.ContainsKey($fid)){ foreach($c in $index.byFid[$fid]){ [void]$cands.Add($c) } } }
-      $cmpPos = @(); foreach($cm in [regex]::Matches($para,$script:CmpRx)){ $cmpPos += $cm.Index }
-      foreach($tok in @(Get-MeasureTokens $para)){
+      $cmpMatches = [regex]::Matches($line,$script:CmpRx)
+      foreach($tok in @(Get-MeasureTokens $line)){
         $measured++
         $hits = @(Find-Candidates $tok $cands)   # @() -> real array so .Count is reliable (PS 5.1 unwrap)
         if($hits.Count -gt 0){
@@ -304,9 +321,20 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
           [void]$violations.Add([ordered]@{ type='untraceable-number'; section=$sec.header; detail="'$($tok.raw)' ($($tok.type)) has no matching fact in scope"; snippet=$tok.raw })
           continue
         }
-        # comparison guard: signed token, or a comparative verb within ~5 words
+        # comparison guard: signed token, or a comparative verb near it on the SAME clause (no
+        # sentence/clause punctuation between the verb and the number - avoids tainting an unrelated
+        # no-comparison metric mentioned later in the same sentence).
         $isCmp = $tok.signed
-        if(-not $isCmp){ foreach($cp in $cmpPos){ if([math]::Abs($cp-$tok.index) -le 40){ $isCmp=$true; break } } }
+        if(-not $isCmp){
+          $tEnd = $tok.index + $tok.raw.Length
+          foreach($cm in $cmpMatches){
+            $vEnd = $cm.Index + $cm.Length
+            if($vEnd -le $tok.index){ $gap = $line.Substring($vEnd, $tok.index - $vEnd) }
+            elseif($cm.Index -ge $tEnd){ $gap = $line.Substring($tEnd, $cm.Index - $tEnd) }
+            else { continue }
+            if($gap.Length -le 25 -and $gap -notmatch '[.;,:]'){ $isCmp=$true; break }
+          }
+        }
         if($isCmp){
           $anyCmp = $false; foreach($h in $hits){ if($h.hasComparison){ $anyCmp=$true; break } }
           if(-not $anyCmp){
@@ -326,7 +354,10 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
         $mustSurface = ($sev -in @('major','critical','high')) -or ($f.requiresDownstreamData -eq $true)
         if(-not $mustSurface){ continue }
         $fid = [string]$f.fid
-        if($fid -and $reportText.Contains("finding:$fid")){
+        # delimited anchor match (NOT bare .Contains): 'finding:ANOM#1' is a substring of
+        # 'finding:ANOM#10', so a required #1 could be masked by an echoed #10.
+        $fidAnchored = $fid -and ($reportText -match ('<!--\s*finding:' + [regex]::Escape($fid) + '\s*-->'))
+        if($fidAnchored){
           if($f.requiresDownstreamData -eq $true){ $reqDownSurfaced = $true }
         } else {
           $sn = [string]$f.statement; if($sn.Length -gt 80){ $sn = $sn.Substring(0,80) + '...' }
@@ -350,7 +381,8 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
         }
       } else {
         $cid = [string]$cav.id
-        if($cid -and -not $reportText.Contains("caveat:$cid")){
+        # delimited anchor (same prefix-collision hazard as fids: caveat:s1 vs caveat:s10)
+        if($cid -and -not ($reportText -match ('<!--\s*caveat:' + [regex]::Escape($cid) + '\s*-->'))){
           [void]$violations.Add([ordered]@{ type='missing-caveat'; section='(report)'; detail="caveat '$cid' not surfaced (missing <!-- caveat:$cid -->)"; snippet=$cid })
         }
       }

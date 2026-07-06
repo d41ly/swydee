@@ -49,6 +49,15 @@ Ok ((NMeasures '3x ROAS this quarter') -eq 0) 'exempt multiplier 3x'
 Ok ((NMeasures 'see the top 5 keywords') -eq 0) 'exempt small bare (top 5)'
 Ok ((NMeasures 'across 3 platforms') -eq 0) 'exempt small bare (3)'
 Ok ((NMeasures 'in 2026 overall') -eq 0) 'exempt standalone year'
+# exempt shapes are magnitude-bounded: large N+/N-M/Nx are measures (smuggling guard)
+Ok ((NMeasures 'drove 40000+ conversions') -eq 1) 'large N+ is a measure (not exempt)'
+Ok ((NMeasures '25000-30000 clicks') -eq 1) 'large range is a measure'
+Ok ((NMeasures '12500x return claimed') -eq 1) 'large multiplier is a measure'
+# list-size / lookback context integers are not measures
+Ok ((NMeasures 'the top 100 keywords') -eq 0) 'context: top 100 exempt'
+Ok ((NMeasures 'first 200 clicks reviewed') -eq 0) 'context: first 200 exempt'
+Ok ((NMeasures 'over the past 100 days') -eq 0) 'context: past 100 days exempt'
+Ok ((NMeasures 'we saw 150 conversions') -eq 1) 'plain 150 is a measure'
 # ---------- Get-MeasureTokens: measures ----------
 Ok ((NMeasures 'spend was $10,864.72 total') -eq 1) 'measure currency'
 Ok ((NMeasures 'CTR of 14.4% held') -eq 1) 'measure percent'
@@ -68,6 +77,14 @@ $cMoney = [ordered]@{ value=15627; type='number'; ulp=1 }
 Ok ((@(Find-Candidates ([ordered]@{value=15600;type='number';raw='15.6K'}) @($cMoney))).Count -eq 1) 'K-rounded 15.6K traces to 15,627'
 $cCur = [ordered]@{ value=1234; type='currency'; ulp=0.01 }
 Ok ((@(Find-Candidates ([ordered]@{value=1234;type='number';raw='1,234'}) @($cCur))).Count -eq 0) 'count token does NOT match currency candidate (type guard)'
+# coarse K/M/B fact must not validate a precise wrong report number (tolerance keyed to the token)
+$cCoarse = [ordered]@{ value=1200000; type='number'; ulp=100000 }
+Ok ((@(Find-Candidates ([ordered]@{value=1249000;type='number';raw='1,249,000'}) @($cCoarse))).Count -eq 0) 'precise 1,249,000 does NOT trace to coarse 1.2M'
+Ok ((@(Find-Candidates ([ordered]@{value=1200000;type='number';raw='1.2M'}) @($cCoarse))).Count -eq 1) 'coarse 1.2M token traces to 1.2M fact'
+# signed direction: an explicitly-signed token must match on sign; unsigned matches on magnitude
+$cNeg = [ordered]@{ value=-12.5; type='percent'; ulp=0.1 }
+Ok ((@(Find-Candidates ([ordered]@{value=12.5;type='percent';raw='+12.5%';signed=$true}) @($cNeg))).Count -eq 0) 'signed +12.5% does NOT trace to -12.5% fact (direction)'
+Ok ((@(Find-Candidates ([ordered]@{value=12.5;type='percent';raw='12.5%';signed=$false}) @($cNeg))).Count -eq 1) 'unsigned 12.5% traces to -12.5% (prose drops the sign)'
 
 # ---------- synthetic facts (two ads platforms; comparison on Google, none on FB) ----------
 $factsJson = @'
@@ -80,7 +97,8 @@ $factsJson = @'
         "cost": {"metric":"Cost","id":"google_ads:cost_micros","unit":"micros","type":"currency","hasComparison":true,"displayCurrent":"$10,864.72","displayPrevious":"$9,500.00","displayDelta":"+14.4%"},
         "leads": {"metric":"Leads","id":"google_ads:leads","type":"number","hasComparison":true,"displayCurrent":"432","displayPrevious":"400","displayDelta":"+8.0%"},
         "impr": {"metric":"Impressions","id":"google_ads:impressions","type":"number","hasComparison":true,"displayCurrent":"15,627","displayPrevious":"14,000","displayDelta":"+11.6%"},
-        "rev": {"metric":"Revenue","id":"google_ads:revenue","unit":"micros","type":"currency","hasComparison":false,"displayCurrent":"1,234.00","displayPrevious":null,"displayDelta":null}
+        "rev": {"metric":"Revenue","id":"google_ads:revenue","unit":"micros","type":"currency","hasComparison":false,"displayCurrent":"1,234.00","displayPrevious":null,"displayDelta":null},
+        "cpl": {"metric":"CPL","id":"google_ads:cpl","type":"currency","hasComparison":false,"displayCurrent":"$25.15","displayPrevious":null,"displayDelta":null}
       },
       "breakdowns": [ { "rows": [ { "label":"Brand", "values": {
         "Cost": {"display":"$1,234.00","type":"currency","hasComparison":true,"displayPrevious":"$1,000.00","delta":"+23.4%"},
@@ -186,6 +204,36 @@ $rCred = Invoke-Closer ($reportOk + "`nsee swy.do/shares/ABC123def456") $factsOb
 Ok (HasT $rCred 'credential-leak') 'share-key in report -> credential-leak'
 $rCredU = Invoke-Closer ($reportOk + "`nSWY.DO/SHARES/ABC123DEF456") $factsObj
 Ok (HasT $rCredU 'credential-leak') 'UPPERCASE share-key -> credential-leak (case-insensitive)'
+
+# CRITICAL leak fixed: a finding number on a SIBLING line (no fid) must not borrow the fid's numbers
+$leakReport = @'
+## Analytical insights
+Spend efficiency was 40% overall this quarter.
+Display had a share anomaly worth noting. <!-- finding:ANOM_SHARE_MISMATCH#1 -->
+'@
+$rLeak = Invoke-Closer $leakReport $factsObj
+Ok (HasT $rLeak 'untraceable-number') 'finding number on a sibling line (no fid) -> untraceable (line scope, not paragraph)'
+$rNoLeak = Invoke-Closer "## Analytical insights`nDisplay ran at 40% of spend for only 5% of leads. <!-- finding:ANOM_SHARE_MISMATCH#1 -->`n" $factsObj
+Ok (-not (HasT $rNoLeak 'untraceable-number')) 'finding numbers on the fid line -> trace'
+
+# comparison guard does not taint an unrelated no-comparison metric across a clause break
+$clauseReport = @'
+## Google Ads
+<!-- platform:google_ads -->
+Spend rose to $10,864.72, giving a $25.15 CPL.
+'@
+$rClause = Invoke-Closer $clauseReport $factsObj
+Ok (-not (HasT $rClause 'comparison-without-data')) 'comparison verb does not taint a later no-comparison metric across a comma'
+
+# surfacing gate: delimited anchor - ANOM_X#1 is NOT masked by an echoed ANOM_X#10
+$fCollide = '{ "meta":{}, "platforms":[], "findings":{ "wins":[],"losses":[],"discrepancies":[],"dataGaps":[], "anomalies":[ {"ruleId":"ANOM_X","severity":"major","fid":"ANOM_X#1","statement":"first"},{"ruleId":"ANOM_X","severity":"major","fid":"ANOM_X#10","statement":"tenth"} ] } }' | ConvertFrom-Json
+$rCollide = Invoke-Closer "## Insights`nThe tenth issue only. <!-- finding:ANOM_X#10 -->`n" $fCollide
+Ok (HasT $rCollide 'unsurfaced-finding') 'ANOM_X#1 not masked by echoed ANOM_X#10 (delimited anchor)'
+
+# caveat gate: delimited anchor - s1 is NOT masked by an echoed s10
+$fCav2 = '{ "meta":{ "comparisonCaveats":[ {"id":"s1","text":"a"},{"id":"s10","text":"b"} ] }, "platforms":[], "findings":{"wins":[],"losses":[],"anomalies":[],"discrepancies":[],"dataGaps":[]} }' | ConvertFrom-Json
+$rCav2 = Invoke-Closer "## Notes`nSee note. <!-- caveat:s10 -->`n" $fCav2
+Ok (HasT $rCav2 'missing-caveat') 's1 caveat not masked by echoed s10 (delimited anchor)'
 
 Write-Host ''
 Write-Host ("Test-Closer: {0} passed, {1} failed." -f $script:pass,$script:fail)
