@@ -442,7 +442,9 @@ $findings.wins=@($wins); $findings.losses=@($losses); $findings.anomalies=@($ano
 $hasCmp=[bool](@($platforms.Values|Where-Object{$_.hasComparison}).Count)
 $caveats=@()
 if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','week')){
-  $caveats += "Comparison is $($periods.label), an adjacent $($doc.report.dateRange.primary.measure)-over-$($doc.report.dateRange.primary.measure). Adjacent-period comparisons can reflect seasonality (e.g. Q1 tax season, Q4 holidays), not just performance - validate against the same period a year earlier before attributing changes to the campaigns."
+  # {id,text}: the id is a stable anchor the report echoes (<!-- caveat:seasonality -->) and the
+  # closer greps, so the surfacing check is not a brittle keyword match on free text.
+  $caveats += [ordered]@{ id='seasonality'; text="Comparison is $($periods.label), an adjacent $($doc.report.dateRange.primary.measure)-over-$($doc.report.dateRange.primary.measure). Adjacent-period comparisons can reflect seasonality (e.g. Q1 tax season, Q4 holidays), not just performance - validate against the same period a year earlier before attributing changes to the campaigns." }
 }
 $facts=[ordered]@{
   meta=[ordered]@{

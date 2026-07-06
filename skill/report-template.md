@@ -10,9 +10,9 @@ Warm, direct, and honest about bad news — write to a client you have a good re
 ## Hard rules
 1. Numbers verbatim from facts only. State comparisons as `<displayCurrent> (<displayDelta>)` or "from `<displayPrevious>` to `<displayCurrent>`" — **both ends must be facts display strings**. If a metric's fact has `hasComparison:false`, do NOT use any comparative word/number for it.
 2. **No blended/portfolio numbers** (there is no portfolio total in the facts) — report each platform separately. **No hand-summed segment figures** (cite the single-bucket concentration the facts give, e.g. "65+ = 53% of clicks", not a summed "55+ = 73%").
-3. Reproduce **every** `meta.comparisonCaveats[]` (seasonality) at least once. For every surfaced finding with `requiresDownstreamData:true`, its point/recommendation carries a "confirm downstream / lead-quality before acting" clause.
+3. Reproduce **every** `meta.comparisonCaveats[]` at least once — write its `.text` and put its anchor `<!-- caveat:<id> -->` (e.g. `<!-- caveat:seasonality -->`) on that line so the verifier can confirm it. For every surfaced finding with `requiresDownstreamData:true`, its point/recommendation carries a "confirm downstream / lead-quality before acting" clause.
 4. Surface every `dataGaps`/`discrepancies` finding (sev ≥ major) and every `GAP_UNIT_UNCONFIRMED`.
-5. **Anchors** (machine-read; keep exactly): under each platform section header put `<!-- platform:<providerId> -->`; on each surfaced finding's line put `<!-- finding:<fid> -->`. These let the verifier scope numbers and confirm surfacing; the prose around them is free to paraphrase.
+5. **Anchors** (machine-read; keep exactly): each platform gets its own `##` section header with `<!-- platform:<providerId> -->` immediately under it — **exactly one** platform anchor per section (two in one section is flagged, and an anchor whose id isn't in the facts is flagged). On each surfaced finding's line put `<!-- finding:<fid> -->`; on each caveat's line `<!-- caveat:<id> -->`. These let the verifier scope numbers and confirm surfacing; the prose around them is free to paraphrase.
 
 ## Structure
 
