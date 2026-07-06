@@ -155,7 +155,15 @@ function Test-HasCredProps($obj){
 }
 
 # ---------------- FS helpers (I/O; used only in the run section) ----------------
-function Resolve-Full($path){ return [IO.Path]::GetFullPath((Resolve-Path -LiteralPath $path).ProviderPath) }
+function Normalize-Root($path){
+  # strip a leading extended-length prefix (\\?\C:\.. or \\?\UNC\srv\..) that breaks Join-Path/Split-Path
+  # under PS 5.1, then normalize. Keeps the location usable rather than crashing on it.
+  $p = [string]$path
+  if($p -match '^\\\\\?\\UNC\\'){ $p = '\\' + $p.Substring(8) }
+  elseif($p -match '^\\\\\?\\'){ $p = $p.Substring(4) }
+  return [IO.Path]::GetFullPath($p)
+}
+function Resolve-Full($path){ return (Normalize-Root (Resolve-Path -LiteralPath $path).ProviderPath) }
 
 function Test-IsReparse($path){
   try { $it = Get-Item -LiteralPath $path -Force -ErrorAction Stop } catch { return $false }
@@ -172,6 +180,7 @@ function Test-ChainSafe($entryFull,$rootFull){
   # TRUE only if NO reparse point sits on the ANCESTOR chain from the entry up to (not incl) root.
   # A junction at the client-dir level would otherwise let [IO.Directory]::Delete traverse OUT of the
   # archive (containment on the non-dereferenced path can't see it). Root is verified non-reparse earlier.
+  if(-not (Test-PathWithinRoot $entryFull $rootFull)){ return $false }   # total: fail-safe on any non-ancestor/degenerate input
   $rootN = ([string]$rootFull).TrimEnd('\','/')
   $cur = ([string]$entryFull).TrimEnd('\','/')
   $guard = 0
@@ -251,7 +260,7 @@ if($Store){
   }
   $clientName = if($Client){ $Client } elseif($factsObj.meta.reportName){ [string]$factsObj.meta.reportName } else { 'client' }
   $slug = Get-ClientSlug $clientName
-  $rootFull = [IO.Path]::GetFullPath($ArchiveRoot)
+  $rootFull = Normalize-Root $ArchiveRoot
   # slug-collision disambiguation: if the slug dir exists with a DIFFERENT client, suffix a short hash.
   $slugDir = Join-Path $rootFull $slug
   if(Test-Path -LiteralPath $slugDir){
@@ -301,7 +310,7 @@ if($Store){
 
 # ---- LIST ----
 if($List){
-  $rootFull = [IO.Path]::GetFullPath($ArchiveRoot)
+  $rootFull = Normalize-Root $ArchiveRoot
   if(-not (Test-Path -LiteralPath $rootFull)){ Write-Host "archive is empty (no $rootFull)"; exit 0 }
   $entries = @(Get-ArchiveEntries $rootFull $now)
   if($Client){ $entries = @($entries | Where-Object { $_.client -and $_.client.Equals($Client,[StringComparison]::OrdinalIgnoreCase) }) }

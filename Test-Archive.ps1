@@ -44,6 +44,13 @@ Ok (Test-PathWithinRoot 'C:\Users\me\swydee-archive\acme\2026-01-01-00-00-00' $r
 Ok (-not (Test-PathWithinRoot 'C:\Users\me\swydee-archive-EVIL\x' $rootF)) 'within: sibling-prefix rejected (archive-EVIL)'
 Ok (-not (Test-PathWithinRoot $rootF $rootF)) 'within: root itself is not a child'
 Ok (Test-PathWithinRoot 'C:\USERS\ME\SWYDEE-ARCHIVE\acme\e' $rootF) 'within: case-insensitive'
+Ok ((Normalize-Root '\\?\C:\Temp\a') -eq 'C:\Temp\a') 'normroot: strips extended-length prefix'
+Ok ((Normalize-Root 'C:\Temp\a') -eq 'C:\Temp\a') 'normroot: plain path unchanged'
+Ok ((Normalize-Root '\\?\UNC\srv\share\a') -eq '\\srv\share\a') 'normroot: UNC extended prefix -> \\'
+$cs1=$null;$t1=$false; try { $cs1 = Test-ChainSafe 'C:\a\b' 'C:\zzz' } catch { $t1=$true }
+Ok ((-not $t1) -and ($cs1 -eq $false)) 'chainsafe total: non-ancestor root -> false, no throw'
+$cs2=$null;$t2=$false; try { $cs2 = Test-ChainSafe 'C:\x' 'C:\x' } catch { $t2=$true }
+Ok ((-not $t2) -and ($cs2 -eq $false)) 'chainsafe total: equal path -> false, no throw'
 
 Ok (Test-SafeClientToken 'Quincy Credit Union') 'client token: ok'
 Ok (-not (Test-SafeClientToken '..\evil')) 'client token: traversal rejected'
