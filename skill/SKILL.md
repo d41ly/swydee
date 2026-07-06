@@ -2,7 +2,7 @@
 name: swydee
 description: Generate a senior-performance-marketer client report from a Swydo shared report — either a swy.do share link or an already-parsed v2 extraction/facts JSON. Use ONLY when the user runs /swydee or explicitly asks to analyze / write a report on a Swydo report. Do NOT auto-invoke on unrelated marketing or data questions.
 disable-model-invocation: true
-argument-hint: "<swy.do link | path\\to\\extraction.json> [--password <pw>] [voice:<causal|correlational|executive|analytical|consultative>] [--fast|--thorough] [--out <dir>]"
+argument-hint: "<swy.do link | path\\to\\extraction.json | list | cleanup older-than:<7d|1mo|3mo|1yr> (client:<name>|all)> [--password <pw>] [voice:<causal|correlational|executive|analytical|consultative>] [--fast|--thorough] [--out <dir>]"
 allowed-tools: Bash, PowerShell, Read, Write
 ---
 
@@ -10,7 +10,7 @@ allowed-tools: Bash, PowerShell, Read, Write
 
 Turns a Swydo report into a client-ready report: per-platform overviews with previous-period comparison, analytical insights (wins / needs-attention / anomalies), and recommendations — with **every number deterministically traced to the data**.
 
-**Tools (bundled with this skill).** The three PowerShell tools ship inside this skill at `${CLAUDE_SKILL_DIR}/scripts/`: `Get-SwydoReport.ps1` (extractor), `Analyze-SwydoReport.ps1` (analyzer), `Test-ReportNumbers.ps1` (closer). `${CLAUDE_SKILL_DIR}` is this skill's own install directory (the folder holding this SKILL.md), so the paths resolve wherever the skill is installed (personal, project, or plugin). Invoke each with the PowerShell tool as `powershell -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/<name>.ps1" <args>`. The report template sits beside this file at `${CLAUDE_SKILL_DIR}/report-template.md`.
+**Tools (bundled with this skill).** The PowerShell tools ship inside this skill at `${CLAUDE_SKILL_DIR}/scripts/`: `Get-SwydoReport.ps1` (extractor), `Analyze-SwydoReport.ps1` (analyzer), `Test-ReportNumbers.ps1` (closer), `Manage-SwydoArchive.ps1` (archive + retention). `${CLAUDE_SKILL_DIR}` is this skill's own install directory (the folder holding this SKILL.md), so the paths resolve wherever the skill is installed (personal, project, or plugin). Invoke each with the PowerShell tool as `powershell -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/<name>.ps1" <args>`. The report template sits beside this file at `${CLAUDE_SKILL_DIR}/report-template.md`.
 
 ## Non-negotiables
 - **The model narrates; the tools compute.** You may cite ONLY the pre-formatted display strings that appear in the facts JSON. Do NOT do arithmetic, re-round, sum, average, or derive any number. If a number you want isn't in the facts, you may not use it.
@@ -19,6 +19,7 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 ## Flow
 
 ### 1. Parse the argument
+- If the first token is `list` or `cleanup` → **Retention mode** (see "Retention commands" below); handle it and stop — do not produce a report.
 - If the first token matches `^(https?://)?(swy\.do/shares/|app\.swydo\.com/g/)` → **Mode A (link)**.
 - Else if it ends in `.json` and the file exists → **Mode B (file)**.
 - Else → stop with a usage message. Any token starting `--` is a flag; a share password must be given via `--password <pw>` (never positionally).
@@ -42,10 +43,16 @@ Run `${CLAUDE_SKILL_DIR}/scripts/Test-ReportNumbers.ps1 -Report <draft.md> -Fact
 ### 6. Deliver
 Deliver the published `<out>\<stamp>-<slug>-report.md` (anchor-free, credential-free). Keep the `.draft.md` as the audit/re-verify source. Tell the user the report path and the facts path; summarize the headline in one or two sentences.
 
-### 7. Retain + clean up
-- **Keep the facts JSON as the record of provenance** — archive it next to the delivered report (e.g. `<report>.facts.json`). It's scrubbed and small; it keeps the report re-verifiable by the closer and is the input for later QoQ/YoY trend comparisons. Ad-platform data is mutable (attribution restates, rolling windows shift), so re-scraping later will NOT reproduce today's numbers — the facts snapshot is the only faithful record of what was reported.
-- **The raw extraction carries the share credential in cleartext.** Once Analyze has produced the facts, the raw has served its purpose: delete it, OR — if you want a lossless point-in-time source for re-derivation — scrub the credential (drop `meta.shareKey`/`meta.shareUrl` and any `swy.do/shares/...`) and archive only the scrubbed copy. NEVER leave a credential-bearing extraction on disk or in any shared/durable location.
-- Keep the `.draft.md` (anchored audit copy), the facts JSON, and the delivered report together per engagement/period.
+### 7. Retain — file the run into the archive
+Store the run into the client/date archive:
+`${CLAUDE_SKILL_DIR}/scripts/Manage-SwydoArchive.ps1 -Store -Facts <facts.json> -Report <report.md> -Draft <draft.md> -Client "<client>" -ArchiveRoot <archive-root>`
+It creates `<archive-root>/<client-slug>/<YYYY-MM-DD-HH-MM-SS>/` with a `manifest.json` (client, period, scrape + archive dates, per-file sha256) and writes a `.swydee-archive` sentinel. Its fail-closed gate **refuses to store anything still carrying a share credential** (`meta.shareKey`/`shareUrl` or a `swy.do/shares/...` string). The facts snapshot is the record of provenance — it keeps the report re-verifiable and feeds later QoQ/YoY trend work (ad data is mutable, so re-scraping won't reproduce today's numbers). Do NOT pass the raw extraction unless it has been scrubbed to REMOVE `meta.shareKey`/`meta.shareUrl`; otherwise delete the raw — never archive a credential.
+
+## Retention commands (user-invoked)
+When the user asks to review or clean up archived data (first token `list` or `cleanup`), run `Manage-SwydoArchive.ps1`:
+- **list** → `-List [-Client "<name>"] -ArchiveRoot <root>`  (read-only inventory by client → entries/dates/sizes).
+- **cleanup** `older-than:<7d|1mo|3mo|1yr>` `(client:"<name>" | all)` → `-Cleanup -OlderThan <t> (-Client "<name>" | -All) -ArchiveRoot <root>`.
+  **DESTRUCTIVE.** ALWAYS run the dry-run first (NO `-Execute`), show the user the exact entries it lists as removable, and only re-run adding `-Execute` after the user explicitly confirms. `-All` (whole archive) requires a stronger, explicit confirmation. The tool keeps undated/unparseable entries, refuses to delete outside the archive root, and skips entries containing a junction/symlink — but the confirmation is still yours to get.
 
 ## Notes
 - Coverage: surface every finding with `confidence` normal and every anomaly in the insights section; every `dataGaps`/`discrepancies` finding of severity ≥ major and every `meta.comparisonCaveats` MUST appear (the closer enforces the major ones).
