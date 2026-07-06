@@ -44,10 +44,10 @@ $script:TildeRx = '[~' + [char]0x2248 + ']'                                # ~ /
 $script:TokRx = '(?<mult>\d+(?:\.\d+)?\s*[xX])' +
                 '|(?<range>\d+\s*-\s*\d+)' +
                 '|(?<bucket>\d+\+)' +
-                '|(?<cur>' + $script:CurClass + '\s?\d[\d,]*(?:\.\d+)?\s*[KMB]?)' +
+                '|(?<cur>[+-]?' + $script:CurClass + '\s?-?\d[\d,]*(?:\.\d+)?\s*[KMB]?)' +
                 '|(?<pct>[+-]?\d[\d,]*(?:\.\d+)?\s*%)' +
                 '|(?<year>20\d\d)' +
-                '|(?<bare>\d[\d,]*(?:\.\d+)?\s*[KMB]?)'
+                '|(?<bare>[+-]?\d[\d,]*(?:\.\d+)?\s*[KMB]?)'
 # Comparative verbs (conservative - excludes idiomatic bare up/down to avoid false positives).
 $script:CmpRx = '(?i)\b(grew|grow|grown|growth|fell|fall|fallen|rose|rise|risen|declin\w*|' +
                 'increas\w*|decreas\w*|higher|lower|improv\w*|worse|worsen\w*|dropp?\w*|' +
@@ -72,7 +72,7 @@ function Normalize-Num($s){
     switch($m.Groups[1].Value.ToUpper()){ 'K'{$mult=1e3} 'M'{$mult=1e6} 'B'{$mult=1e9} }
     $t = $t.Substring(0,$m.Index)
   }
-  $neg = $t.TrimStart().StartsWith('-')
+  $neg = ($t -match '^[^\d]*-')                        # a '-' before the first digit (incl. "$-2,500")
   $core = $t -replace '[^0-9\.]',''                   # digits + dot only
   if($core -eq '' -or $core -eq '.'){ return $null }
   $d = 0.0
@@ -121,14 +121,17 @@ function Get-MeasureTokens($text){
   foreach($mm in [regex]::Matches($norm,$script:TokRx)){
     $g = $mm.Groups
     if($g['year'].Success){ continue }
+    $end = $mm.Index + $mm.Length
     if($g['mult'].Success -or $g['range'].Success -or $g['bucket'].Success){
       # buckets/ranges/multipliers are demographic/ROAS shapes and are exempt ONLY when small
       # (65+, 25-34, 3x). A large "40000+" / "25000-30000" / "12500x" is a measure smuggled past the
-      # tokenizer by trivial phrasing - fall through and require its leading number to trace.
+      # tokenizer by trivial phrasing - fall through and require EVERY number in it to trace.
       $enums = @([regex]::Matches($mm.Value,'\d[\d,]*(?:\.\d+)?') | ForEach-Object { Normalize-Num $_.Value })
       $emax = ($enums | Measure-Object -Maximum).Maximum
-      if($null -eq $emax -or $emax -lt 1000){ continue }
-      if($null -ne $enums[0]){ [void]$out.Add([ordered]@{ raw=$mm.Value.Trim(); value=$enums[0]; type='number'; index=$mm.Index; signed=$false }) }
+      # a range/bucket whose numbers are all year-like (1900-2099) is a year range, not a smuggled count
+      $allYears = ($enums.Count -gt 0) -and (@($enums | Where-Object { $_ -lt 1900 -or $_ -gt 2099 }).Count -eq 0)
+      if($null -eq $emax -or $emax -lt 1000 -or $allYears){ continue }
+      foreach($e in $enums){ if($null -ne $e){ [void]$out.Add([ordered]@{ raw=$mm.Value.Trim(); value=$e; type='number'; index=$mm.Index; end=$end; signed=$false }) } }
       continue
     }
     $raw = $mm.Value.Trim()
@@ -139,16 +142,18 @@ function Get-MeasureTokens($text){
       $type='number'
       $hasSep = ($raw -match ',') -or ($raw -match '\.') -or ($raw -match '(?i)[kmb]$')
       $val0 = Normalize-Num $raw
-      # list-size / lookback context integers ("top 100", "first 200", "past 90 days") are not measures
+      # list-size / lookback context integers ("top 100", "first 200", "past 90 days") are not measures.
+      # \b anchors the word so "Desktop 987654" / "homepage 500" are NOT exempted; and only small values
+      # are exempted (a large "last 45000" is a measure that must trace).
       $pre = if($mm.Index -gt 0){ $norm.Substring([math]::Max(0,$mm.Index-8), [math]::Min(8,$mm.Index)) } else { '' }
-      $isContext = ($pre -match '(?i)(top|first|last|next|past|page)\s*$')
-      if(-not $hasSep -and $isContext){ $isMeasure=$false }
+      $isContext = ($pre -match '(?i)\b(top|first|last|next|past|page)\s*$')
+      if(-not $hasSep -and $isContext -and ($null -eq $val0 -or [math]::Abs($val0) -lt 1000)){ $isMeasure=$false }
       elseif($hasSep -or ($null -ne $val0 -and [math]::Abs($val0) -ge 100)){ $isMeasure=$true }
     }
     if(-not $isMeasure){ continue }
     $v = Normalize-Num $raw
     if($null -eq $v){ continue }
-    [void]$out.Add([ordered]@{ raw=$raw; value=$v; type=$type; index=$mm.Index; signed=($raw -match '^[+-]') })
+    [void]$out.Add([ordered]@{ raw=$raw; value=$v; type=$type; index=$mm.Index; end=$end; signed=($raw -match '[+\-]') })
   }
   return $out
 }
@@ -253,24 +258,26 @@ function Find-Candidates($tok,$cands){
 }
 
 function Split-Sections($reportText){
-  # -> list of @{ header; kind(platform|recommendations|general); platformId; text }
+  # -> list of @{ header; kind(platform|recommendations|general); platformId; platformIdCount; level; text }
   $sections = New-Object System.Collections.ArrayList
   $lines = ($reportText -replace "`r`n","`n") -split "`n"
-  $cur = [ordered]@{ header='(intro)'; kind='general'; platformId=$null; lines=(New-Object System.Collections.ArrayList) }
+  $cur = [ordered]@{ header='(intro)'; level=0; lines=(New-Object System.Collections.ArrayList) }
   function _finalize($s){
     $txt = ($s.lines -join "`n")
-    $secpids = @(); foreach($pm in [regex]::Matches($txt,'<!--\s*platform:([^\s]+?)\s*-->')){ $secpids += $pm.Groups[1].Value }
+    # search the header line too, so '## Google Ads <!-- platform:google_ads -->' is not silently dropped
+    $hay = [string]$s.header + "`n" + $txt
+    $secpids = @(); foreach($pm in [regex]::Matches($hay,'<!--\s*platform:([^\s]+?)\s*-->')){ $secpids += $pm.Groups[1].Value }
     $secpid = if($secpids.Count -gt 0){ $secpids[0] } else { $null }
     $kind = 'general'
     if($s.header -match '(?i)recommend'){ $kind='recommendations' }
     elseif($secpid){ $kind='platform' }
-    return [ordered]@{ header=$s.header; kind=$kind; platformId=$secpid; platformIdCount=$secpids.Count; text=$txt }
+    return [ordered]@{ header=$s.header; kind=$kind; platformId=$secpid; platformIdCount=$secpids.Count; level=$s.level; text=$txt }
   }
   foreach($ln in $lines){
     $hm = [regex]::Match($ln,'^(#{1,6})\s+(.*)$')
     if($hm.Success){
       [void]$sections.Add((_finalize $cur))
-      $cur = [ordered]@{ header=$hm.Groups[2].Value.Trim(); kind='general'; platformId=$null; lines=(New-Object System.Collections.ArrayList) }
+      $cur = [ordered]@{ header=$hm.Groups[2].Value.Trim(); level=$hm.Groups[1].Value.Length; lines=(New-Object System.Collections.ArrayList) }
     } else {
       [void]$cur.lines.Add($ln)
     }
@@ -289,23 +296,36 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   # for the line that echoes its <!-- finding:fid --> - the finding's numbers and the fid must sit on
   # the same line (per report-template). Line scope (not paragraph) stops a fabricated number on a
   # sibling line from borrowing a co-located finding's number.
+  $ctxPlatform = $null; $ctxLevel = 0   # last-seen platform section, for scoping unanchored subsections
   foreach($sec in $sections){
     if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ continue }
     # C1: more than one platform anchor in one section is ambiguous (silent-take-first would mis-scope)
     if($sec.platformIdCount -gt 1){
       [void]$violations.Add([ordered]@{ type='ambiguous-platform-anchor'; section=$sec.header; detail="section carries $($sec.platformIdCount) platform anchors; expected at most one"; snippet=[string]$sec.platformId })
     }
-    # base scope: platform section -> that platform's facts; otherwise global
-    $base = $index.global
-    if($sec.kind -eq 'platform' -and $sec.platformId){
-      if($index.byPlatform.ContainsKey($sec.platformId)){ $base = $index.byPlatform[$sec.platformId] }
+    # Resolve the section's effective platform. Precedence: explicit anchor > header text naming a
+    # known platform > inheritance from an enclosing (deeper) platform section. A section is NEVER
+    # silently widened to global just because it omitted the anchor - that laundered wrong-platform
+    # numbers (a missing anchor, unlike a wrong one, used to fall through to global).
+    #   $eff:  a platformId -> that scope;  '' -> empty scope (broken anchor);  $null -> global.
+    $eff = $null
+    if($sec.platformId){
+      if($index.byPlatform.ContainsKey($sec.platformId)){ $eff = $sec.platformId }
       else {
-        # C2: an unresolved/typo anchor must NOT fall back to global (that would widen the haystack
-        # and mask fabrications) - use an empty scope and flag the broken anchor.
-        $base = (New-Object System.Collections.ArrayList)
+        $eff = ''   # C2: unknown/typo anchor -> empty scope + flag (do NOT fall back to global)
         [void]$violations.Add([ordered]@{ type='unknown-platform-anchor'; section=$sec.header; detail="platform anchor '$($sec.platformId)' not in facts.platforms"; snippet=[string]$sec.platformId })
       }
+      $ctxPlatform = $eff; $ctxLevel = $sec.level
+    } else {
+      $named = $null; $nmatch = 0
+      foreach($pn in $index.nameToId.Keys){ if($pn -and $sec.header.ToLower().Contains(([string]$pn).ToLower())){ $named = $index.nameToId[$pn]; $nmatch++ } }
+      if($nmatch -eq 1){ $eff = $named; $ctxPlatform = $eff; $ctxLevel = $sec.level }
+      elseif($ctxPlatform -and $sec.level -gt $ctxLevel){ $eff = $ctxPlatform }   # deeper subsection inherits
+      else { $eff = $null; if($sec.level -le $ctxLevel){ $ctxPlatform = $null; $ctxLevel = $sec.level } }
     }
+    if($null -eq $eff){ $base = $index.global }
+    elseif($eff -eq ''){ $base = (New-Object System.Collections.ArrayList) }
+    else { $base = $index.byPlatform[$eff] }
     foreach($line in (($sec.text -replace "`r`n","`n") -split "`n")){
       $fids = @(); foreach($fm in [regex]::Matches($line,'<!--\s*finding:([^\s]+?)\s*-->')){ $fids += $fm.Groups[1].Value }
       $cands = New-Object System.Collections.ArrayList
@@ -326,7 +346,7 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
         # no-comparison metric mentioned later in the same sentence).
         $isCmp = $tok.signed
         if(-not $isCmp){
-          $tEnd = $tok.index + $tok.raw.Length
+          $tEnd = if($null -ne $tok.end){ [int]$tok.end } else { $tok.index + $tok.raw.Length }
           foreach($cm in $cmpMatches){
             $vEnd = $cm.Index + $cm.Length
             if($vEnd -le $tok.index){ $gap = $line.Substring($vEnd, $tok.index - $vEnd) }

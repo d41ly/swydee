@@ -18,6 +18,8 @@ Eqd (Normalize-Num '$1.2M') 1200000 'norm M suffix'
 Eqd (Normalize-Num '3,473,132') 3473132 'norm thousands'
 Eqd (Normalize-Num '~$500') 500 'norm tilde strip'
 Eqd (Normalize-Num 'about 79%') 79 'norm about-word strip'
+Eqd (Normalize-Num '-$2,500.00') -2500 'norm sign before currency symbol'
+Eqd (Normalize-Num '$-2,500.00') -2500 'norm sign after currency symbol'
 Ok ((Normalize-Num $null) -eq $null) 'norm null -> null'
 Ok ((Normalize-Num 'n/a') -eq $null) 'norm non-numeric -> null'
 
@@ -51,13 +53,21 @@ Ok ((NMeasures 'across 3 platforms') -eq 0) 'exempt small bare (3)'
 Ok ((NMeasures 'in 2026 overall') -eq 0) 'exempt standalone year'
 # exempt shapes are magnitude-bounded: large N+/N-M/Nx are measures (smuggling guard)
 Ok ((NMeasures 'drove 40000+ conversions') -eq 1) 'large N+ is a measure (not exempt)'
-Ok ((NMeasures '25000-30000 clicks') -eq 1) 'large range is a measure'
+Ok ((NMeasures '25000-30000 clicks') -eq 2) 'large range: BOTH bounds are measures'
+Ok ((NMeasures 'in 2024-2025 overall') -eq 0) 'year range stays exempt'
 Ok ((NMeasures '12500x return claimed') -eq 1) 'large multiplier is a measure'
 # list-size / lookback context integers are not measures
 Ok ((NMeasures 'the top 100 keywords') -eq 0) 'context: top 100 exempt'
 Ok ((NMeasures 'first 200 clicks reviewed') -eq 0) 'context: first 200 exempt'
 Ok ((NMeasures 'over the past 100 days') -eq 0) 'context: past 100 days exempt'
 Ok ((NMeasures 'we saw 150 conversions') -eq 1) 'plain 150 is a measure'
+# context exemption is word-anchored (\b) and magnitude-capped
+Ok ((NMeasures 'Desktop 987654 conversions') -eq 1) 'Desktop suffix is NOT a context word (\b anchor)'
+Ok ((NMeasures 'homepage 5000 views') -eq 1) 'homepage suffix is NOT a context word'
+Ok ((NMeasures 'the last 45000 conversions') -eq 1) 'large context integer still traces (magnitude cap)'
+# signed currency/count tokens capture their sign
+$sc1 = @(Get-MeasureTokens 'gained +1,234 net leads'); Ok ($sc1.Count -eq 1 -and $sc1[0].signed) 'bare +1,234 captured as signed'; Eqd $sc1[0].value 1234 'signed +1,234 value'
+$sc2 = @(Get-MeasureTokens 'a -$2,500.00 swing'); Ok ($sc2[0].signed) '-$2,500 captured as signed'; Eqd $sc2[0].value -2500 '-$2,500 value'
 # ---------- Get-MeasureTokens: measures ----------
 Ok ((NMeasures 'spend was $10,864.72 total') -eq 1) 'measure currency'
 Ok ((NMeasures 'CTR of 14.4% held') -eq 1) 'measure percent'
@@ -85,6 +95,8 @@ Ok ((@(Find-Candidates ([ordered]@{value=1200000;type='number';raw='1.2M'}) @($c
 $cNeg = [ordered]@{ value=-12.5; type='percent'; ulp=0.1 }
 Ok ((@(Find-Candidates ([ordered]@{value=12.5;type='percent';raw='+12.5%';signed=$true}) @($cNeg))).Count -eq 0) 'signed +12.5% does NOT trace to -12.5% fact (direction)'
 Ok ((@(Find-Candidates ([ordered]@{value=12.5;type='percent';raw='12.5%';signed=$false}) @($cNeg))).Count -eq 1) 'unsigned 12.5% traces to -12.5% (prose drops the sign)'
+$cNegN = [ordered]@{ value=-1234; type='number'; ulp=1 }
+Ok ((@(Find-Candidates ([ordered]@{value=1234;type='number';raw='+1,234';signed=$true}) @($cNegN))).Count -eq 0) 'signed +1,234 does NOT trace a -1,234 count fact (direction)'
 
 # ---------- synthetic facts (two ads platforms; comparison on Google, none on FB) ----------
 $factsJson = @'
@@ -215,6 +227,37 @@ $rLeak = Invoke-Closer $leakReport $factsObj
 Ok (HasT $rLeak 'untraceable-number') 'finding number on a sibling line (no fid) -> untraceable (line scope, not paragraph)'
 $rNoLeak = Invoke-Closer "## Analytical insights`nDisplay ran at 40% of spend for only 5% of leads. <!-- finding:ANOM_SHARE_MISMATCH#1 -->`n" $factsObj
 Ok (-not (HasT $rNoLeak 'untraceable-number')) 'finding numbers on the fid line -> trace'
+
+# platform scope must not be laundered to global when the anchor is on the heading line, in a
+# subsection, or in a "## Platform - subtopic" sibling (a FB-only $555 must stay untraceable there)
+$vHdr = @'
+## Google Ads <!-- platform:google_ads -->
+We also spent $555.00 here.
+'@
+Ok (HasT (Invoke-Closer $vHdr $factsObj) 'untraceable-number') 'heading-line anchor scopes: FB-only $555 untraceable under Google'
+$vSub = @'
+## Google Ads
+<!-- platform:google_ads -->
+Cost was $10,864.72.
+
+### Deeper cut
+We also spent $555.00 here.
+'@
+Ok (HasT (Invoke-Closer $vSub $factsObj) 'untraceable-number') 'subsection inherits Google scope: FB-only $555 untraceable'
+$vSib = @'
+## Google Ads
+<!-- platform:google_ads -->
+Cost was $10,864.72.
+
+## Google Ads - Keywords
+We also spent $555.00 here.
+'@
+Ok (HasT (Invoke-Closer $vSib $factsObj) 'untraceable-number') 'sibling "Google Ads - Keywords" name-resolves to Google: FB-only $555 untraceable'
+$vGen = @'
+## Summary
+Across accounts, Meta spend was $555.00 while Google cost $10,864.72.
+'@
+Ok (-not (HasT (Invoke-Closer $vGen $factsObj) 'untraceable-number')) 'general (non-platform) section uses global scope: cross-platform numbers trace'
 
 # comparison guard does not taint an unrelated no-comparison metric across a clause break
 $clauseReport = @'
