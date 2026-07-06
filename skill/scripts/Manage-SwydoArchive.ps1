@@ -31,7 +31,9 @@ param(
   [switch]$Store,
   [switch]$List,
   [switch]$Cleanup,
-  [string]$ArchiveRoot = (Join-Path $HOME 'swydee-archive'),
+  # default: an 'archive' folder inside the installed skill (the parent of this scripts/ dir), so the
+  # archive travels alongside the skill; falls back to ~/swydee-archive if the script dir is unknown.
+  [string]$ArchiveRoot = $(if($PSScriptRoot){ Join-Path (Split-Path $PSScriptRoot -Parent) 'archive' } else { Join-Path $HOME 'swydee-archive' }),
   # Store inputs
   [string]$Facts,
   [string]$Report,

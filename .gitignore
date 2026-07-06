@@ -14,3 +14,7 @@ scratch/
 # OS / editor
 Thumbs.db
 .DS_Store
+
+# client data archives - never commit
+skill/archive/
+
