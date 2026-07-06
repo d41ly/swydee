@@ -81,6 +81,89 @@ $dd = $r.rows[0].dimensions
 Assert ($dd.Keys.Count -eq 2) "dup Campaign dims => 2 keys (got $($dd.Keys.Count))"
 Assert ($dd['Campaign'] -eq 'Alpha' -and $dd['Campaign [f:campaign]'] -eq 'Beta') "both Campaign dim labels survive"
 
+Write-Host "== trend: Test-TrendTimeWidget =="
+Assert (Test-TrendTimeWidget @('Month')) "Month => time"
+Assert (Test-TrendTimeWidget @('Date')) "Date => time"
+Assert (Test-TrendTimeWidget @('Week')) "Week => time"
+Assert (-not (Test-TrendTimeWidget @('Campaign'))) "Campaign => not time"
+Assert (-not (Test-TrendTimeWidget @('Keyword'))) "Keyword => not time"
+Assert (-not (Test-TrendTimeWidget @('Update'))) "Update (contains 'date') => not time"
+
+Write-Host "== trend: ConvertTo-MonthKey =="
+Assert ((ConvertTo-MonthKey '2025-04') -eq '2025-04') "YYYY-MM passthrough"
+Assert ((ConvertTo-MonthKey '2025-04-15') -eq '2025-04') "YYYY-MM-DD => YYYY-MM"
+Assert ((ConvertTo-MonthKey '202504') -eq '2025-04') "YYYYMM => YYYY-MM"
+Assert ($null -eq (ConvertTo-MonthKey 'Total')) "non-month => null"
+Assert ($null -eq (ConvertTo-MonthKey $null)) "null => null"
+
+Write-Host "== trend: month ordinal arithmetic =="
+Assert ((OrdinalToMonthKey (MonthKeyToOrdinal '2025-04')) -eq '2025-04') "ordinal roundtrip"
+Assert (((MonthKeyToOrdinal '2025-04') - (MonthKeyToOrdinal '2025-03')) -eq 1) "adjacent within year => 1"
+Assert (((MonthKeyToOrdinal '2025-01') - (MonthKeyToOrdinal '2024-12')) -eq 1) "year boundary => 1"
+Assert ($null -eq (MonthKeyToOrdinal 'x')) "bad => null"
+
+Write-Host "== trend: Test-TrailingContiguous =="
+Assert (Test-TrailingContiguous @('2025-01','2025-02','2025-03') 2) "consecutive => true"
+Assert (Test-TrailingContiguous @('2024-12','2025-01') 2) "year-boundary consecutive => true"
+Assert (-not (Test-TrailingContiguous @('2025-01','2025-03') 2)) "gap in trailing 2 => false"
+Assert (-not (Test-TrailingContiguous @('2025-05') 2)) "single => false"
+Assert (Test-TrailingContiguous @('2025-01','2025-05','2025-06') 2) "trailing 2 consecutive (older gap ok) => true"
+
+Write-Host "== trend: Select-CeilingBracket =="
+$b1=Select-CeilingBracket @{48=0;36=0;24=25;18=18;12=12}; Assert ($b1.R -eq 24 -and $b1.F -eq 36) "30mo-ish => bracket [24,36]"
+$b2=Select-CeilingBracket @{48=40;36=36;24=24;18=18;12=12}; Assert ($b2.R -eq 48 -and $null -eq $b2.F) "widest has rows => R=48, no F"
+$b3=Select-CeilingBracket @{48=0;36=0;24=0;18=0;12=0};      Assert ($null -eq $b3.R -and $b3.F -eq 12) "all empty => R null"
+$b4=Select-CeilingBracket @{48=0;36=0;24=0;18=20;12=12};    Assert ($b4.R -eq 18 -and $b4.F -eq 24) "FB-like overshoot => bracket [18,24]"
+
+Write-Host "== trend: Get-NextBisectN =="
+Assert ((Get-NextBisectN 24 36) -eq 30) "mid(24,36)=30"
+Assert ((Get-NextBisectN 18 24) -eq 21) "mid(18,24)=21"
+Assert ($null -eq (Get-NextBisectN 24 25)) "converged (F-R<=1) => null"
+Assert ($null -eq (Get-NextBisectN 18 $null)) "no F => null"
+
+Write-Host "== trend: Test-CeilingFresh / Get-CurrentMonthKey =="
+$nowT=[datetimeoffset]'2026-07-06T00:00:00Z'
+Assert (Test-CeilingFresh (([datetimeoffset]'2026-07-01T00:00:00Z').ToString('o')) $nowT 30) "5 days => fresh"
+Assert (-not (Test-CeilingFresh (([datetimeoffset]'2026-05-01T00:00:00Z').ToString('o')) $nowT 30)) "66 days => stale"
+Assert (-not (Test-CeilingFresh $null $nowT 30)) "null discoveredAt => not fresh"
+Assert ((Get-CurrentMonthKey ([datetimeoffset]'2026-07-06T12:00:00Z')) -eq '2026-07') "current month key"
+
+Write-Host "== trend: Get-TrendMonthCells =="
+function TNode($cells,$isT,$isS,$cc){ [pscustomobject]@{ node=[pscustomobject]@{ cells=$cells; compareCells=$null; meta=[pscustomobject]@{currencyCode=$cc}; isTotals=$isT; isSubtotals=$isS } } }
+$twobj = W ([pscustomobject]@{
+  metrics=(FieldsConn @([pscustomobject]@{name='Cost';id='google-adwords:cost_micros'}, [pscustomobject]@{name='Clicks';id='google-adwords:clicks'}))
+  dims=(FieldsConn @([pscustomobject]@{name='Month';id='d:month'}))
+  data=[pscustomobject]@{ edges=@(
+    (TNode @($null,999,999) $true $false 'USD')          # total => excluded
+    (TNode @($null,999,999) $false $true 'USD')          # subtotal => excluded
+    (TNode @('2025-04',1000000,50) $false $false 'USD')
+    (TNode @('2025-05',2000000,60) $false $false 'USD')
+    (TNode @('Total',1,1) $false $false 'USD')           # non-month label => excluded
+  ) }
+})
+$mc = Get-TrendMonthCells $twobj
+Assert ($mc.windowStatus -eq 'ok') "windowStatus ok"
+Assert (@($mc.months).Count -eq 2) "2 real month rows (totals/subtotals/non-month excluded), got $(@($mc.months).Count)"
+Assert ($mc.months[0].month -eq '2025-04') "first month 2025-04"
+Assert ($mc.months[0].values['google-adwords:cost_micros'] -eq 1000000) "cost cell mapped by metric id"
+Assert ($mc.months[0].values['google-adwords:clicks'] -eq 50) "clicks cell mapped by metric id"
+Assert ($mc.months[0].currency -eq 'USD') "currency from node meta"
+$mce = Get-TrendMonthCells (W ([pscustomobject]@{ metrics=(FieldsConn @()); dims=(FieldsConn @([pscustomobject]@{name='Month';id='d:month'})); data=[pscustomobject]@{edges=@()} }))
+Assert ($mce.windowStatus -eq 'overshoot-empty') "empty window => overshoot-empty"
+# currency resolved WIDGET-WIDE: a month row missing meta.currencyCode still gets the widget currency (M1)
+$twmix = W ([pscustomobject]@{
+  metrics=(FieldsConn @([pscustomobject]@{name='Cost';id='google-adwords:cost_micros'}))
+  dims=(FieldsConn @([pscustomobject]@{name='Month';id='d:month'}))
+  data=[pscustomobject]@{ edges=@(
+    (TNode @('2025-04',1000000) $false $false 'USD')
+    (TNode @('2025-05',0)       $false $false $null)   # low-activity month omits currency
+  ) }
+})
+$mcm = Get-TrendMonthCells $twmix
+Assert ($mcm.months[0].currency -eq 'USD' -and $mcm.months[1].currency -eq 'USD') "widget-wide currency: both months USD (not forked by a null-currency row)"
+$mcx = Get-TrendMonthCells (W $null)
+Assert ($mcx.windowStatus -eq 'error') "null widget => error"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
