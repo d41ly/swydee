@@ -2,7 +2,7 @@
 name: swydee
 description: Generate a senior-performance-marketer client report from a Swydo shared report — either a swy.do share link or an already-parsed v2 extraction/facts JSON. Use ONLY when the user runs /swydee or explicitly asks to analyze / write a report on a Swydo report. Do NOT auto-invoke on unrelated marketing or data questions.
 disable-model-invocation: true
-argument-hint: "<swy.do link | path\\to\\extraction.json> [--password <pw>] [--fast|--thorough] [--out <dir>]"
+argument-hint: "<swy.do link | path\\to\\extraction.json> [--password <pw>] [voice:<causal|correlational|executive|analytical|consultative>] [--fast|--thorough] [--out <dir>]"
 allowed-tools: Bash, PowerShell, Read, Write
 ---
 
@@ -20,6 +20,7 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 - If the first token matches `^(https?://)?(swy\.do/shares/|app\.swydo\.com/g/)` → **Mode A (link)**.
 - Else if it ends in `.json` and the file exists → **Mode B (file)**.
 - Else → stop with a usage message. Any token starting `--` is a flag; a share password must be given via `--password <pw>` (never positionally).
+- A `voice:<type>` token selects the report's attribution profile (`causal` (default) | `correlational` | `executive` | `analytical` | `consultative`; unknown → fall back to `causal`). See the voice section of `report-template.md`.
 
 ### 2. Produce the facts
 - **Mode A:** run `Get-SwydoReport.ps1 -ShareUrl <link> [-Secret <pw>] -OutDir <tmp>` → note the extraction path (DO NOT open it). Then `Analyze-SwydoReport.ps1 -InFile <extraction> -OutDir <out>`.
@@ -31,7 +32,7 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 - Fan-out: write one facts-slice file per category (the facts subset for that category's platforms) to the out dir, spawn one analyst subagent per category **passing only the slice file path** (never the extraction), plus one cross-cutting agent for portfolio/cross-platform notes; then synthesize. Completeness gate: every `meta.providers` platform appears exactly once in the report.
 
 ### 4. Write the report — follow `report-template.md` exactly
-Fill the template from the facts. Obey every hard rule in it (verbatim numbers, mandatory caveats, `<!-- platform:id -->` and `<!-- finding:fid -->` anchors, no arithmetic, correlational-not-causal voice).
+Fill the template from the facts in the selected voice profile (default `causal`). Obey every hard rule in it (verbatim numbers, mandatory caveats, `<!-- platform:id -->` / `<!-- finding:fid -->` / `<!-- caveat:id -->` anchors, no arithmetic). The voice changes only tone and attribution confidence — never the numbers or caveats.
 
 ### 5. Verify — run the closer, fail-closed
 Run `Test-ReportNumbers.ps1 -Report <report.md> -Facts <facts.json>`. If it exits non-zero, read the violations and **fix the report** (remove/correct untraceable numbers, add missing caveats/gaps, fix comparison claims, remove leaked credentials), then re-run. Do NOT deliver a report the closer rejects.
