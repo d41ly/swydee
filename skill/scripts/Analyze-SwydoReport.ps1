@@ -204,6 +204,14 @@ function Scrub-Credential($doc){
 }
 $script:KeyPattern = '(?i)swy\.do/shares/[A-Za-z0-9_-]+|/g/[A-Za-z0-9_-]+/reports/'
 function Assert-NoCredential($text){ if($text -match $script:KeyPattern){ throw "CREDENTIAL LEAK: share key/url found in output" } }
+# --platform (U2): a major dataGap forcing the report to disclose which platforms were excluded. $null if no
+# filter or nothing excluded. Pure so it is unit-testable via -DefineOnly.
+function Get-ProviderFilterFinding($providerFilter,$providerInventory){
+  $pf=@($providerFilter); if($pf.Count -eq 0){ return $null }
+  $excluded=@(@($providerInventory) | Where-Object { $_ -and ($_ -notin $pf) })
+  if($excluded.Count -eq 0){ return $null }
+  return [ordered]@{ ruleId='PROVIDER_FILTERED'; severity='major'; statement=("Report limited to platform(s) " + ($pf -join ', ') + "; excluded (not pulled): " + ($excluded -join ', ') + " - this is a partial view of the account.") }
+}
 # Per-widget breakdown table for the facts: top-`cap` rows (display-only, tagged), force-including
 # any label in $mustLabels (finding-referenced). Row labels via Row-Label (NOT Get-DimLabel).
 function Get-Breakdown($w, $cap, $mustLabels){
@@ -357,6 +365,10 @@ $wins=[System.Collections.ArrayList]@(); $losses=[System.Collections.ArrayList]@
 
 # GAP_WARNINGS (from extraction)
 foreach($warn in @($doc.meta.warnings)){ if($warn){ [void]$gaps.Add([ordered]@{ ruleId='GAP_WARNINGS'; severity='major'; statement=$warn }) } }
+# PROVIDER_FILTERED: --platform pulled a subset; force the exclusion into the report so a partial view is never
+# mistaken for a complete one (the completeness gate covers only what was pulled).
+$pff = Get-ProviderFilterFinding $doc.meta.providerFilter $doc.meta.providerInventory
+if($pff){ [void]$gaps.Add($pff) }
 # per-platform win/loss + gaps
 foreach($pk in $platforms.Keys){
   $pf=$platforms[$pk]
@@ -450,6 +462,7 @@ $facts=[ordered]@{
   meta=[ordered]@{
     tool='Analyze-SwydoReport.ps1'; factsVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
+    providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence
     hasComparison=$hasCmp; comparisonCaveats=$caveats;
     providers=@($platforms.Values | ForEach-Object { [ordered]@{ id=$_.id; name=$_.name; category=$_.category } })

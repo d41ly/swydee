@@ -164,6 +164,15 @@ Assert ($mcm.months[0].currency -eq 'USD' -and $mcm.months[1].currency -eq 'USD'
 $mcx = Get-TrendMonthCells (W $null)
 Assert ($mcx.windowStatus -eq 'error') "null widget => error"
 
+Write-Host "== provider filter (--platform) =="
+Assert (((Parse-PlatformFilter @('google-adwords','Facebook-Ads')) -join ',') -eq 'facebook-ads,google-adwords') "parse: lowercased + sorted-unique"
+Assert (((Parse-PlatformFilter 'google-adwords, facebook-ads') -join ',') -eq 'facebook-ads,google-adwords') "parse: comma-list split + trim"
+Assert ((Parse-PlatformFilter @()).Count -eq 0) "parse: empty => none"
+Assert (Test-ProviderMatch @('google-adwords') @('google-adwords')) "match: hit"
+Assert (-not (Test-ProviderMatch @('facebook-ads') @('google-adwords'))) "match: miss"
+Assert (Test-ProviderMatch @('google-adwords','facebook-ads') @('facebook-ads')) "match: blended widget kept if ANY provider wanted (whole widget)"
+Assert (Test-ProviderMatch @('anything') @()) "match: no filter => keep all"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

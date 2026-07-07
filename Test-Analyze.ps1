@@ -62,6 +62,13 @@ A (-not ($doc.meta.PSObject.Properties.Name -contains 'shareUrl')) "shareUrl rem
 $threw=$false; try{ Assert-NoCredential 'blah https://swy.do/shares/ofDCQ6RBcXQ leak' }catch{ $threw=$true }; A $threw "Assert-NoCredential throws on leak"
 $threw=$false; try{ Assert-NoCredential 'clean report, no secrets' }catch{ $threw=$true }; A (-not $threw) "Assert-NoCredential passes clean"
 
+Write-Host "== Get-ProviderFilterFinding (--platform, U2) =="
+A ($null -eq (Get-ProviderFilterFinding @() @('google-adwords','facebook-ads'))) "no filter => no finding"
+$pff = Get-ProviderFilterFinding @('google-adwords') @('google-adwords','facebook-ads')
+A ($null -ne $pff -and $pff.ruleId -eq 'PROVIDER_FILTERED' -and $pff.severity -eq 'major') "filter with exclusion => major PROVIDER_FILTERED finding"
+A ($pff.statement -match 'facebook-ads') "finding names the excluded platform"
+A ($null -eq (Get-ProviderFilterFinding @('google-adwords','facebook-ads') @('google-adwords','facebook-ads'))) "filter covers all => no finding"
+
 Write-Host "== Get-DimLabel =="
 A ((Get-DimLabel ([pscustomobject]@{campaign_id='1';campaign_name='Auto Loans'})) -eq 'Auto Loans') "dim label from name"
 A ((Get-DimLabel 'MOBILE') -eq 'MOBILE') "dim label string passthrough"
