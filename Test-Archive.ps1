@@ -229,6 +229,25 @@ try {
   Ok ($s3.code -eq 0 -and (@(Get-ChildItem -Directory $arch).Count -eq 2)) 'canon-fs: different clientId + same name -> distinct folder (no fuse)'
 } finally { Remove-Item -Recurse -Force $ctmp -ErrorAction SilentlyContinue }
 
+# ---------------- -MergeClient: fold a split folder into the canonical one ----------------
+$mtmp = Join-Path $env:TEMP ("merge-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Force $mtmp | Out-Null
+try {
+  $arch=Join-Path $mtmp 'archive'; New-Item -ItemType Directory -Force $arch | Out-Null
+  [IO.File]::WriteAllText((Join-Path $arch '.swydee-archive'),"x",(New-Object Text.UTF8Encoding($false)))
+  function MkSnap($slug,$stamp){ $d=Join-Path (Join-Path $arch $slug) $stamp; New-Item -ItemType Directory -Force $d | Out-Null; [IO.File]::WriteAllText((Join-Path $d 'manifest.json'), (@{manifestVersion=1;client='Quincy Credit Union';clientSlug=$slug;archivedAt='2026-05-01T00:00:00Z';periodLabel='x';files=@()}|ConvertTo-Json), (New-Object Text.UTF8Encoding($false))) }
+  function MkLedger($slug,$mo,$v,$fs){ [IO.File]::WriteAllText((Join-Path (Join-Path $arch $slug) 'ledger.json'), (@{ledgerVersion=1;client='Quincy Credit Union';updatedAt=$fs;cells=@{ ("g:clicks|bv|"+$mo)=@{providerId='g';metricId='g:clicks';basisVersion='bv';month=$mo;value=$v;display="$v";state='final';firstSeen=$fs;lastRefreshed=$fs;restatementCount=0;keptNullCount=0} };coverage=@{}}|ConvertTo-Json -Depth 10), (New-Object Text.UTF8Encoding($false))) }
+  MkSnap 'quincy-credit-union-qcu' '2026-05-01-00-00-00'; MkLedger 'quincy-credit-union-qcu' '2025-01' 111 '2026-02-01T00:00:00Z'
+  MkSnap 'quincy-credit-union'     '2026-06-01-00-00-00'; MkLedger 'quincy-credit-union'     '2025-02' 222 '2026-01-01T00:00:00Z'
+  $dry = RunTool @('-MergeClient','-From','quincy-credit-union-qcu','-Into','quincy-credit-union','-ArchiveRoot',$arch)
+  Ok ($dry.code -eq 0 -and (Test-Path (Join-Path $arch 'quincy-credit-union-qcu')) -and ($dry.out -match 'DRY-RUN')) 'mergeclient: dry-run previews, changes nothing'
+  $ex = RunTool @('-MergeClient','-From','quincy-credit-union-qcu','-Into','quincy-credit-union','-ArchiveRoot',$arch,'-Execute')
+  Ok ($ex.code -eq 0) 'mergeclient: execute exit 0'
+  Ok (-not (Test-Path (Join-Path $arch 'quincy-credit-union-qcu'))) 'mergeclient: From folder removed'
+  Ok ((Test-Path (Join-Path $arch 'quincy-credit-union\2026-05-01-00-00-00')) -and (Test-Path (Join-Path $arch 'quincy-credit-union\2026-06-01-00-00-00'))) 'mergeclient: both snapshots now under Into'
+  $ml=[IO.File]::ReadAllText((Join-Path $arch 'quincy-credit-union\ledger.json'))|ConvertFrom-Json
+  Ok (@($ml.cells.PSObject.Properties).Count -eq 2) 'mergeclient: ledgers unioned (2 cells)'
+} finally { Remove-Item -Recurse -Force $mtmp -ErrorAction SilentlyContinue }
+
 Write-Host ''
 Write-Host ("Test-Archive: {0} passed, {1} failed." -f $script:pass,$script:fail)
 if($script:fail -gt 0){ exit 1 }

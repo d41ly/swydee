@@ -89,6 +89,29 @@ Write-Host "== Get-MaxLabel =="
 Assert ((Get-MaxLabel @([pscustomobject]@{month='2025-03'},[pscustomobject]@{month='2026-01'}) @{}) -eq '2026-01') "max from new cells"
 Assert ((Get-MaxLabel @() @{ x=[pscustomobject]@{month='2024-12'} }) -eq '2024-12') "max from existing"
 
+Write-Host "== Merge-Ledgers (union for -MergeClient) =="
+# Fixtures authored as JSON (the exact shape Manage -MergeClient reads via ConvertFrom-Json).
+function LJ($mo,$v,$fs,$kn){ '"g:clicks|bv|' + $mo + '":{"providerId":"g","metricId":"g:clicks","basisVersion":"bv","month":"' + $mo + '","value":' + $v + ',"display":"' + $v + '","unit":null,"currency":null,"state":"final","firstSeen":"' + $fs + '","lastRefreshed":"' + $fs + '","lastAttempted":"' + $fs + '","sourceStamp":"s","restatementCount":0,"keptNullCount":' + $kn + '}' }
+# NB: variables are $intoL/$fromL, NOT $into/$from -- Manage's -MergeClient params [string]$Into/[string]$From
+# leak into this dot-source scope and would coerce $into/$from to strings (same class as $facts/$Facts).
+$intoL = ('{"ledgerVersion":1,"client":"Acme","cells":{' + (LJ '2025-01' 100 '2026-01-01T00:00:00Z' 1) + ',' + (LJ '2025-02' 200 '2026-01-01T00:00:00Z' 0) + '},"coverage":{"g":{"providerId":"g","providerName":"Google","ceilingMonths":48}}}') | ConvertFrom-Json
+$fromL = ('{"ledgerVersion":1,"client":"Acme","cells":{' + (LJ '2025-02' 250 '2026-02-01T00:00:00Z' 2) + ',' + (LJ '2025-03' 300 '2026-02-01T00:00:00Z' 0) + '},"coverage":{}}') | ConvertFrom-Json
+Assert (@($intoL.cells.PSObject.Properties).Count -eq 2) "fixture sanity: into has 2 cells"
+$mr = Merge-Ledgers $intoL $fromL '2026-07-07T00:00:00Z'
+$mc = $mr.ledger.cells
+Assert (@($mc.Keys).Count -eq 3) "union yields 3 distinct month cells"
+Assert ($mc['g:clicks|bv|2025-03'].value -eq 300) "non-overlapping from-cell imported"
+Assert ($mc['g:clicks|bv|2025-02'].value -eq 200) "conflict (both final, differ): older-firstSeen value (200) kept"
+Assert ([int]$mc['g:clicks|bv|2025-02'].restatementCount -eq 1) "conflict: restatementCount incremented"
+Assert ($mc['g:clicks|bv|2025-02'].latestDisplay -eq '250') "conflict: newer value recorded (surfaces GAP_RESTATEMENT_SUPPRESSED)"
+Assert ([int]$mc['g:clicks|bv|2025-02'].keptNullCount -eq 2) "conflict: keptNullCount summed (0+2)"
+Assert (@($mr.conflicts).Count -eq 1) "one conflict reported for the dry-run preview"
+Assert ($mr.ledger.coverage['g'].earliestMonth -eq '2025-01' -and $mr.ledger.coverage['g'].latestMonth -eq '2025-03') "coverage recomputed from union"
+Assert ($mr.ledger.coverage['g'].providerName -eq 'Google') "coverage metadata carried"
+# union with an absent into-ledger (Into folder had no ledger yet)
+$mr2 = Merge-Ledgers $null $fromL '2026-07-07T00:00:00Z'
+Assert (@($mr2.ledger.cells.Keys).Count -eq 2 -and @($mr2.conflicts).Count -eq 0) "union with null into = from's cells, no conflict"
+
 Write-Host "== integration: real trend-facts -> ledger (deterministic clock) + fail-closed =="
 $tmp = Join-Path $env:TEMP ("ledger-test-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $tmp | Out-Null

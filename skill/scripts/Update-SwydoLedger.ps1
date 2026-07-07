@@ -125,6 +125,49 @@ function Get-MaxLabel($newCells,$existing){
   if($null -eq $best){ return $null }
   return $best.k
 }
+# ---------- pure: UNION two ledgers for the SAME client (for Manage -MergeClient). Distinct from
+# Merge-LedgerCells: that gates on trend-facts $status; ledger cells carry $state, so this must fold cells
+# directly. A key final-in-BOTH with differing values keeps the older-firstSeen value AND records the newer
+# as a restatement (latestValue/Display -> Analyze-SwydoTrend surfaces GAP_RESTATEMENT_SUPPRESSED); never drops
+# silently. Returns @{ ledger; conflicts }. ----------
+function Merge-Ledgers($intoObj,$fromObj,$nowIso){
+  $cells=[ordered]@{}; $conflicts=@()
+  if($intoObj -and $intoObj.cells){ foreach($p in $intoObj.cells.PSObject.Properties){ $cells[$p.Name]=Copy-Cell $p.Value } }
+  if($fromObj -and $fromObj.cells){
+    foreach($p in $fromObj.cells.PSObject.Properties){
+      $k=$p.Name; $fc=Copy-Cell $p.Value
+      if(-not $cells.Contains($k)){ $cells[$k]=$fc; continue }
+      $ic=$cells[$k]
+      $mergedFirst = if(([string]$fc.firstSeen) -and (([string]$ic.firstSeen -eq '') -or ([string]$fc.firstSeen -lt [string]$ic.firstSeen))){ [string]$fc.firstSeen } else { [string]$ic.firstSeen }
+      $mergedLast  = if(([string]$fc.lastRefreshed) -gt ([string]$ic.lastRefreshed)){ [string]$fc.lastRefreshed } else { [string]$ic.lastRefreshed }
+      $sumKept = [int]$ic.keptNullCount + [int]$fc.keptNullCount
+      $maxRestate = [Math]::Max([int]$ic.restatementCount,[int]$fc.restatementCount)
+      $bothFinal = (([string]$ic.state -eq 'final') -and ([string]$fc.state -eq 'final'))
+      if($bothFinal -and (Test-ValuesDiffer $ic.value $fc.value)){
+        $keepInto = (([string]$ic.firstSeen) -le ([string]$fc.firstSeen))   # deterministic: older firstSeen wins
+        $win = if($keepInto){ $ic } else { $fc }
+        $lose = if($keepInto){ $fc } else { $ic }
+        $win.restatementCount = $maxRestate + 1
+        $win.latestValue = $lose.value; $win.latestDisplay = $lose.display
+        $win.keptNullCount = $sumKept; $win.firstSeen = $mergedFirst; $win.lastRefreshed = $mergedLast
+        $cells[$k]=$win
+        $conflicts += [ordered]@{ key=$k; kept=[string]$win.display; dropped=[string]$lose.display }
+      } else {
+        $ic.restatementCount=$maxRestate; $ic.keptNullCount=$sumKept; $ic.firstSeen=$mergedFirst; $ic.lastRefreshed=$mergedLast
+        if(([string]$ic.state -ne 'final') -and ([string]$fc.state -eq 'final')){ $ic.state='final'; $ic.value=$fc.value; $ic.display=$fc.display }
+        $cells[$k]=$ic
+      }
+    }
+  }
+  # coverage recomputed from the unioned cells + carried metadata (providerName/ceiling/grain/windowStatus)
+  $covOut=[ordered]@{}; $byProv=@{}
+  foreach($ck in $cells.Keys){ $c=$cells[$ck]; $pr=[string]$c.providerId; if(-not $byProv.ContainsKey($pr)){ $byProv[$pr]=[System.Collections.ArrayList]@() }; [void]$byProv[$pr].Add([string]$c.month) }
+  foreach($pr in $byProv.Keys){ $ms=@($byProv[$pr]|Sort-Object -Unique); $covOut[$pr]=[ordered]@{ providerId=$pr; earliestMonth=$ms[0]; latestMonth=$ms[-1]; monthCount=$ms.Count } }
+  foreach($src in @($intoObj,$fromObj)){ if($src -and $src.coverage){ foreach($cp in $src.coverage.PSObject.Properties){ $pr=$cp.Name; if($covOut.Contains($pr)){ $v=$cp.Value; if($v.providerName){$covOut[$pr].providerName=$v.providerName}; if($null -ne $v.ceilingMonths){$covOut[$pr].ceilingMonths=$v.ceilingMonths}; if($null -ne $v.hasMonthlyGrain){$covOut[$pr].hasMonthlyGrain=$v.hasMonthlyGrain}; if($v.windowStatus){$covOut[$pr].windowStatus=$v.windowStatus} } } } }
+  $client = if($intoObj -and $intoObj.client){ [string]$intoObj.client } elseif($fromObj -and $fromObj.client){ [string]$fromObj.client } else { 'client' }
+  $ledger=[ordered]@{ ledgerVersion=1; client=$client; updatedAt=[string]$nowIso; cells=$cells; coverage=$covOut }
+  return @{ ledger=$ledger; conflicts=$conflicts }
+}
 
 if($myDefineOnly){ return }
 
