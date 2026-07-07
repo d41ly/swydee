@@ -209,8 +209,13 @@ $rAnnOk = Invoke-Closer ($reportOk + "`n## Context (unverified, client-supplied)
 Ok (-not (HasT $rAnnOk 'untraceable-number')) 'annotation 12,345 traces on its annotation-anchored line'
 $rAnnNo = Invoke-Closer ($reportOk + "`n## Context`nThat push logged 12,345 impressions.`n") $factsObj
 Ok (HasT $rAnnNo 'untraceable-number') 'annotation 12,345 WITHOUT the anchor -> untraceable (no fabrication haystack)'
-$rAnnCmp = Invoke-Closer ($reportOk + "`n## Context (unverified)`nImpressions grew to 12,345. <!-- annotation:ANN#1 -->`n") $factsObj
-Ok (HasT $rAnnCmp 'comparison-without-data') 'comparison claim on an annotation number -> flagged (annotations are hasComparison=false)'
+# a comparative verb is fine when the number is a VERBATIM quote of the note (the client's words, not the
+# tool's claim) -- it must trace AND not be flagged. Fabrication is still caught by tracing (below).
+$rAnnCmp = Invoke-Closer ($reportOk + "`n## Context (unverified)`nImpressions grew to 12,345 that day. <!-- annotation:ANN#1 -->`n") $factsObj
+Ok (-not (HasT $rAnnCmp 'comparison-without-data')) 'verbatim comparative quote of a note -> NOT flagged'
+Ok (-not (HasT $rAnnCmp 'untraceable-number')) 'the quoted 12,345 still traces on its anchor'
+$rAnnFab = Invoke-Closer ($reportOk + "`n## Context (unverified)`nImpressions grew to 99,999 that day. <!-- annotation:ANN#1 -->`n") $factsObj
+Ok (HasT $rAnnFab 'untraceable-number') 'a fabricated 99,999 NOT in the note -> untraceable (tracing still guards)'
 
 # C1: two platform anchors in one section
 $rAmb = Invoke-Closer ($reportOk -replace '<!-- platform:facebook_ads -->','<!-- platform:facebook_ads --> <!-- platform:google_ads -->') $factsObj

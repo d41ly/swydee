@@ -333,7 +333,7 @@ if(-not $ShareUrl){ throw "ShareUrl is required" }
 # 1. resolve share key + report id
 $html = Invoke-RestMethod -Uri $ShareUrl
 if ($html -match 'app\.swydo\.com/g/([^/]+)/reports/([A-Za-z0-9_-]+)') { $script:key=$Matches[1]; $reportId=$Matches[2] }
-else { throw "Could not find 'app.swydo.com/g/<key>/reports/<id>' iframe in $ShareUrl" }
+else { throw "Could not find the 'app.swydo.com/g/<key>/reports/<id>' iframe in the share page (bad/expired link, or password required?)" }   # never interpolate $ShareUrl - it carries the share key
 Write-Host ("key=***  reportId={0}" -f $reportId)   # never echo the raw share key (it is the Basic-auth credential)
 
 # 2. JWT

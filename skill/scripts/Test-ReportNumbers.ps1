@@ -188,7 +188,7 @@ function Add-AnnotationNumbers($list,$str){
   # must trace like any figure BUT must NOT satisfy a comparison claim - so a fabricated "grew to 45,000"
   # laundered through a note still trips the comparison guard.
   foreach($t in @(Get-MeasureTokens $str)){
-    [void]$list.Add([ordered]@{ value=$t.value; type=$t.type; hasComparison=$false; ulp=(Get-Ulp $t.raw) })
+    [void]$list.Add([ordered]@{ value=$t.value; type=$t.type; hasComparison=$false; ann=$true; ulp=(Get-Ulp $t.raw) })
   }
 }
 
@@ -399,7 +399,10 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
           }
         }
         if($isCmp){
-          $anyCmp = $false; foreach($h in $hits){ if($h.hasComparison){ $anyCmp=$true; break } }
+          # a hit satisfies a comparison claim if it has comparison data OR it is a verbatim client annotation
+          # quote (the comparative verb is the client's words, not the tool's claim; a fabricated number still
+          # fails to trace, and a bare number on a non-annotation line has no $h.ann candidate in scope).
+          $anyCmp = $false; foreach($h in $hits){ if($h.hasComparison -or $h.ann){ $anyCmp=$true; break } }
           if(-not $anyCmp){
             [void]$violations.Add([ordered]@{ type='comparison-without-data'; section=$sec.header; detail="comparison claim on '$($tok.raw)' but the matching fact(s) have no comparison data"; snippet=$tok.raw })
           }

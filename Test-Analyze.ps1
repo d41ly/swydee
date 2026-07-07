@@ -61,9 +61,14 @@ A (-not ($doc.meta.PSObject.Properties.Name -contains 'shareKey')) "shareKey rem
 A (-not ($doc.meta.PSObject.Properties.Name -contains 'shareUrl')) "shareUrl removed"
 $threw=$false; try{ Assert-NoCredential 'blah https://swy.do/shares/ofDCQ6RBcXQ leak' }catch{ $threw=$true }; A $threw "Assert-NoCredential throws on leak"
 $threw=$false; try{ Assert-NoCredential 'clean report, no secrets' }catch{ $threw=$true }; A (-not $threw) "Assert-NoCredential passes clean"
+# a client note carrying a share link is redacted (not aborted): the pattern used for note redaction
+$redacted = 'Latest view: https://swy.do/shares/ABCdef123 weekly' -replace $script:KeyPattern,'[redacted-share-link]'
+A ($redacted -notmatch 'swy\.do/shares/ABCdef') "note redaction strips the share link (KeyPattern)"
+$rthrew=$false; try{ Assert-NoCredential $redacted }catch{ $rthrew=$true }; A (-not $rthrew) "redacted note passes Assert-NoCredential (no pipeline abort)"
 
 Write-Host "== Get-ProviderFilterFinding (--platform, U2) =="
 A ($null -eq (Get-ProviderFilterFinding @() @('google-adwords','facebook-ads'))) "no filter => no finding"
+A ($null -eq (Get-ProviderFilterFinding $null @('google-adwords','facebook-ads'))) "null filter (absent/[] deserialized) => no finding (no @(null) trap)"
 $pff = Get-ProviderFilterFinding @('google-adwords') @('google-adwords','facebook-ads')
 A ($null -ne $pff -and $pff.ruleId -eq 'PROVIDER_FILTERED' -and $pff.severity -eq 'major') "filter with exclusion => major PROVIDER_FILTERED finding"
 A ($pff.statement -match 'facebook-ads') "finding names the excluded platform"

@@ -22,11 +22,14 @@ param(
   [string]$OutDir = ".\trend-tmp",
   [string]$ArchiveRoot = "",
   [string]$CacheDir = "",
-  [string[]]$Platform,
   [switch]$DefineOnly
 )
+# NB: no -Platform. The per-client ledger is the WHOLE-account cumulative history; a --platform-filtered
+# trend pull would silently accumulate a partial ledger, so trend sync always covers the full account.
 $ErrorActionPreference = "Stop"
 $script:here = $PSScriptRoot
+$script:CredRx = '(?i)swy\.do/shares/[A-Za-z0-9_-]+|/g/[A-Za-z0-9_-]+/reports/'
+function Hide-Cred($s){ return ([string]$s -replace 'swy\.do/shares/[A-Za-z0-9_-]+','swy.do/shares/***' -replace '/g/[A-Za-z0-9_-]+/reports/','/g/***/reports/') }
 
 # Run a bundled script as a child process; return @{ ok=$bool; out=<combined stdout+stderr> }. Child stderr
 # is captured to a file (never 2>&1, which wraps+terminates under Stop in PS 5.1).
@@ -38,7 +41,7 @@ function Invoke-Child($scriptName,$scriptArgs){
     $o = & powershell @full 2>$ef
     $code=$LASTEXITCODE
     $err=Get-Content -Raw $ef -ErrorAction SilentlyContinue
-    return @{ ok=($code -eq 0); out=(($o -join "`n") + "`n" + [string]$err) }
+    return @{ ok=($code -eq 0); out=(Hide-Cred (($o -join "`n") + "`n" + [string]$err)) }   # redact any share key before it can reach a warning/log
   } catch { return @{ ok=$false; out=[string]$_.Exception.Message } }
   finally { $ErrorActionPreference=$prev; Remove-Item $ef -ErrorAction SilentlyContinue }
 }
@@ -51,10 +54,9 @@ try {
   New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
   # 1) extract -Trend
-  $a1 = @("-Trend","-ShareUrl",$ShareUrl,"-OutDir",$OutDir)
+  $a1 = @("-Trend","-ShareUrl",$ShareUrl,"-OutDir",$OutDir)   # NO -Platform: the ledger is whole-account
   if($Secret){ $a1 += @("-Secret",$Secret) }
   if($CacheDir){ $a1 += @("-CacheDir",$CacheDir) }
-  if($Platform){ $a1 += @("-Platform",($Platform -join ',')) }
   $r1 = Invoke-Child 'Get-SwydoReport.ps1' $a1
   if(-not $r1.ok){ Write-Warning ("trend extract failed (history not updated this run): " + ($r1.out -split "`n" | Select-Object -Last 3 | Out-String).Trim()); exit 1 }
   $rawT = Get-ChildItem (Join-Path $OutDir '*.trend.json') -ErrorAction SilentlyContinue | Sort-Object LastWriteTime | Select-Object -Last 1

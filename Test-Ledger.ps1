@@ -144,6 +144,12 @@ try {
   [IO.File]::WriteAllText($leakPath, ($leak | ConvertTo-Json -Depth 40), (New-Object Text.UTF8Encoding($false)))
   & powershell -NoProfile -ExecutionPolicy Bypass -File "$scripts\Update-SwydoLedger.ps1" -InFile $leakPath -ArchiveRoot $tmp -NowIso '2026-07-06T00:00:00Z' *> $null
   Assert ($LASTEXITCODE -ne 0) "planted credential in facts => fail-closed (non-zero exit)"
+  # refuse a --platform-filtered (partial) trend pull into the whole-account ledger
+  $filt = [ordered]@{ meta=[ordered]@{ trendFactsVersion=1; reportName='Acme'; client='Acme'; providerFilter=@('google-adwords'); coverage=@() }; cells=@([ordered]@{ providerId='google-adwords'; metricId='google-adwords:clicks'; month='2025-01'; value=1; display='1'; unit=$null; currency=$null; status='returned' }) }
+  $filtPath = Join-Path $tmp 'filtered.trendfacts.json'
+  [IO.File]::WriteAllText($filtPath, ($filt | ConvertTo-Json -Depth 40), (New-Object Text.UTF8Encoding($false)))
+  & powershell -NoProfile -ExecutionPolicy Bypass -File "$scripts\Update-SwydoLedger.ps1" -InFile $filtPath -ArchiveRoot $tmp -NowIso '2026-07-06T00:00:00Z' *> $null
+  Assert ($LASTEXITCODE -ne 0) "--platform-filtered trend facts => refused (whole-account ledger only)"
 } finally { $ErrorActionPreference=$savedEAP; Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 
 Write-Host ""

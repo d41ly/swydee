@@ -91,8 +91,11 @@ function Resolve-ClientSlug($clientId,$clientName,$existing){
   }
   $base = if([string]::IsNullOrWhiteSpace([string]$clientName)){ 'client' } else { [string]$clientName }
   $slug = Get-ClientSlug (Normalize-ClientName $base)
-  if($existing){
-    foreach($k in @($existing.Keys)){ if(($k -ne $cid) -and ([string]$existing[$k].slug -eq $slug)){ $slug = $slug + '-' + (Get-ShortHash $(if($cid){$cid}else{$base})); break } }
+  # dedupe ONLY when we have a clientId to key on: suffix only if a DIFFERENT id already owns this slug.
+  # A no-clientId client is NOT registrable and must resolve to the plain slug (never a divergent suffix,
+  # which would SPLIT its folder - the inverse of canonicalization).
+  if($cid -and $existing){
+    foreach($k in @($existing.Keys)){ if(($k -ne $cid) -and ([string]$existing[$k].slug -eq $slug)){ $slug = $slug + '-' + (Get-ShortHash $cid); break } }
   }
   $src = if($cid){ 'newid' } else { 'noid' }
   return [ordered]@{ slug=$slug; name=$base; isNew=[bool]$cid; source=$src }
@@ -268,11 +271,12 @@ function Read-ClientRegistry($rootFull){
   $reg = [ordered]@{ version=1; clients=@{} }
   $p = Join-Path $rootFull 'clients.json'
   if(Test-Path -LiteralPath $p){
-    try {
-      $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json
-      if($j.clients){ foreach($pp in $j.clients.PSObject.Properties){ $c=$pp.Value
-        $reg.clients[$pp.Name]=[ordered]@{ slug=[string]$c.slug; name=[string]$c.name; aliases=@($c.aliases); firstSeen=[string]$c.firstSeen; lastSeen=[string]$c.lastSeen } } }
-    } catch {}
+    # FAIL-CLOSED: an existing-but-unparseable registry must NOT silently become empty (a later Write would
+    # then clobber every clientId->slug mapping and re-split folders). Refuse instead.
+    $j=$null
+    try { $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json } catch { throw "client registry '$p' is unreadable/corrupt - refusing (would clobber existing client->slug mappings). Fix or remove it." }
+    if($j -and $j.clients){ foreach($pp in $j.clients.PSObject.Properties){ $c=$pp.Value
+      $reg.clients[$pp.Name]=[ordered]@{ slug=[string]$c.slug; name=[string]$c.name; aliases=@($c.aliases); firstSeen=[string]$c.firstSeen; lastSeen=[string]$c.lastSeen } } }
   }
   return $reg
 }
@@ -283,8 +287,8 @@ function Write-ClientRegistry($rootFull,$reg){
   if(Test-HasCredProps ($json | ConvertFrom-Json)){ throw 'client registry would carry a credential-like field - refusing' }
   $tmp = "$p.tmp"
   [IO.File]::WriteAllText($tmp,$json,(New-Object Text.UTF8Encoding($false)))
-  if(Test-Path -LiteralPath $p){ [IO.File]::Delete($p) }
-  [IO.File]::Move($tmp,$p)                               # write-temp-then-rename (atomic-ish; no half-written registry)
+  if(Test-Path -LiteralPath $p){ [IO.File]::Replace($tmp,$p,"$p.bak") }   # atomic + keeps a backup (no Delete->Move gap)
+  else { [IO.File]::Move($tmp,$p) }
 }
 
 if($DefineOnly){ return }
@@ -492,7 +496,7 @@ if($MergeClient){
   if(-not $mcExecute){ Write-Host "`n(dry-run) re-run with -Execute to merge and delete '$mcFrom'."; exit 0 }
 
   foreach($s in $snaps){ $dest=Join-Path $intoDir $s.Name; $n=2; while(Test-Path -LiteralPath $dest){ $dest=Join-Path $intoDir ($s.Name + "-m$n"); $n++ }; Move-Item -LiteralPath $s.FullName -Destination $dest -Force }
-  if($mergedLedger){ $json = ConvertTo-Json -InputObject $mergedLedger -Depth 100 -Compress; Assert-NoCredential $json; [IO.File]::WriteAllText($intoLedgerP,$json,(New-Object Text.UTF8Encoding($false))); if(Test-Path -LiteralPath $fromLedgerP){ [IO.File]::Delete($fromLedgerP) } }
+  if($mergedLedger){ $json = ConvertTo-Json -InputObject $mergedLedger -Depth 100 -Compress; Assert-NoCredential $json; if(Test-HasCredProps ($json | ConvertFrom-Json)){ Die 'merged ledger has a credential-like field - refusing' 3 }; [IO.File]::WriteAllText($intoLedgerP,$json,(New-Object Text.UTF8Encoding($false))); if(Test-Path -LiteralPath $fromLedgerP){ [IO.File]::Delete($fromLedgerP) } }
   foreach($f in $rootFiles){ $base=[IO.Path]::GetFileNameWithoutExtension($f.Name); $ext=[IO.Path]::GetExtension($f.Name); $dest=Join-Path $intoDir $f.Name; $n=2; while(Test-Path -LiteralPath $dest){ $dest=Join-Path $intoDir ("$base-m$n$ext"); $n++ }; Move-Item -LiteralPath $f.FullName -Destination $dest -Force }
   if((Test-ChainSafe $fromFull $rootFull) -and -not (Test-EntryHasReparse $fromFull)){ try { [IO.Directory]::Delete($fromFull,$true) } catch { Write-Host ("  (could not remove empty '$mcFrom': " + $_.Exception.Message + ")") } }
   # re-point any registry client whose slug was $mcFrom -> $mcInto

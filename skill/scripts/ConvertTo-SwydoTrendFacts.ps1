@@ -84,6 +84,7 @@ $factsDoc = [ordered]@{
   meta = [ordered]@{
     tool='ConvertTo-SwydoTrendFacts.ps1'; trendFactsVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.report.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
+    providerFilter=@(@($doc.meta.providerFilter) | Where-Object { $_ }); providerInventory=@(@($doc.meta.providerInventory) | Where-Object { $_ })
     coverage=$cov; cellCount=$cells.Count; warnings=@($doc.meta.warnings)
   }
   cells = $cells

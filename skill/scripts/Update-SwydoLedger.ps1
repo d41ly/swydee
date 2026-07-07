@@ -181,6 +181,10 @@ $txt = [IO.File]::ReadAllText($myInFile)
 Assert-NoCredential $txt                                    # input must be already-scrubbed trend facts (fail-closed)
 $tf = $txt | ConvertFrom-Json
 if($tf.meta.trendFactsVersion -ne 1){ throw "not a trend-facts file (need meta.trendFactsVersion=1) - run ConvertTo-SwydoTrendFacts.ps1" }
+# The per-client ledger is the WHOLE-account cumulative history. Refuse a --platform-filtered (partial) pull:
+# merging it would silently accumulate a partial ledger a later trend report reads as complete.
+$tfFilter = @(@($tf.meta.providerFilter) | Where-Object { $_ })   # @() when absent/null (avoid @($null)=[null])
+if($tfFilter.Count -gt 0){ throw ("refusing: these trend facts are --platform-filtered (" + ($tfFilter -join ',') + ") - the per-client ledger must reflect the FULL account. Re-run trend sync without a platform filter.") }
 
 # Canonical client folder by stable clientId via the registry (same resolution as Manage -Store, so a report
 # pull and a trend pull for the same client land in ONE folder). Reused via -DefineOnly dot-source of Manage.

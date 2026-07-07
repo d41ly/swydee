@@ -208,7 +208,7 @@ function Assert-NoCredential($text){ if($text -match $script:KeyPattern){ throw 
 # --platform (U2): a major dataGap forcing the report to disclose which platforms were excluded. $null if no
 # filter or nothing excluded. Pure so it is unit-testable via -DefineOnly.
 function Get-ProviderFilterFinding($providerFilter,$providerInventory){
-  $pf=@($providerFilter); if($pf.Count -eq 0){ return $null }
+  $pf=@(@($providerFilter) | Where-Object { $_ }); if($pf.Count -eq 0){ return $null }   # null/[]/[null] => no filter
   $excluded=@(@($providerInventory) | Where-Object { $_ -and ($_ -notin $pf) })
   if($excluded.Count -eq 0){ return $null }
   return [ordered]@{ ruleId='PROVIDER_FILTERED'; severity='major'; statement=("Report limited to platform(s) " + ($pf -join ', ') + "; excluded (not pulled): " + ($excluded -join ', ') + " - this is a partial view of the account.") }
@@ -352,12 +352,15 @@ foreach($w in $doc.widgets){ if($w.providers){ foreach($pp in $w.providers){ if(
 $knownNames += @(@($doc.report.sections) | ForEach-Object { [string]$_.name })
 $knownNames = @($knownNames | Where-Object { $_ } | Sort-Object -Unique)
 $annotations=@(); $annN=0
+# redact any share-link pattern IN the note before it enters facts: a client pasting a live swy.do link
+# into a note would otherwise trip the whole-doc Assert-NoCredential and abort every run (fail-closed but
+# a pipeline-wedge). Redacting keeps it fail-closed AND lets the report proceed.
 foreach($w in $doc.widgets){
   if($w.kind -ne 'text'){ continue }
   $atext = ([string]$w.text).Trim()
-  if(Test-IsAnnotation $atext $knownNames){ $annN++; $annotations += [ordered]@{ aid="ANN#$annN"; section=[string]$w.section; source='report'; text=$atext } }
+  if(Test-IsAnnotation $atext $knownNames){ $atext = ($atext -replace $script:KeyPattern,'[redacted-share-link]'); $annN++; $annotations += [ordered]@{ aid="ANN#$annN"; section=[string]$w.section; source='report'; text=$atext } }
 }
-foreach($nf in @($NotesFile)){ if($nf -and (Test-Path -LiteralPath $nf)){ $ntext=([IO.File]::ReadAllText($nf)).Trim(); if($ntext){ $annN++; $annotations += [ordered]@{ aid="ANN#$annN"; section='(notes)'; source=(Split-Path $nf -Leaf); text=$ntext } } } }
+foreach($nf in @($NotesFile)){ if($nf -and (Test-Path -LiteralPath $nf)){ $ntext=([IO.File]::ReadAllText($nf)).Trim(); if($ntext){ $ntext = ($ntext -replace $script:KeyPattern,'[redacted-share-link]'); $annN++; $annotations += [ordered]@{ aid="ANN#$annN"; section='(notes)'; source=(Split-Path $nf -Leaf); text=$ntext } } } }
 
 
 # per-platform headline (role-qualified) + provider discovery

@@ -43,7 +43,7 @@ try {
   $clean = [ordered]@{
     meta=[ordered]@{ tool='Get-SwydoReport.ps1'; schemaVersion=2; trend=$true; extractedAt='2026-07-06T00:00:00Z'
       shareUrl='https://swy.do/shares/SECRETKEY123'; shareKey='SECRETKEY123'; reportId='rid'
-      coverage=@([ordered]@{ providerId='google-adwords'; providerName='Google Ads'; hasMonthlyGrain=$true; ceilingMonths=48; earliestMonth='2022-07'; latestMonth='2026-06'; windowStatus='ok' }); warnings=@() }
+      coverage=@([ordered]@{ providerId='google-adwords'; providerName='Google Ads'; hasMonthlyGrain=$true; ceilingMonths=48; earliestMonth='2022-07'; latestMonth='2026-06'; windowStatus='ok' }); warnings=@(); providerFilter=@('google-adwords'); providerInventory=@('google-adwords','facebook-ads') }
     report=[ordered]@{ name='Test Client'; client='Test Client' }
     trendCells=@( [ordered]@{ providerId='google-adwords'; metricId='google-adwords:cost_micros'; month='2025-01'; rawValue=1000000; currency='USD'; unit='micros' } )
   }
@@ -59,6 +59,7 @@ try {
     Assert ($txt -notmatch '(?i)swy\.do/shares/|SECRETKEY123') "output has NO share key/url (scrubbed)"
     $of = $txt | ConvertFrom-Json
     Assert (@($of.cells).Count -eq 1 -and $of.cells[0].display -eq '$1.00') "cell shaped + formatted"
+    Assert ((@($of.meta.providerFilter) -contains 'google-adwords') -and (@($of.meta.providerInventory) -contains 'facebook-ads')) "providerFilter/inventory carried into trend facts (so the ledger can refuse a partial pull)"
   }
 
   # (b) credential planted in a NON-scrubbed field (report.client) -> gate must FAIL closed (non-zero exit)

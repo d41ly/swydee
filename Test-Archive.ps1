@@ -91,6 +91,9 @@ Ok ($rc.slug -eq 'fresh-client' -and $rc.isNew -and $rc.source -eq 'newid') 'res
 # no clientId -> normalized-name slug, NOT registrable
 $rd = Resolve-ClientSlug $null 'Copy of Foo - Report' @{}
 Ok ($rd.slug -eq 'foo' -and (-not $rd.isNew) -and $rd.source -eq 'noid') 'resolve: no id -> normalized slug, not registrable'
+# no clientId whose name collides with a registered slug -> plain slug (NEVER a divergent suffix that splits)
+$rNoIdCollide = Resolve-ClientSlug $null 'Quincy Credit Union' @{ 'idAAA'=[ordered]@{ slug='quincy-credit-union'; name='Quincy Credit Union' } }
+Ok ($rNoIdCollide.slug -eq 'quincy-credit-union') 'resolve: no-id + slug collision -> plain slug (no suffix, no split)'
 # registry round-trip (write-temp-then-rename + cred gate)
 $rtmp = Join-Path $env:TEMP ("clireg-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Force $rtmp | Out-Null
 try {
@@ -100,6 +103,9 @@ try {
   $back = Read-ClientRegistry $rtmp
   Ok ($back.clients['idAAA'].slug -eq 'quincy-credit-union' -and (@($back.clients['idAAA'].aliases) -contains 'Quincy Credit Union (QCU)')) 'registry: round-trips slug + aliases'
   Ok (Threw { Write-ClientRegistry $rtmp ([ordered]@{ version=1; clients=@{ 'x'=[ordered]@{ slug='y'; name='https://swy.do/shares/LEAK' } } }) }) 'registry: fail-closed on a credential-shaped value'
+  # corrupt-but-present registry => THROW (never silently empty -> a later write would clobber all mappings)
+  [IO.File]::WriteAllText((Join-Path $rtmp 'clients.json'), '{ not valid json', (New-Object Text.UTF8Encoding($false)))
+  Ok (Threw { Read-ClientRegistry $rtmp }) 'registry: corrupt file => throws (fail-closed, no clobber)'
 } finally { Remove-Item -Recurse -Force $rtmp -ErrorAction SilentlyContinue }
 
 # ---------------- FS integration (subprocess) ----------------
