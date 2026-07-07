@@ -449,7 +449,7 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 $facts=[ordered]@{
   meta=[ordered]@{
     tool='Analyze-SwydoReport.ps1'; factsVersion=1; computedFrom=$doc.meta.tool
-    reportName=$doc.report.name; extractedAt=$doc.meta.extractedAt
+    reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence
     hasComparison=$hasCmp; comparisonCaveats=$caveats;
     providers=@($platforms.Values | ForEach-Object { [ordered]@{ id=$_.id; name=$_.name; category=$_.category } })

@@ -61,6 +61,38 @@ function Get-ClientSlug($name){
   if(-not $s){ $s = 'client' }
   return $s
 }
+# Strip report-title boilerplate so a name-based slug is stable across a client's reports:
+# drop a leading "Copy of ", and a trailing "- [Swydee] <word> [Data] Export/Report". Parentheticals kept.
+function Normalize-ClientName($name){
+  $s = [string]$name
+  $s = $s -replace '(?i)^\s*copy of\s+',''
+  $s = $s -replace '(?i)\s*[-:]\s*(swydee\s+)?\S+\s+(data\s+)?(export|report)\s*$',''
+  $s = $s -replace '(?i)\s*[-:]\s*(data\s+)?(export|report)\s*$',''
+  $s = ($s -replace '\s+',' ').Trim()
+  if(-not $s){ return ([string]$name) }   # never normalize to empty
+  return $s
+}
+function Get-ShortHash($s){
+  $h = [BitConverter]::ToString((New-Object Security.Cryptography.SHA1Managed).ComputeHash([Text.Encoding]::UTF8.GetBytes([string]$s)))
+  return $h.Replace('-','').Substring(0,8).ToLower()
+}
+# Canonical archive slug for a client. $existing = hashtable clientId -> @{slug;name}. Rules:
+#  - a KNOWN clientId's registered slug WINS (stable; report title / -Client can't re-split it);
+#  - a NEW clientId slugs from the normalized name, deduped against a slug owned by a DIFFERENT id;
+#  - NO clientId => normalized-name slug, NOT registrable (can't dedupe safely without an id).
+function Resolve-ClientSlug($clientId,$clientName,$existing){
+  $cid = [string]$clientId
+  if($cid -and $existing -and $existing.ContainsKey($cid)){
+    return [ordered]@{ slug=[string]$existing[$cid].slug; name=[string]$existing[$cid].name; isNew=$false; source='id' }
+  }
+  $base = if([string]::IsNullOrWhiteSpace([string]$clientName)){ 'client' } else { [string]$clientName }
+  $slug = Get-ClientSlug (Normalize-ClientName $base)
+  if($existing){
+    foreach($k in @($existing.Keys)){ if(($k -ne $cid) -and ([string]$existing[$k].slug -eq $slug)){ $slug = $slug + '-' + (Get-ShortHash $(if($cid){$cid}else{$base})); break } }
+  }
+  $src = if($cid){ 'newid' } else { 'noid' }
+  return [ordered]@{ slug=$slug; name=$base; isNew=[bool]$cid; source=$src }
+}
 
 function Get-Cutoff($token,$now){
   # Today-floored cutoff so an entry exactly N old sits at the boundary and is KEPT by a `-lt` test.
@@ -227,6 +259,30 @@ function Get-ArchiveEntries($rootFull,$now){
   return $out
 }
 
+# Client registry: <ArchiveRoot>/clients.json maps a stable Swydo clientId -> canonical {slug,name,aliases}.
+function Read-ClientRegistry($rootFull){
+  $reg = [ordered]@{ version=1; clients=@{} }
+  $p = Join-Path $rootFull 'clients.json'
+  if(Test-Path -LiteralPath $p){
+    try {
+      $j = [IO.File]::ReadAllText($p) | ConvertFrom-Json
+      if($j.clients){ foreach($pp in $j.clients.PSObject.Properties){ $c=$pp.Value
+        $reg.clients[$pp.Name]=[ordered]@{ slug=[string]$c.slug; name=[string]$c.name; aliases=@($c.aliases); firstSeen=[string]$c.firstSeen; lastSeen=[string]$c.lastSeen } } }
+    } catch {}
+  }
+  return $reg
+}
+function Write-ClientRegistry($rootFull,$reg){
+  $p = Join-Path $rootFull 'clients.json'
+  $json = ConvertTo-Json -InputObject $reg -Depth 20    # -InputObject: never pipe an ordered dict
+  Assert-NoCredential $json
+  if(Test-HasCredProps ($json | ConvertFrom-Json)){ throw 'client registry would carry a credential-like field - refusing' }
+  $tmp = "$p.tmp"
+  [IO.File]::WriteAllText($tmp,$json,(New-Object Text.UTF8Encoding($false)))
+  if(Test-Path -LiteralPath $p){ [IO.File]::Delete($p) }
+  [IO.File]::Move($tmp,$p)                               # write-temp-then-rename (atomic-ish; no half-written registry)
+}
+
 if($DefineOnly){ return }
 
 function Die($m,$c){ [Console]::Error.WriteLine([string]$m); exit [int]$c }
@@ -258,19 +314,26 @@ if($Store){
     }
     $inputs += ,@($role,$p)
   }
-  $clientName = if($Client){ $Client } elseif($factsObj.meta.reportName){ [string]$factsObj.meta.reportName } else { 'client' }
-  $slug = Get-ClientSlug $clientName
+  # Canonical client folder: key by the stable Swydo clientId via the registry (report title / -Client can't
+  # re-split it); the canonical name prefers meta.client (Swydo entity) over -Client over reportName.
   $rootFull = Normalize-Root $ArchiveRoot
-  # slug-collision disambiguation: if the slug dir exists with a DIFFERENT client, suffix a short hash.
-  $slugDir = Join-Path $rootFull $slug
-  if(Test-Path -LiteralPath $slugDir){
-    $existing = @(Get-ArchiveEntries $rootFull $now | Where-Object { $_.slug -eq $slug } | Select-Object -First 1)
-    if($existing.Count -gt 0 -and $existing[0].client -and -not ($existing[0].client -eq $clientName)){
-      $h = [BitConverter]::ToString((New-Object Security.Cryptography.SHA1Managed).ComputeHash([Text.Encoding]::UTF8.GetBytes($clientName))).Replace('-','').Substring(0,8).ToLower()
-      $slug = "$slug-$h"; $slugDir = Join-Path $rootFull $slug
-    }
-  }
   New-Item -ItemType Directory -Force -Path $rootFull | Out-Null
+  $clientId = [string]$factsObj.meta.clientId
+  $canonName = if($factsObj.meta.client){ [string]$factsObj.meta.client } elseif($Client){ [string]$Client } elseif($factsObj.meta.reportName){ [string]$factsObj.meta.reportName } else { 'client' }
+  $reg = Read-ClientRegistry $rootFull
+  $res = Resolve-ClientSlug $clientId $canonName $reg.clients
+  $slug = $res.slug; $clientName = $res.name
+  if($clientId){
+    if($reg.clients.ContainsKey($clientId)){
+      $e = $reg.clients[$clientId]; $e.slug = $slug; $e.lastSeen = $now.ToString('o')
+      foreach($al in @($canonName,$Client)){ if($al -and ($e.name -ne $al) -and (@($e.aliases) -notcontains $al)){ $e.aliases = @(@($e.aliases) + $al) } }
+    } else {
+      $al=@(); if($Client -and ($Client -ne $canonName)){ $al=@($Client) }
+      $reg.clients[$clientId] = [ordered]@{ slug=$slug; name=$canonName; aliases=$al; firstSeen=$now.ToString('o'); lastSeen=$now.ToString('o') }
+    }
+    Write-ClientRegistry $rootFull $reg
+  }
+  $slugDir = Join-Path $rootFull $slug
   $sentinel = Join-Path $rootFull $script:Sentinel
   if(-not (Test-Path -LiteralPath $sentinel)){ [IO.File]::WriteAllText($sentinel,"swydee archive root`n",(New-Object Text.UTF8Encoding($false))) }
   # entry dir = archivedAt stamp; disambiguate same-second collisions.
@@ -290,6 +353,7 @@ if($Store){
     $manifest = [ordered]@{
       manifestVersion = 1
       client          = $clientName
+      clientId        = $clientId
       clientSlug      = $slug
       reportName      = (Get-ClientSlug $factsObj.meta.reportName)   # slugified; no raw operator text
       periodLabel     = [string]$factsObj.meta.periodLabel

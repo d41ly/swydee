@@ -73,6 +73,35 @@ Ok (Test-HasCredProps ([pscustomobject]@{ a=[pscustomobject]@{ b=[pscustomobject
 Ok (Threw { Assert-NoCredential 'app.swydo.com/g/short/reports/RID99' }) 'cred: short /g/ key now caught (regex floor dropped)'
 Ok ((Get-EntryAgeDate '2026-06-06T00:30:00+13:00' 'x' $now) -eq ([datetime]'2026-06-06')) 'agedate: store-frame date from offset (tz-stable)'
 
+# ---------------- client canonicalization (U1) ----------------
+Ok ((Normalize-ClientName 'Quincy Credit Union (QCU) - Swydee Quarterly Data Export') -eq 'Quincy Credit Union (QCU)') 'normalize: strip quarterly export boilerplate'
+Ok ((Normalize-ClientName 'Copy of Quincy Credit Union (QCU) - Swydee Monthly Data Export') -eq 'Quincy Credit Union (QCU)') 'normalize: strip Copy-of + monthly export boilerplate'
+Ok ((Normalize-ClientName 'Acme Co') -eq 'Acme Co') 'normalize: plain name unchanged'
+Ok ((Normalize-ClientName ' - Data Export') -ne '') 'normalize: never empties'
+# same clientId -> the registered slug WINS even when the name differs (no re-split)
+$reg = @{ 'idAAA' = [ordered]@{ slug='quincy-credit-union'; name='Quincy Credit Union' } }
+$ra = Resolve-ClientSlug 'idAAA' 'Quincy Credit Union (QCU) - Swydee Monthly Data Export' $reg
+Ok ($ra.slug -eq 'quincy-credit-union' -and $ra.source -eq 'id') 'resolve: known id -> registered slug wins'
+# new id, same slug as a DIFFERENT id -> deduped with a suffix (never fuses two clients)
+$rb = Resolve-ClientSlug 'idBBB' 'Quincy Credit Union' $reg
+Ok ($rb.slug -ne 'quincy-credit-union' -and $rb.slug -like 'quincy-credit-union-*' -and $rb.isNew) 'resolve: different id + same name -> suffixed (no fuse)'
+# new id, fresh slug
+$rc = Resolve-ClientSlug 'idCCC' 'Fresh Client' @{}
+Ok ($rc.slug -eq 'fresh-client' -and $rc.isNew -and $rc.source -eq 'newid') 'resolve: new id -> normalized slug, registrable'
+# no clientId -> normalized-name slug, NOT registrable
+$rd = Resolve-ClientSlug $null 'Copy of Foo - Report' @{}
+Ok ($rd.slug -eq 'foo' -and (-not $rd.isNew) -and $rd.source -eq 'noid') 'resolve: no id -> normalized slug, not registrable'
+# registry round-trip (write-temp-then-rename + cred gate)
+$rtmp = Join-Path $env:TEMP ("clireg-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Force $rtmp | Out-Null
+try {
+  $w = [ordered]@{ version=1; clients=@{ 'idAAA'=[ordered]@{ slug='quincy-credit-union'; name='Quincy Credit Union'; aliases=@('Quincy Credit Union (QCU)'); firstSeen='2026-07-07T00:00:00Z'; lastSeen='2026-07-07T00:00:00Z' } } }
+  Write-ClientRegistry $rtmp $w
+  Ok (Test-Path (Join-Path $rtmp 'clients.json')) 'registry: written'
+  $back = Read-ClientRegistry $rtmp
+  Ok ($back.clients['idAAA'].slug -eq 'quincy-credit-union' -and (@($back.clients['idAAA'].aliases) -contains 'Quincy Credit Union (QCU)')) 'registry: round-trips slug + aliases'
+  Ok (Threw { Write-ClientRegistry $rtmp ([ordered]@{ version=1; clients=@{ 'x'=[ordered]@{ slug='y'; name='https://swy.do/shares/LEAK' } } }) }) 'registry: fail-closed on a credential-shaped value'
+} finally { Remove-Item -Recurse -Force $rtmp -ErrorAction SilentlyContinue }
+
 # ---------------- FS integration (subprocess) ----------------
 function RunTool { param([string[]]$a)
   $prev=$ErrorActionPreference; $ErrorActionPreference='Continue'
@@ -179,6 +208,26 @@ finally {
   Get-ChildItem -Recurse -Force $tmp -ErrorAction SilentlyContinue | Where-Object { ($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0 } | ForEach-Object { try { [IO.Directory]::Delete($_.FullName,$false) } catch {} }
   Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }
+
+# ---------------- canon FS integration: same clientId across differently-titled reports -> ONE folder ----------------
+$ctmp = Join-Path $env:TEMP ("canonfs-" + [guid]::NewGuid().ToString('N')); New-Item -ItemType Directory -Force $ctmp | Out-Null
+try {
+  function MkFacts($path,$cid,$name,$report){ [IO.File]::WriteAllText($path, (@{ meta=@{ tool='Analyze-SwydoReport.ps1'; factsVersion=1; clientId=$cid; client=$name; reportName=$report; periodLabel='Q2 2026'; extractedAt='2026-07-07T00:00:00Z' }; platforms=@(); findings=@{ wins=@();losses=@();anomalies=@();discrepancies=@();dataGaps=@() } } | ConvertTo-Json -Depth 20), (New-Object Text.UTF8Encoding($false))) }
+  $arch=Join-Path $ctmp 'archive'
+  $f1=Join-Path $ctmp 'q.facts.json'; MkFacts $f1 'mAfFiMTXCo29uAY4x' 'Quincy Credit Union' 'Quincy Credit Union (QCU) - Swydee Quarterly Data Export'
+  $f2=Join-Path $ctmp 'm.facts.json'; MkFacts $f2 'mAfFiMTXCo29uAY4x' 'Quincy Credit Union' 'Copy of Quincy Credit Union (QCU) - Swydee Monthly Data Export'
+  $s1=RunTool @('-Store','-Facts',$f1,'-ArchiveRoot',$arch)
+  $s2=RunTool @('-Store','-Facts',$f2,'-ArchiveRoot',$arch)
+  Ok ($s1.code -eq 0 -and $s2.code -eq 0) 'canon-fs: both stores exit 0'
+  $clientDirs=@(Get-ChildItem -Directory $arch -ErrorAction SilentlyContinue)
+  Ok ($clientDirs.Count -eq 1 -and $clientDirs[0].Name -eq 'quincy-credit-union') 'canon-fs: same clientId -> ONE folder (quincy-credit-union), not split by report title'
+  Ok (Test-Path (Join-Path $arch 'clients.json')) 'canon-fs: registry written'
+  $creg=[IO.File]::ReadAllText((Join-Path $arch 'clients.json'))|ConvertFrom-Json
+  Ok ($creg.clients.'mAfFiMTXCo29uAY4x'.slug -eq 'quincy-credit-union') 'canon-fs: registry maps clientId -> slug'
+  $f3=Join-Path $ctmp 'other.facts.json'; MkFacts $f3 'DIFFERENTID999' 'Quincy Credit Union' 'Quincy Credit Union - Export'
+  $s3=RunTool @('-Store','-Facts',$f3,'-ArchiveRoot',$arch)
+  Ok ($s3.code -eq 0 -and (@(Get-ChildItem -Directory $arch).Count -eq 2)) 'canon-fs: different clientId + same name -> distinct folder (no fuse)'
+} finally { Remove-Item -Recurse -Force $ctmp -ErrorAction SilentlyContinue }
 
 Write-Host ''
 Write-Host ("Test-Archive: {0} passed, {1} failed." -f $script:pass,$script:fail)

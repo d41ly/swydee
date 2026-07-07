@@ -414,10 +414,10 @@ if($Trend){
   $tdoc=[ordered]@{
     meta=[ordered]@{
       tool='Get-SwydoReport.ps1'; schemaVersion=2; trend=$true; extractedAt=(Get-Date).ToString('o')
-      shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId
+      shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
       trendWidgets=$trendW.Count; cellCount=$cells.Count; coverage=@($cov.Values); warnings=$twarn
     }
-    report=[ordered]@{ name=$s.name; client=$s.client.name; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName }
+    report=[ordered]@{ name=$s.name; client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName }
     trendCells=@($cells)
   }
   $tpath=Join-Path $OutDir "$tstamp-$tslug.trend.json"
@@ -457,13 +457,13 @@ if($unverified.Count -gt 0){ $warnings += ("units not inferred for unverified pr
 $doc = [ordered]@{
   meta = [ordered]@{
     tool='Get-SwydoReport.ps1'; schemaVersion=2; extractedAt=(Get-Date).ToString('o')
-    shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId
+    shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
     widgetCount=$wids.Count; dataWidgets=@($widgetsOut|Where-Object{$_.kind -eq 'data'}).Count
     unitBasis=$unitBasis; warnings=$warnings
   }
   report = [ordered]@{
     name=$s.name; subtitle=$s.subtitle; orientation=$s.orientation
-    client=$s.client.name; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName
+    client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName
     dateRange=$s.dateRange; compareDateRange=$s.compareDateRange
     sections=@($s.sections|ForEach-Object{ [ordered]@{id=$_.id;name=$_.name} }); custom=$s.custom
   }

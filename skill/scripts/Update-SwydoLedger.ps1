@@ -139,9 +139,26 @@ Assert-NoCredential $txt                                    # input must be alre
 $tf = $txt | ConvertFrom-Json
 if($tf.meta.trendFactsVersion -ne 1){ throw "not a trend-facts file (need meta.trendFactsVersion=1) - run ConvertTo-SwydoTrendFacts.ps1" }
 
-$clientName = if($myClient){ $myClient } elseif($tf.meta.client){ $tf.meta.client } elseif($tf.meta.reportName){ $tf.meta.reportName } else { 'client' }
-$slug = Get-ClientSlug $clientName
-$ledgerDir = Join-Path $myArchiveRoot $slug
+# Canonical client folder by stable clientId via the registry (same resolution as Manage -Store, so a report
+# pull and a trend pull for the same client land in ONE folder). Reused via -DefineOnly dot-source of Manage.
+$rootN = Normalize-Root $myArchiveRoot
+New-Item -ItemType Directory -Force -Path $rootN | Out-Null
+$clientId = [string]$tf.meta.clientId
+$canonName = if($myClient){ [string]$myClient } elseif($tf.meta.client){ [string]$tf.meta.client } elseif($tf.meta.reportName){ [string]$tf.meta.reportName } else { 'client' }
+$reg = Read-ClientRegistry $rootN
+$res = Resolve-ClientSlug $clientId $canonName $reg.clients
+$slug = $res.slug; $clientName = $res.name
+if($clientId){
+  if($reg.clients.ContainsKey($clientId)){
+    $e = $reg.clients[$clientId]; $e.slug = $slug; $e.lastSeen = $nowIso
+    foreach($al in @($canonName,$myClient)){ if($al -and ($e.name -ne $al) -and (@($e.aliases) -notcontains $al)){ $e.aliases = @(@($e.aliases) + $al) } }
+  } else {
+    $al=@(); if($myClient -and ($myClient -ne $canonName)){ $al=@($myClient) }
+    $reg.clients[$clientId] = [ordered]@{ slug=$slug; name=$canonName; aliases=$al; firstSeen=$nowIso; lastSeen=$nowIso }
+  }
+  Write-ClientRegistry $rootN $reg
+}
+$ledgerDir = Join-Path $rootN $slug
 New-Item -ItemType Directory -Force -Path $ledgerDir | Out-Null
 $ledgerPath = Join-Path $ledgerDir 'ledger.json'
 
