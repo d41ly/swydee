@@ -4,6 +4,20 @@
 Review verdict: **U1 GO-WITH-CHANGES · U2 GO-WITH-CHANGES · U3 GO-WITH-CHANGES · U4 RESHAPE · U5 DEFER.**
 Ship independently, one commit/review boundary per unit — NOT one build. Order: U1 -> U2 -> U3 -> U4 -> (U5 deferred).
 
+## Units index (all units, discoverable)
+| Unit | Title | Spec | Status |
+|---|---|---|---|
+| U1 | Client canonicalization | this doc | shipped |
+| U2 | Provider filter | this doc | shipped |
+| U3 | Text-widget annotations | this doc | shipped |
+| U4 | Auto-trend-on-pull | this doc | shipped |
+| U5 | Change-history CSV ingestion | this doc | DEFERRED (YAGNI) |
+| U6 | Canonical account total with provenance | [canonical-total-spec.md](canonical-total-spec.md) | SPEC, GO |
+| U7a | Cross-widget reconciliation #3/#4/#5 | [cross-widget-reconciliation-spec.md](cross-widget-reconciliation-spec.md) | SPEC, GO |
+| U7b | Cross-widget reconciliation #6 (monthly-sum vs period KPI) | [cross-widget-reconciliation-spec.md](cross-widget-reconciliation-spec.md) | SPEC, DEFERRED (needs extractor RELATIVE->concrete-month resolution) |
+
+Computation-quality build order (this review): U6 -> U7a -> [U7b deferred].
+
 - **U1 must-fix:** (1) thread `clientId` through the FULL trend relay — `Get-SwydoReport` trend `$tdoc.meta`+`$tdoc.report`, `ConvertTo-SwydoTrendFacts` `meta.clientId`, `Update-SwydoLedger` resolves the slug via `clientId` (today it name-slugs). (2) `-MergeClient` must NOT call `Merge-LedgerCells` as-is: its `$nc.status -eq 'returned'` gate (ledger cells carry `state`, not `status`) would import NOTHING then delete the "empty" source -> data loss. Write a dedicated union: adapt cells, for a key final-in-both with differing values keep one deterministically (older `firstSeen`) AND emit a `GAP_RESTATEMENT_SUPPRESSED`-style conflict, carry `max(restatementCount)+1`, sum `keptNullCount`; dry-run lists every differing/dropped cell before `-Execute` deletes. (3) registry slug is AUTHORITATIVE once `clientId` resolves; `-Client` recorded only as an alias (never re-splits the folder). `clients.json` write = write-temp-then-rename.
 - **U2 must-fix:** filter is ADDITIVE-IN-FACTS, not subtractive-in-completeness. Extractor `-Platform` still records the FULL provider inventory in `meta.providers` (from the structure query) + `meta.providerFilter=[requested]` + per-provider `included` flag, and pulls DATA only for included providers (keep/drop a provider's widgets as a WHOLE set — never partially retain a multi-part widget; `Test-ProviderMatch` unit-tested on blended `source.parts`). Analyze emits a `PROVIDER_FILTERED` data-gap (severity major -> closer forces it) listing excluded platforms; the SKILL completeness gate covers `included` providers only. Skip the analyze-side `-Platform` subsetting (redundant with fan-out).
 - **U3 must-fix:** (1) do NOT register annotation numbers in global/byPlatform scope and do NOT reuse `Add-StringNumbers` (it hardcodes `hasComparison=$true`). Give each annotation its own `<!-- annotation:aid -->` anchor + a dedicated adder (`hasComparison=$false`), scoped ONLY on the quoting line — mirror the `finding:fid` mechanism (closer change). Test: a bare metric in a note does NOT trace on a non-anchoring line and does NOT satisfy a comparison claim. (2) render annotations under an explicit "Context (unverified, client-supplied)" block; template rule: cite only as temporal co-occurrence ("coincided with"), NEVER cause, regardless of voice. (3) d2's intent captured here: also ingest a plain-text notes/context file (`*context*.md`/`*notes*.md`/`.txt`) from the client folder as annotations (DATA, injection-safe) — CSV-schema parsing deferred.
