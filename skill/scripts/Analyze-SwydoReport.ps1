@@ -21,6 +21,7 @@ param(
   [string]$OutDir,
   [double]$WinLossPct = 10.0,   # |delta%| >= this on a directional metric => win/loss
   [int]$SmallN = 30,            # moved-side events below this => confidence:low
+  [string[]]$NotesFile,         # optional plain-text context/notes file(s) ingested as annotations (client-supplied)
   [switch]$DefineOnly
 )
 $ErrorActionPreference = "Stop"
@@ -212,6 +213,21 @@ function Get-ProviderFilterFinding($providerFilter,$providerInventory){
   if($excluded.Count -eq 0){ return $null }
   return [ordered]@{ ruleId='PROVIDER_FILTERED'; severity='major'; statement=("Report limited to platform(s) " + ($pf -join ', ') + "; excluded (not pulled): " + ($excluded -join ', ') + " - this is a partial view of the account.") }
 }
+# U3: is a TEXT widget a real client note (keep) vs a layout header like "Google Ads" (drop)? Pure.
+# $knownNames = provider/section display names to reject as headers. Kept if it looks like commentary:
+# a "note/context/change/..." lead, a colon, a year, or >=6 words.
+function Test-IsAnnotation($text,$knownNames){
+  $t = ([string]$text).Trim()
+  if(-not $t){ return $false }
+  $tl = $t.ToLower()
+  foreach($n in @($knownNames)){ if($n -and ($tl -eq ([string]$n).ToLower())){ return $false } }   # exact header label
+  $wc = @($t -split '\s+' | Where-Object { $_ }).Count
+  if($wc -lt 3){ return $false }
+  if($t -match '(?i)\b(note|notes|context|updated?|change[ds]?|launch\w*|paused?|added|removed|migrat\w*|switch\w*|refresh\w*|test\w*)\b'){ return $true }
+  if($t.Contains(':')){ return $true }
+  if($t -match '\b(19|20)\d\d\b'){ return $true }
+  return ($wc -ge 6)
+}
 # Per-widget breakdown table for the facts: top-`cap` rows (display-only, tagged), force-including
 # any label in $mustLabels (finding-referenced). Row labels via Row-Label (NOT Get-DimLabel).
 function Get-Breakdown($w, $cap, $mustLabels){
@@ -327,6 +343,21 @@ $doc = Scrub-Credential $doc
 $periods = Derive-Periods $doc.meta.extractedAt $doc.report.dateRange
 $dataWidgets = @($doc.widgets | Where-Object { $_.kind -eq 'data' })
 if($dataWidgets.Count -eq 0){ throw "no data widgets to analyze (all text/empty)" }
+
+# U3: collect client-supplied CONTEXT annotations (text widgets that are real notes, not layout headers)
+# + optional -NotesFile. Verbatim, non-causal; each gets a stable aid the report anchors (<!-- annotation:aid -->)
+# so the closer scopes its numbers to the quoting line only. Credential-in-note is caught by Assert-NoCredential.
+$knownNames = @()
+foreach($w in $doc.widgets){ if($w.providers){ foreach($pp in $w.providers){ if($pp.name){ $knownNames += [string]$pp.name } } } }
+$knownNames += @(@($doc.report.sections) | ForEach-Object { [string]$_.name })
+$knownNames = @($knownNames | Where-Object { $_ } | Sort-Object -Unique)
+$annotations=@(); $annN=0
+foreach($w in $doc.widgets){
+  if($w.kind -ne 'text'){ continue }
+  $atext = ([string]$w.text).Trim()
+  if(Test-IsAnnotation $atext $knownNames){ $annN++; $annotations += [ordered]@{ aid="ANN#$annN"; section=[string]$w.section; source='report'; text=$atext } }
+}
+foreach($nf in @($NotesFile)){ if($nf -and (Test-Path -LiteralPath $nf)){ $ntext=([IO.File]::ReadAllText($nf)).Trim(); if($ntext){ $annN++; $annotations += [ordered]@{ aid="ANN#$annN"; section='(notes)'; source=(Split-Path $nf -Leaf); text=$ntext } } } }
 
 
 # per-platform headline (role-qualified) + provider discovery
@@ -462,7 +493,7 @@ $facts=[ordered]@{
   meta=[ordered]@{
     tool='Analyze-SwydoReport.ps1'; factsVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
-    providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter)
+    providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence
     hasComparison=$hasCmp; comparisonCaveats=$caveats;
     providers=@($platforms.Values | ForEach-Object { [ordered]@{ id=$_.id; name=$_.name; category=$_.category } })

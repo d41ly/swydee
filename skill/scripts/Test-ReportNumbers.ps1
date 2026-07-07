@@ -183,6 +183,14 @@ function Add-StringNumbers($list,$str){
     [void]$list.Add([ordered]@{ value=$t.value; type=$t.type; hasComparison=$true; ulp=(Get-Ulp $t.raw) })
   }
 }
+function Add-AnnotationNumbers($list,$str){
+  # Numbers in a client-supplied CONTEXT annotation (U3). hasComparison=$false ON PURPOSE: a note number
+  # must trace like any figure BUT must NOT satisfy a comparison claim - so a fabricated "grew to 45,000"
+  # laundered through a note still trips the comparison guard.
+  foreach($t in @(Get-MeasureTokens $str)){
+    [void]$list.Add([ordered]@{ value=$t.value; type=$t.type; hasComparison=$false; ulp=(Get-Ulp $t.raw) })
+  }
+}
 
 function Build-FactIndex($facts){
   # -> @{ global; byPlatform=@{id->[..]}; nameToId; byFid=@{fid->[..]} }
@@ -194,6 +202,7 @@ function Build-FactIndex($facts){
   $byPlat   = @{}
   $nameToId = @{}
   $byFid    = @{}
+  $byAnn    = @{}
   foreach($p in @($facts.platforms)){
     $plid = [string]$p.id
     $plist = New-Object System.Collections.ArrayList
@@ -244,7 +253,16 @@ function Build-FactIndex($facts){
       }
     }
   }
-  return @{ global=$global; byPlatform=$byPlat; nameToId=$nameToId; byFid=$byFid }
+  # annotations (U3) -> byAnnotation only; in scope solely on a line echoing <!-- annotation:aid -->
+  if($facts.meta -and $facts.meta.annotations){
+    foreach($a in @($facts.meta.annotations)){
+      $aid = [string]$a.aid
+      if(-not $aid){ continue }
+      if(-not $byAnn.ContainsKey($aid)){ $byAnn[$aid] = New-Object System.Collections.ArrayList }
+      Add-AnnotationNumbers $byAnn[$aid] ([string]$a.text)
+    }
+  }
+  return @{ global=$global; byPlatform=$byPlat; nameToId=$nameToId; byFid=$byFid; byAnnotation=$byAnn }
 }
 
 function Find-Candidates($tok,$cands){
@@ -351,9 +369,11 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
     else { $base = $index.byPlatform[$eff] }
     foreach($line in (($sec.text -replace "`r`n","`n") -split "`n")){
       $fids = @(); foreach($fm in [regex]::Matches($line,'<!--\s*finding:([^\s]+?)\s*-->')){ $fids += $fm.Groups[1].Value }
+      $anns = @(); foreach($am in [regex]::Matches($line,'<!--\s*annotation:([^\s]+?)\s*-->')){ $anns += $am.Groups[1].Value }
       $cands = New-Object System.Collections.ArrayList
       foreach($c in $base){ [void]$cands.Add($c) }
       foreach($fid in $fids){ if($index.byFid.ContainsKey($fid)){ foreach($c in $index.byFid[$fid]){ [void]$cands.Add($c) } } }
+      foreach($aid in $anns){ if($index.byAnnotation.ContainsKey($aid)){ foreach($c in $index.byAnnotation[$aid]){ [void]$cands.Add($c) } } }
       $cmpMatches = [regex]::Matches($line,$script:CmpRx)
       foreach($tok in @(Get-MeasureTokens $line)){
         $measured++

@@ -69,6 +69,14 @@ A ($null -ne $pff -and $pff.ruleId -eq 'PROVIDER_FILTERED' -and $pff.severity -e
 A ($pff.statement -match 'facebook-ads') "finding names the excluded platform"
 A ($null -eq (Get-ProviderFilterFinding @('google-adwords','facebook-ads') @('google-adwords','facebook-ads'))) "filter covers all => no finding"
 
+Write-Host "== Test-IsAnnotation (U3) =="
+A (Test-IsAnnotation 'Account notes: - Creatives were updated both on Google Ads and Facebook on June 8th, 2026.' @('Google Ads','Facebook Ads')) "real note kept"
+A (-not (Test-IsAnnotation 'Google Ads' @('Google Ads','Facebook Ads'))) "provider header 'Google Ads' dropped"
+A (-not (Test-IsAnnotation 'Facebook Ads' @('Google Ads','Facebook Ads'))) "provider header 'Facebook Ads' dropped"
+A (-not (Test-IsAnnotation '' @())) "empty dropped"
+A (-not (Test-IsAnnotation 'Summary' @())) "single word dropped"
+A (Test-IsAnnotation 'Creative refresh launched mid-quarter across all campaigns' @()) "6+ word note kept"
+
 Write-Host "== Get-DimLabel =="
 A ((Get-DimLabel ([pscustomobject]@{campaign_id='1';campaign_name='Auto Loans'})) -eq 'Auto Loans') "dim label from name"
 A ((Get-DimLabel 'MOBILE') -eq 'MOBILE') "dim label string passthrough"

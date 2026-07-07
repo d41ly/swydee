@@ -114,7 +114,8 @@ Ok ((@(Find-Candidates ([ordered]@{value=1234;type='number';raw='+1,234';signed=
 $factsJson = @'
 { "meta": { "hasComparison": true,
     "comparisonCaveats": [ {"id":"seasonality","text":"Comparison is Q2 2026 vs Q1 2026, an adjacent quarter-over-quarter. Adjacent-period comparisons can reflect seasonality, not just performance - validate against the same period a year earlier."} ],
-    "providers": [ {"id":"google_ads","name":"Google Ads","category":"ads"}, {"id":"facebook_ads","name":"Facebook / Meta","category":"ads"} ] },
+    "providers": [ {"id":"google_ads","name":"Google Ads","category":"ads"}, {"id":"facebook_ads","name":"Facebook / Meta","category":"ads"} ],
+    "annotations": [ {"aid":"ANN#1","section":"Section 1","source":"report","text":"Creatives were refreshed on June 8, 2026; that push logged 12,345 extra impressions."} ] },
   "platforms": [
     { "id":"google_ads", "name":"Google Ads", "hasComparison": true,
       "headline": {
@@ -201,6 +202,15 @@ Ok (HasT $rC3 'untraceable-number') 'finding-only 40% in a non-fid paragraph -> 
 $rCmp = Invoke-Closer ($reportOk -replace 'leads were 432','leads grew to 432') $factsObj
 Ok (HasT $rCmp 'comparison-without-data') 'comparison verb on no-comparison FB metric -> flagged'
 Ok (-not (HasT $rOk 'comparison-without-data')) 'comparison on Google (has data) -> not flagged'
+
+# U3: client-supplied annotation numbers trace ONLY on a line echoing the annotation anchor, and never
+# satisfy a comparison claim (hasComparison=false). reportOk itself has no annotation anchors, so $rOk stays clean.
+$rAnnOk = Invoke-Closer ($reportOk + "`n## Context (unverified, client-supplied)`nCreatives were refreshed; that push logged 12,345 impressions. <!-- annotation:ANN#1 -->`n") $factsObj
+Ok (-not (HasT $rAnnOk 'untraceable-number')) 'annotation 12,345 traces on its annotation-anchored line'
+$rAnnNo = Invoke-Closer ($reportOk + "`n## Context`nThat push logged 12,345 impressions.`n") $factsObj
+Ok (HasT $rAnnNo 'untraceable-number') 'annotation 12,345 WITHOUT the anchor -> untraceable (no fabrication haystack)'
+$rAnnCmp = Invoke-Closer ($reportOk + "`n## Context (unverified)`nImpressions grew to 12,345. <!-- annotation:ANN#1 -->`n") $factsObj
+Ok (HasT $rAnnCmp 'comparison-without-data') 'comparison claim on an annotation number -> flagged (annotations are hasComparison=false)'
 
 # C1: two platform anchors in one section
 $rAmb = Invoke-Closer ($reportOk -replace '<!-- platform:facebook_ads -->','<!-- platform:facebook_ads --> <!-- platform:google_ads -->') $factsObj
