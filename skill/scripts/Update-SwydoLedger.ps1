@@ -125,6 +125,49 @@ function Get-MaxLabel($newCells,$existing){
   if($null -eq $best){ return $null }
   return $best.k
 }
+# ---------- pure: UNION two ledgers for the SAME client (for Manage -MergeClient). Distinct from
+# Merge-LedgerCells: that gates on trend-facts $status; ledger cells carry $state, so this must fold cells
+# directly. A key final-in-BOTH with differing values keeps the older-firstSeen value AND records the newer
+# as a restatement (latestValue/Display -> Analyze-SwydoTrend surfaces GAP_RESTATEMENT_SUPPRESSED); never drops
+# silently. Returns @{ ledger; conflicts }. ----------
+function Merge-Ledgers($intoObj,$fromObj,$nowIso){
+  $cells=[ordered]@{}; $conflicts=@()
+  if($intoObj -and $intoObj.cells){ foreach($p in $intoObj.cells.PSObject.Properties){ $cells[$p.Name]=Copy-Cell $p.Value } }
+  if($fromObj -and $fromObj.cells){
+    foreach($p in $fromObj.cells.PSObject.Properties){
+      $k=$p.Name; $fc=Copy-Cell $p.Value
+      if(-not $cells.Contains($k)){ $cells[$k]=$fc; continue }
+      $ic=$cells[$k]
+      $mergedFirst = if(([string]$fc.firstSeen) -and (([string]$ic.firstSeen -eq '') -or ([string]$fc.firstSeen -lt [string]$ic.firstSeen))){ [string]$fc.firstSeen } else { [string]$ic.firstSeen }
+      $mergedLast  = if(([string]$fc.lastRefreshed) -gt ([string]$ic.lastRefreshed)){ [string]$fc.lastRefreshed } else { [string]$ic.lastRefreshed }
+      $sumKept = [int]$ic.keptNullCount + [int]$fc.keptNullCount
+      $maxRestate = [Math]::Max([int]$ic.restatementCount,[int]$fc.restatementCount)
+      $bothFinal = (([string]$ic.state -eq 'final') -and ([string]$fc.state -eq 'final'))
+      if($bothFinal -and (Test-ValuesDiffer $ic.value $fc.value)){
+        $keepInto = (([string]$ic.firstSeen) -le ([string]$fc.firstSeen))   # deterministic: older firstSeen wins
+        $win = if($keepInto){ $ic } else { $fc }
+        $lose = if($keepInto){ $fc } else { $ic }
+        $win.restatementCount = $maxRestate + 1
+        $win.latestValue = $lose.value; $win.latestDisplay = $lose.display
+        $win.keptNullCount = $sumKept; $win.firstSeen = $mergedFirst; $win.lastRefreshed = $mergedLast
+        $cells[$k]=$win
+        $conflicts += [ordered]@{ key=$k; kept=[string]$win.display; dropped=[string]$lose.display }
+      } else {
+        $ic.restatementCount=$maxRestate; $ic.keptNullCount=$sumKept; $ic.firstSeen=$mergedFirst; $ic.lastRefreshed=$mergedLast
+        if(([string]$ic.state -ne 'final') -and ([string]$fc.state -eq 'final')){ $ic.state='final'; $ic.value=$fc.value; $ic.display=$fc.display }
+        $cells[$k]=$ic
+      }
+    }
+  }
+  # coverage recomputed from the unioned cells + carried metadata (providerName/ceiling/grain/windowStatus)
+  $covOut=[ordered]@{}; $byProv=@{}
+  foreach($ck in $cells.Keys){ $c=$cells[$ck]; $pr=[string]$c.providerId; if(-not $byProv.ContainsKey($pr)){ $byProv[$pr]=[System.Collections.ArrayList]@() }; [void]$byProv[$pr].Add([string]$c.month) }
+  foreach($pr in $byProv.Keys){ $ms=@($byProv[$pr]|Sort-Object -Unique); $covOut[$pr]=[ordered]@{ providerId=$pr; earliestMonth=$ms[0]; latestMonth=$ms[-1]; monthCount=$ms.Count } }
+  foreach($src in @($intoObj,$fromObj)){ if($src -and $src.coverage){ foreach($cp in $src.coverage.PSObject.Properties){ $pr=$cp.Name; if($covOut.Contains($pr)){ $v=$cp.Value; if($v.providerName){$covOut[$pr].providerName=$v.providerName}; if($null -ne $v.ceilingMonths){$covOut[$pr].ceilingMonths=$v.ceilingMonths}; if($null -ne $v.hasMonthlyGrain){$covOut[$pr].hasMonthlyGrain=$v.hasMonthlyGrain}; if($v.windowStatus){$covOut[$pr].windowStatus=$v.windowStatus} } } } }
+  $client = if($intoObj -and $intoObj.client){ [string]$intoObj.client } elseif($fromObj -and $fromObj.client){ [string]$fromObj.client } else { 'client' }
+  $ledger=[ordered]@{ ledgerVersion=1; client=$client; updatedAt=[string]$nowIso; cells=$cells; coverage=$covOut }
+  return @{ ledger=$ledger; conflicts=$conflicts }
+}
 
 if($myDefineOnly){ return }
 
@@ -138,10 +181,31 @@ $txt = [IO.File]::ReadAllText($myInFile)
 Assert-NoCredential $txt                                    # input must be already-scrubbed trend facts (fail-closed)
 $tf = $txt | ConvertFrom-Json
 if($tf.meta.trendFactsVersion -ne 1){ throw "not a trend-facts file (need meta.trendFactsVersion=1) - run ConvertTo-SwydoTrendFacts.ps1" }
+# The per-client ledger is the WHOLE-account cumulative history. Refuse a --platform-filtered (partial) pull:
+# merging it would silently accumulate a partial ledger a later trend report reads as complete.
+$tfFilter = @(@($tf.meta.providerFilter) | Where-Object { $_ })   # @() when absent/null (avoid @($null)=[null])
+if($tfFilter.Count -gt 0){ throw ("refusing: these trend facts are --platform-filtered (" + ($tfFilter -join ',') + ") - the per-client ledger must reflect the FULL account. Re-run trend sync without a platform filter.") }
 
-$clientName = if($myClient){ $myClient } elseif($tf.meta.client){ $tf.meta.client } elseif($tf.meta.reportName){ $tf.meta.reportName } else { 'client' }
-$slug = Get-ClientSlug $clientName
-$ledgerDir = Join-Path $myArchiveRoot $slug
+# Canonical client folder by stable clientId via the registry (same resolution as Manage -Store, so a report
+# pull and a trend pull for the same client land in ONE folder). Reused via -DefineOnly dot-source of Manage.
+$rootN = Normalize-Root $myArchiveRoot
+New-Item -ItemType Directory -Force -Path $rootN | Out-Null
+$clientId = [string]$tf.meta.clientId
+$canonName = if($myClient){ [string]$myClient } elseif($tf.meta.client){ [string]$tf.meta.client } elseif($tf.meta.reportName){ [string]$tf.meta.reportName } else { 'client' }
+$reg = Read-ClientRegistry $rootN
+$res = Resolve-ClientSlug $clientId $canonName $reg.clients
+$slug = $res.slug; $clientName = $res.name
+if($clientId){
+  if($reg.clients.ContainsKey($clientId)){
+    $e = $reg.clients[$clientId]; $e.slug = $slug; $e.lastSeen = $nowIso
+    foreach($al in @($canonName,$myClient)){ if($al -and ($e.name -ne $al) -and (@($e.aliases) -notcontains $al)){ $e.aliases = @(@($e.aliases) + $al) } }
+  } else {
+    $al=@(); if($myClient -and ($myClient -ne $canonName)){ $al=@($myClient) }
+    $reg.clients[$clientId] = [ordered]@{ slug=$slug; name=$canonName; aliases=$al; firstSeen=$nowIso; lastSeen=$nowIso }
+  }
+  Write-ClientRegistry $rootN $reg
+}
+$ledgerDir = Join-Path $rootN $slug
 New-Item -ItemType Directory -Force -Path $ledgerDir | Out-Null
 $ledgerPath = Join-Path $ledgerDir 'ledger.json'
 

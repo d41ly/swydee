@@ -59,6 +59,13 @@ Then:
   new/paused, budget-constrained, front-loading from timeSeries).  <!-- finding:ANOM_*#n -->
 (Every major data-gap / discrepancy appears here too.)
 
+## Context (unverified, client-supplied)   [include ONLY if meta.annotations is non-empty]
+For each meta.annotations[] item, quote its `.text` verbatim and put its anchor `<!-- annotation:<aid> -->`
+(e.g. `<!-- annotation:ANN#1 -->`) on that line. These are client-supplied notes (account changes, creative
+refreshes, launches). Cite them ONLY as temporal co-occurrence — "coincided with", "was logged the same
+period" — NEVER as cause, regardless of the voice profile. A number inside a note is being quoted, not
+asserted, and traces only on its own anchored line.
+
 ## Recommendations
 Concrete next steps from the losses/anomalies. Any recommendation resting on a requiresDownstreamData
 finding says to confirm downstream/lead-quality first. State the seasonality caveat once.
@@ -66,5 +73,6 @@ finding says to confirm downstream/lead-quality first. State the seasonality cav
 
 ## Reminders
 - Prefer quoting a finding's `statement` as the basis for a win/loss/anomaly point, then paraphrase around it — this keeps the number anchored and the role/period correct.
+- Annotations (`meta.annotations`) are client-supplied CONTEXT, not measured facts: quote verbatim under "Context", anchor each with `<!-- annotation:<aid> -->`, and never let a note's presence become a causal claim ("the June 8 refresh drove the lift" is forbidden; "the lift coincided with a June 8 refresh" is fine).
 - If `meta.periodConfidence` is `unconfirmed`, add "period labels approximate" once.
 - Keep the client copy free of internal ids, share links, and the facts filename.

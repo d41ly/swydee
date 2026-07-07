@@ -2,7 +2,7 @@
 name: swydee
 description: Generate a senior-performance-marketer client report from a Swydo shared report — either a swy.do share link or an already-parsed v2 extraction/facts JSON. Use ONLY when the user runs /swydee or explicitly asks to analyze / write a report on a Swydo report. Do NOT auto-invoke on unrelated marketing or data questions.
 disable-model-invocation: true
-argument-hint: "<swy.do link | path\\to\\extraction.json | trend <swy.do link|client:name> | list | cleanup older-than:<7d|1mo|3mo|1yr> (client:<name>|all)> [--password <pw>] [voice:<causal|correlational|executive|analytical|consultative>] [--fast|--thorough] [--out <dir>]"
+argument-hint: "<swy.do link | path\\to\\extraction.json | trend <swy.do link|client:name> | list | cleanup older-than:<7d|1mo|3mo|1yr> (client:<name>|all)> [--password <pw>] [voice:<causal|correlational|executive|analytical|consultative>] [--platform <id>] [--fast|--thorough|--no-trend] [--out <dir>]"
 allowed-tools: Bash, PowerShell, Read, Write
 ---
 
@@ -10,7 +10,7 @@ allowed-tools: Bash, PowerShell, Read, Write
 
 Turns a Swydo report into a client-ready report: per-platform overviews with previous-period comparison, analytical insights (wins / needs-attention / anomalies), and recommendations — with **every number deterministically traced to the data**.
 
-**Tools (bundled with this skill).** The PowerShell tools ship inside this skill at `${CLAUDE_SKILL_DIR}/scripts/`: `Get-SwydoReport.ps1` (extractor), `Analyze-SwydoReport.ps1` (analyzer), `Test-ReportNumbers.ps1` (closer), `Manage-SwydoArchive.ps1` (archive + retention), and for the opt-in cumulative-trend feature `ConvertTo-SwydoTrendFacts.ps1` + `Update-SwydoLedger.ps1` + `Analyze-SwydoTrend.ps1` (see "Trend mode"). `${CLAUDE_SKILL_DIR}` is this skill's own install directory (the folder holding this SKILL.md), so the paths resolve wherever the skill is installed (personal, project, or plugin). Invoke each with the PowerShell tool as `powershell -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/<name>.ps1" <args>`. The report template sits beside this file at `${CLAUDE_SKILL_DIR}/report-template.md`.
+**Tools (bundled with this skill).** The PowerShell tools ship inside this skill at `${CLAUDE_SKILL_DIR}/scripts/`: `Get-SwydoReport.ps1` (extractor), `Analyze-SwydoReport.ps1` (analyzer), `Test-ReportNumbers.ps1` (closer), `Manage-SwydoArchive.ps1` (archive + retention), and for the cumulative-trend feature `ConvertTo-SwydoTrendFacts.ps1` + `Update-SwydoLedger.ps1` + `Analyze-SwydoTrend.ps1` + `Sync-SwydoTrend.ps1` (the fail-soft refresh wrapper; see "Trend mode" + Flow step 8). `${CLAUDE_SKILL_DIR}` is this skill's own install directory (the folder holding this SKILL.md), so the paths resolve wherever the skill is installed (personal, project, or plugin). Invoke each with the PowerShell tool as `powershell -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/<name>.ps1" <args>`. The report template sits beside this file at `${CLAUDE_SKILL_DIR}/report-template.md`.
 
 ## Non-negotiables
 - **The model narrates; the tools compute.** You may cite ONLY the pre-formatted display strings that appear in the facts JSON. Do NOT do arithmetic, re-round, sum, average, or derive any number. If a number you want isn't in the facts, you may not use it.
@@ -49,6 +49,11 @@ Store the run into the client/date archive:
 `${CLAUDE_SKILL_DIR}/scripts/Manage-SwydoArchive.ps1 -Store -Facts <facts.json> -Report <report.md> -Draft <draft.md> -Client "<client>"`
 The archive lives **inside the skill** at `${CLAUDE_SKILL_DIR}/archive/` by default (so it travels with the installed skill) — pass `-ArchiveRoot <dir>` only to override. It creates `<archive>/<client-slug>/<YYYY-MM-DD-HH-MM-SS>/` with a `manifest.json` (client, period, scrape + archive dates, per-file sha256) and writes a `.swydee-archive` sentinel. Its fail-closed gate **refuses to store anything still carrying a share credential** (`meta.shareKey`/`shareUrl` or a `swy.do/shares/...` string). The facts snapshot is the record of provenance — it keeps the report re-verifiable and feeds later QoQ/YoY trend work (ad data is mutable, so re-scraping won't reproduce today's numbers). Do NOT pass the raw extraction unless it has been scrubbed to REMOVE `meta.shareKey`/`meta.shareUrl`; otherwise delete the raw — never archive a credential.
 
+### 8. Refresh trend history — Mode A, default-on (opt out with `--fast` or `--no-trend`)
+After delivering the primary single-period report, keep the client's cumulative monthly ledger current so QoQ/YoY history survives across pulls. Run **FAIL-SOFT** (a trend failure must NEVER affect the delivered report):
+`${CLAUDE_SKILL_DIR}/scripts/Sync-SwydoTrend.ps1 -ShareUrl <link> [-Secret <pw>] -OutDir <tmp>` (add `-Platform <id>` to match a filtered pull). It extracts a wide per-platform monthly pull, scrubs it, and merges into `${CLAUDE_SKILL_DIR}/archive/<client-slug>/ledger.json`. If it exits non-zero (e.g. the report has no monthly time-series widget), say "trend history not updated this run" in one line and STOP there — do not retry, do not touch the primary report.
+On success, you MAY produce a SEPARATE trend report (never merge trend numbers into the single-period report — they won't trace): run `Analyze-SwydoTrend.ps1 -LedgerFile <archive>/<client-slug>/ledger.json -OutDir <out>` → write a trend draft from the template → verify with `Test-ReportNumbers.ps1` against the **`*.trendanalysis.facts.json`** (its own facts) → deliver as a distinct `-trend-report.md`. Skip this whole step entirely under `--fast`/`--no-trend`, and for Mode B (file) input.
+
 ## Retention commands (user-invoked)
 When the user asks to review or clean up archived data (first token `list` or `cleanup`), run `Manage-SwydoArchive.ps1`:
 - **list** → `-List [-Client "<name>"]`  (read-only inventory by client → entries/dates/sizes).
@@ -71,4 +76,6 @@ Then **continue at step 3 of the Flow** using `*.trendanalysis.facts.json` as th
 
 ## Notes
 - Coverage: surface every finding with `confidence` normal and every anomaly in the insights section; every `dataGaps`/`discrepancies` finding of severity ≥ major and every `meta.comparisonCaveats` MUST appear (the closer enforces the major ones).
+- **Context annotations.** Analyze collects real client notes from the report's TEXT widgets (layout headers like "Google Ads" are filtered out) into `meta.annotations`. To add external context (e.g. an account-change log the user placed in the client folder), pass `Analyze-SwydoReport.ps1 -NotesFile <path>` (repeatable; plain text). Surface annotations verbatim in the report's "Context (unverified, client-supplied)" section with each `<!-- annotation:<aid> -->` anchor, and cite them ONLY as temporal co-occurrence — never as cause (the closer scopes a note's numbers to its anchored line and treats them as non-comparison, so a note can't launder a fabricated or comparative figure).
+- **--platform filter.** `--platform <providerId>` (repeatable) pulls/analyzes only those platforms; the report MUST then surface the forced `PROVIDER_FILTERED` data-gap naming the excluded platforms (it is a partial view).
 - If Mode A extraction returns warnings (`meta.warnings`) or empty widgets, surface them as data gaps — never present a clean report over incomplete data.

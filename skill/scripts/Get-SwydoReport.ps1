@@ -42,6 +42,7 @@ param(
   [int]$PageSize = 500,
   [switch]$Trend,            # opt-in: pull a wide per-provider monthly history (cumulative-trend feature)
   [string]$CacheDir = "",    # ceiling-probe cache location; default %LOCALAPPDATA%\swydee\ceilings (NOT OutDir)
+  [string[]]$Platform,       # optional provider-id filter (repeatable or comma-list); pull ONLY these providers
   [switch]$DefineOnly
 )
 $ErrorActionPreference = "Stop"
@@ -206,6 +207,19 @@ function Normalize-Widget($wmeta,$obj){
   return $out
 }
 
+# ===================== provider filter (--platform) pure helpers =====================
+# Normalize a -Platform value (repeated and/or comma-lists) to a lowercased provider-id set.
+function Parse-PlatformFilter($platform){
+  $out=@(); foreach($x in @($platform)){ foreach($t in ([string]$x -split ',')){ $t=$t.Trim().ToLower(); if($t){ $out += $t } } }
+  return @($out | Sort-Object -Unique)
+}
+# Keep-if-ANY: a widget is kept when any of its provider ids is wanted (whole widget; never split a blended widget).
+function Test-ProviderMatch($widgetProviderIds,$wanted){
+  if(@($wanted).Count -eq 0){ return $true }   # no filter => keep everything
+  foreach($p in @($widgetProviderIds)){ if(([string]$p).ToLower() -in $wanted){ return $true } }
+  return $false
+}
+
 # ===================== trend (opt-in wide monthly pull) pure helpers =====================
 # The ladder is a COARSE bracket, bisected to the true ceiling so months between rungs are not lost (C1).
 $script:TrendLadder = @(48,36,24,18,12)   # months, descending
@@ -319,7 +333,7 @@ if(-not $ShareUrl){ throw "ShareUrl is required" }
 # 1. resolve share key + report id
 $html = Invoke-RestMethod -Uri $ShareUrl
 if ($html -match 'app\.swydo\.com/g/([^/]+)/reports/([A-Za-z0-9_-]+)') { $script:key=$Matches[1]; $reportId=$Matches[2] }
-else { throw "Could not find 'app.swydo.com/g/<key>/reports/<id>' iframe in $ShareUrl" }
+else { throw "Could not find the 'app.swydo.com/g/<key>/reports/<id>' iframe in the share page (bad/expired link, or password required?)" }   # never interpolate $ShareUrl - it carries the share key
 Write-Host ("key=***  reportId={0}" -f $reportId)   # never echo the raw share key (it is the Basic-auth credential)
 
 # 2. JWT
@@ -337,8 +351,13 @@ $s = ($structRaw | ConvertFrom-Json).data.report
 if(-not $s){ throw "structure query returned no report: $structRaw" }
 $script:dr=$s.dateRange; $script:cp=$s.compareDateRange
 $script:secMap=@{}; if($s.sections){ $s.sections | ForEach-Object { $script:secMap[$_.id]=$_.name } }
-$wids = @($s.widgets.edges | ForEach-Object { @{ id=$_.node.id; visual=$_.node.visual.id; section=$_.node.section.id } })
-Write-Host ("report: {0} | widgets: {1}" -f $s.name, $wids.Count)
+# full provider inventory (from the UNFILTERED structure) so downstream always knows what exists,
+# even when --platform pulls a subset (additive-in-facts; a filtered report can't look complete).
+$providerInventory = @($s.widgets.edges | ForEach-Object { @($_.node.source.parts | ForEach-Object { $_.provider.id }) } | Where-Object { $_ } | Sort-Object -Unique)
+$platFilter = Parse-PlatformFilter $Platform
+$widsAll = @($s.widgets.edges | ForEach-Object { $n=$_.node; @{ id=$n.id; visual=$n.visual.id; section=$n.section.id; provs=@($n.source.parts | ForEach-Object { $_.provider.id } | Where-Object { $_ }) } })
+if($platFilter.Count -gt 0){ $wids = @($widsAll | Where-Object { ($_.visual -in @('TEXT','PAGE_BREAK')) -or (Test-ProviderMatch $_.provs $platFilter) }) } else { $wids = $widsAll }
+Write-Host ("report: {0} | widgets: {1}{2}" -f $s.name, $wids.Count, $(if($platFilter.Count -gt 0){ " (filtered to: " + ($platFilter -join ',') + ")" }else{""}))
 
 # ============================ TREND: opt-in wide monthly pull ============================
 if($Trend){
@@ -354,6 +373,7 @@ if($Trend){
     $n=$e.node; if($n.visual.id -in @('TEXT','PAGE_BREAK')){ continue }
     $prov=$null; $pname=$null
     if($n.source -and $n.source.parts){ $pp=@($n.source.parts | ForEach-Object { $_.provider }); if($pp.Count -gt 0){ $prov=$pp[0].id; $pname=$pp[0].name } }
+    if($platFilter.Count -gt 0 -and -not (Test-ProviderMatch @($prov) $platFilter)){ continue }   # --platform filter
     $twids += @{ id=$n.id; visual=$n.visual.id; prov=$prov; pname=$pname }
   }
   # discovery: one fetch each at month/-12 (safe, dims return regardless of data rows) -> classify time widgets
@@ -414,10 +434,11 @@ if($Trend){
   $tdoc=[ordered]@{
     meta=[ordered]@{
       tool='Get-SwydoReport.ps1'; schemaVersion=2; trend=$true; extractedAt=(Get-Date).ToString('o')
-      shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId
+      shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
       trendWidgets=$trendW.Count; cellCount=$cells.Count; coverage=@($cov.Values); warnings=$twarn
+      providerInventory=$providerInventory; providerFilter=$platFilter
     }
-    report=[ordered]@{ name=$s.name; client=$s.client.name; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName }
+    report=[ordered]@{ name=$s.name; client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName }
     trendCells=@($cells)
   }
   $tpath=Join-Path $OutDir "$tstamp-$tslug.trend.json"
@@ -457,13 +478,13 @@ if($unverified.Count -gt 0){ $warnings += ("units not inferred for unverified pr
 $doc = [ordered]@{
   meta = [ordered]@{
     tool='Get-SwydoReport.ps1'; schemaVersion=2; extractedAt=(Get-Date).ToString('o')
-    shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId
+    shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
     widgetCount=$wids.Count; dataWidgets=@($widgetsOut|Where-Object{$_.kind -eq 'data'}).Count
-    unitBasis=$unitBasis; warnings=$warnings
+    unitBasis=$unitBasis; warnings=$warnings; providerInventory=$providerInventory; providerFilter=$platFilter
   }
   report = [ordered]@{
     name=$s.name; subtitle=$s.subtitle; orientation=$s.orientation
-    client=$s.client.name; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName
+    client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName
     dateRange=$s.dateRange; compareDateRange=$s.compareDateRange
     sections=@($s.sections|ForEach-Object{ [ordered]@{id=$_.id;name=$_.name} }); custom=$s.custom
   }
