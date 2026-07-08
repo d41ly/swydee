@@ -96,6 +96,18 @@ function Format-Metric($id,$unit,$value,$currency){
   if([math]::Abs($d - [math]::Round($d)) -lt 1e-9){ return ("{0:N0}" -f $d) }
   return ("{0:N1}" -f $d)
 }
+# U7a/R14: smallest represented step for a metric VALUE. MUST mirror Format-Metric's format specifiers AND its
+# runtime integer-vs-fractional branch (kept adjacent so drift is caught by test U7a-T0). Value-aware: a
+# fractional count/ratio (conversions 12.7, ROAS 4.2) steps by 0.1, an integer count by 1.0.
+function Get-MetricUlp($id,$unit,$currency,$value){
+  if($unit -eq 'micros'){ return 0.01 }               # N2
+  if($unit -eq 'fraction'){ return 0.001 }             # {value*100:N1}% => 0.1% == 0.001 fraction
+  # NB: money is N2 (0.01) ONLY when unit=='micros' (handled above). A money-id with a NULL/other unit is
+  # rendered by Format-Metric as a COUNT (N0/N1), so it MUST fall through to the value-aware branch - do NOT
+  # return 0.01 on the money id-pattern alone, or #4/#5 tolerance collapses and false-fires on rounding (R14).
+  if($null -ne $value -and ([math]::Abs([double]$value - [math]::Round([double]$value)) -lt 1e-9)){ return 1.0 }
+  return 0.1                                            # fractional count / ratio-typed (unit null)
+}
 function Get-DeltaPct($cur,$prev){
   if($null -eq $cur -or $null -eq $prev){ return $null }
   $p=[double]$prev; if($p -eq 0){ if([double]$cur -eq 0){ return 0.0 } else { return $null } }  # NEW/undefined
@@ -114,10 +126,28 @@ function Get-DimLabel($c){
 function Test-GroupRow($label){ return ($null -eq $label -or $label -eq '(group)' -or $label -eq 'All') }
 # first metric in a widget whose metric-part matches a regex (for config-driven rules)
 function Find-Metric($w,$pat){ if($w.metrics){ foreach($m in $w.metrics){ if((Get-MetricPart $m.id) -match $pat){ return $m } } } return $null }
+# U6: the provider a widget's headline is attributed to (declared provider, else first-metric id-prefix).
+# One source of truth for discovery, headline population, and the GAP_NO_ACCOUNT_TOTAL pass so they can't drift.
+function Get-WidgetProvider($w){
+  if($w.providers -and @($w.providers).Count -gt 0){ return $w.providers[0].id }
+  $m0=@($w.metrics); if($m0.Count -gt 0){ return ($m0[0].id -split ':')[0] }
+  return $null
+}
+# U6/D6: a blended (multi-provider) widget is never a headline source.
+function Test-Blended($w){ return [bool]($w.providers -and @($w.providers).Count -gt 1) }
 function Row-Cur($row,$name){ $c=$row.metrics.$name; if($c -and ($c.current -is [double] -or $c.current -is [int] -or $c.current -is [long] -or $c.current -is [decimal])){ return [double]$c.current } return $null }
 function Row-Cmp($row,$name){ $c=$row.metrics.$name; if($c -and ($c.compare -is [double] -or $c.compare -is [int] -or $c.compare -is [long] -or $c.compare -is [decimal])){ return [double]$c.compare } return $null }
 function Row-Label($row){ $ps=@($row.dimensions.PSObject.Properties); if($ps.Count -gt 0){ return $ps[0].Value } return $null }
-function Total-Row($w){ $t=@($w.rows | Where-Object { $_.kind -eq 'total' }); if($t.Count -gt 0){ return $t[0] }; $t=@($w.rows|Where-Object{$_.kind -eq 'data'}); if($t.Count -gt 0){return $t[0]}; return $null }
+function Total-Row($w){
+  $t=@($w.rows | Where-Object { $_.kind -eq 'total' }); if($t.Count -gt 0){ return $t[0] }
+  # U6/A1 KPI-only fallback: the first data row IS the account total ONLY when the widget carries no
+  # dimensions. A dimensioned table with no total row has NO account total here (never promote a slice).
+  # @($w.dimensions | Where-Object {$_}) avoids the @($null).Count==1 trap on a null/scalar dimensions prop.
+  if(@($w.dimensions | Where-Object {$_}).Count -eq 0){
+    $t=@($w.rows | Where-Object { $_.kind -eq 'data' }); if($t.Count -gt 0){ return $t[0] }
+  }
+  return $null
+}
 # Row-level breakdown findings for ONE widget (concentration, new/paused, segment-divergence,
 # effort->result, share-mismatch). Pure over the widget + $script:RuleCfg; returns a findings array.
 function Get-BreakdownFindings($w){
@@ -327,6 +357,207 @@ function Get-TimeSeries($w){
   return $out
 }
 
+# ============================ U7a: cross-widget reconciliation helpers + checks ============================
+# Summable = a count/total that legitimately adds across partition rows. Ratios/rates/averages/dedup/per-X
+# are NOT summable. (R4; distinct from Test-Additive on purpose - the {users,value} divergence is intentional:
+# Test-Additive treats a bare 'value' as additive for DISC/concentration, while Test-Summable requires an
+# explicit *_value/revenue and rejects GA4 users; do NOT "unify" them without a green-count audit.)
+function Test-Summable($id){
+  $p = Get-MetricPart $id
+  if($p -match 'per[_a-z]'){ return $false }                                                # screenPageViewsPerSession, value_per_conversion
+  if($p -match 'reach|frequency|unique|users?$|ctr|_rate$|rate$|average|avg|position|rank|roas|aov|cpc|cpm|cpa|cpl|share|score|cost_per|costper|(^|_)ratio$'){ return $false }
+  if($p -match 'impression|click|conversion|lead|spend|cost_micros|(^|_)cost$|session|order|send|open|revenue|(^|_)call|phone_call|amount_spent|conversions?_value|conversion_value|purchase|bounce'){ return $true }
+  return $false
+}
+# R5: two figures share a basis iff identical unit AND identical currency (null-safe equality).
+function Test-SameBasis($ua,$ca,$ub,$cb){ return (($ua -eq $ub) -and ($ca -eq $cb)) }
+# R16: a known-disjoint (partition) dimension where each row is a distinct bucket, so detail sums are
+# legitimately additive. Only these authorize the #4 major; overlap dims (action_type, ...) stay info.
+function Test-PartitionDim($dim){
+  if($null -eq $dim){ return $false }
+  $d = ([string]$dim).ToLowerInvariant() -replace '[^a-z0-9]',''
+  return [bool]($d -match 'campaign|adgroup|adset|keyword|searchterm|date|day|week|month|landingpage|pagepath|country|region|device|channel|sourcemedium')
+}
+# R20: ratio spec for #3. $null for a non-ratio id. Numerators are role-pinned (cost-only for cost ratios,
+# value-only for roas/aov) so an ambiguous (money) regex can't mis-pair. numPat/denPat are metric-part regexes.
+function Get-RatioSpec($id){
+  $p = Get-MetricPart $id
+  $cost = 'cost_micros|(^|_)cost$|spend|amount_spent'
+  $val  = 'conversions?_value|conversion_value|revenue|(^|_)value$'
+  # link-basis CTR (ctrLink, inline_link_click_ctr, ...) matched BEFORE plain ctr so it is not treated as an
+  # all-CTR and mis-paired against total clicks (R20).
+  if($p -match 'ctrlink|link.*ctr|ctr.*link'){         return [ordered]@{ kind='ctr-link'; numPat='link_click'; numRole='link'; denPat='impression'; scale=1; resultKind='percent' } }
+  if($p -match '(^|_)ctr$'){                            return [ordered]@{ kind='ctr'; numPat='(^|_)clicks?$'; numRole='all'; denPat='impression'; scale=1; resultKind='percent' } }
+  if($p -match 'average_cpm|(^|_)cpm$'){                return [ordered]@{ kind='cpm'; numPat=$cost; numRole='cost'; denPat='impression'; scale=1000; resultKind='currency' } }
+  if($p -match 'average_cpc|(^|_)cpc$'){                return [ordered]@{ kind='cpc'; numPat=$cost; numRole='cost'; denPat='(^|_)clicks?$'; scale=1; resultKind='currency' } }
+  if($p -match 'cost_per.*lead|(^|_)cpl$'){            return [ordered]@{ kind='cpl'; numPat=$cost; numRole='cost'; denPat='(^|_)lead'; scale=1; resultKind='currency' } }
+  # NB: costPerActionType::<action> is deliberately NOT reconciled here. Its denominator is the <action> count
+  # (link_click, video_view, ...), NOT conversions; the spec table (R20 line 186) blanket-maps it to conversions,
+  # but that recomputes an unrelated ratio and produced false findings (incl. a false DISC_RATIO_UNIT major when
+  # link_clicks >> conversions). Only the unambiguous google cost_per_conversion / cpa is reconciled.
+  if($p -match 'cost_per_conversion|(^|_)cpa$'){        return [ordered]@{ kind='cpa'; numPat=$cost; numRole='cost'; denPat='(^|:)conversions?$'; scale=1; resultKind='currency' } }
+  if($p -match 'conversion_rate|conv_rate|(^|_)cvr$'){ return [ordered]@{ kind='cvr'; numPat='(^|:)conversions?$'; numRole='conv'; denPat='(^|_)clicks?$|session'; scale=1; resultKind='percent' } }
+  if($p -match 'roas'){                                 return [ordered]@{ kind='roas'; numPat=$val; numRole='value'; denPat='cost_micros|(^|_)cost$|spend'; scale=1; resultKind='ratio' } }
+  if($p -match 'aov|average_order_value'){             return [ordered]@{ kind='aov'; numPat=$val; numRole='value'; denPat='order'; scale=1; resultKind='currency' } }
+  return $null
+}
+# Check #3: validate a natively-reported ratio against its total-row components as ratio-of-totals. Reported-unit
+# gated (R13); component-disambiguated (R20); resultKind-driven display (R19). Major ONLY on a confirmed-unit
+# ~1e6 signature (a genuine provider arithmetic error); same-basis mismatch is info.
+function Get-RatioReconFindings($w,$periods){
+  $out=[System.Collections.ArrayList]@()
+  $tr = Total-Row $w; if(-not $tr){ return @() }   # no total row (incl. time-dimensioned native ratio) => skip
+  $cc = $w.currencyCode
+  $prov = Get-WidgetProvider $w
+  $pname = if($w.providers -and @($w.providers).Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $prov }
+  foreach($rm in @($w.metrics)){
+    $spec = Get-RatioSpec $rm.id; if(-not $spec){ continue }
+    $rk = $spec.resultKind
+    # R13 reported-unit gate: skip unless the reported ratio's OWN unit is confirmed & resultKind-consistent
+    $unitOk = $false
+    if($rk -eq 'percent'){ $unitOk = ($rm.unit -eq 'fraction') }
+    elseif($rk -eq 'currency'){ $unitOk = ($rm.unit -eq 'micros') }
+    elseif($rk -eq 'ratio'){ $unitOk = ($null -ne (Row-Cur $tr $rm.name)) }   # roas: numeric reported cell (unit null OK)
+    if(-not $unitOk){ continue }
+    # components via R20; ambiguity (multiple same-role candidates) => skip
+    $numCands=@(@($w.metrics) | Where-Object { (Get-MetricPart $_.id) -match $spec.numPat })
+    $denCands=@(@($w.metrics) | Where-Object { (Get-MetricPart $_.id) -match $spec.denPat })
+    if($numCands.Count -ne 1 -or $denCands.Count -ne 1){ continue }
+    $num=$numCands[0]; $den=$denCands[0]
+    if($num.id -eq $rm.id -or $den.id -eq $rm.id -or $num.id -eq $den.id){ continue }
+    # R20 role-qualifier agreement: an unqualified (all) ratio pairs only with an unqualified numerator; a link
+    # ratio only with a link-qualified numerator. Stops an all-CTR mis-recomputing against link_clicks (or a
+    # link-CTR against total clicks) when the correctly-qualified sibling metric is absent from the widget.
+    $numIsLink = ((Get-MetricPart $num.id) -match 'link')
+    if($spec.numRole -eq 'all' -and $numIsLink){ continue }
+    if($spec.numRole -eq 'link' -and -not $numIsLink){ continue }
+    # money/value components must have a CONFIRMED (non-null) unit before any unit-signature eval (R20)
+    if($null -eq $num.unit -and ($num.id -match '(?i)cost|spend|revenue|value|amount_spent')){ continue }
+    if((Test-Money $den.id $den.unit $cc) -and $null -eq $den.unit){ continue }
+    $numv=Row-Cur $tr $num.name; $denv=Row-Cur $tr $den.name; $repv=Row-Cur $tr $rm.name
+    if($null -eq $numv -or $null -eq $denv -or $null -eq $repv -or $denv -eq 0){ continue }
+    $numBase = if($num.unit -eq 'micros'){ [double]$numv/1e6 } else { [double]$numv }
+    $denBase = if($den.unit -eq 'micros'){ [double]$denv/1e6 } else { [double]$denv }
+    if($denBase -eq 0){ continue }
+    $recomputedBase = ($numBase/$denBase) * $spec.scale
+    $reportedBase = if($rm.unit -eq 'micros'){ [double]$repv/1e6 } else { [double]$repv }
+    if($recomputedBase -eq 0){ continue }
+    $r = $reportedBase / $recomputedBase
+    $dispReported = Format-Metric $rm.id $rm.unit $repv $cc
+    $dispRecomputed = switch($rk){
+      'currency' { Format-Money $recomputedBase $cc }
+      'percent'  { Format-Metric $rm.id 'fraction' $recomputedBase $cc }
+      default    { Format-Metric $rm.id $rm.unit $recomputedBase $cc }   # ratio -> same formatter as the reported cell (R3/R19; no hand-rolled numbers)
+    }
+    $dispNum = Format-Metric $num.id $num.unit $numv $cc
+    $dispDen = Format-Metric $den.id $den.unit $denv $cc
+    $unitSig = (($r -ge 1e5 -and $r -le 1e7) -or ((1/$r) -ge 1e5 -and (1/$r) -le 1e7))
+    if($unitSig){
+      [void]$out.Add([ordered]@{ ruleId='DISC_RATIO_UNIT'; severity='major'; platform=$pname; metric=$rm.name; widgetId=$w.id
+        statement="$pname '$($rm.name)' reported $dispReported but the $($spec.kind) of the total-row components is $dispRecomputed (micros-not-divided: reported ratio ~1e6x its components)"
+        evidence=[ordered]@{ reported=$dispReported; recomputed=$dispRecomputed; components="$dispNum / $dispDen" } })
+    } else {
+      $ulp=[math]::Max((Get-MetricUlp $rm.id $rm.unit $cc $reportedBase),(Get-MetricUlp $rm.id $rm.unit $cc $recomputedBase))
+      if([math]::Abs($reportedBase-$recomputedBase) -gt (2*$ulp)){
+        [void]$out.Add([ordered]@{ ruleId='DISC_RATIO_RECOMPUTE'; severity='info'; platform=$pname; metric=$rm.name; widgetId=$w.id
+          statement="$pname '$($rm.name)' reported $dispReported but the $($spec.kind) of the total-row components is $dispRecomputed (provider ratio basis differs: filtered denominator or average-of-ratios)"
+          evidence=[ordered]@{ reported=$dispReported; recomputed=$dispRecomputed; components="$dispNum / $dispDen" } })
+      }
+    }
+  }
+  return @($out)
+}
+# Check #4: within one dimensioned widget with an explicit total row, Sum(detail) ~= total. Over-sum on a
+# partition dim (R16) is a major double-count; over-sum on an overlap/multi-dim is info; under-sum is an honest
+# (other) remainder. Tolerance scales with row count (R15). Summable metrics only (R4).
+function Get-DetailSumFindings($w,$periods){
+  $out=[System.Collections.ArrayList]@()
+  $dims=@($w.dimensions | Where-Object {$_}); if($dims.Count -eq 0){ return @() }
+  $tr=Total-Row $w; if(-not $tr){ return @() }
+  $cc=$w.currencyCode
+  $prov=Get-WidgetProvider $w
+  $pname=if($w.providers -and @($w.providers).Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $prov }
+  $detail=@($w.rows | Where-Object { $_.kind -eq 'data' -and -not (Test-GroupRow (Row-Label $_)) })
+  if($detail.Count -eq 0){ return @() }
+  $isPartition = (($dims.Count -eq 1) -and (Test-PartitionDim $dims[0]))
+  foreach($m in @($w.metrics)){
+    if(-not (Test-Summable $m.id)){ continue }
+    $totalRaw=Row-Cur $tr $m.name; if($null -eq $totalRaw){ continue }
+    $sumRaw=0.0; $k=0; $any=$false
+    foreach($rr in $detail){ $v=Row-Cur $rr $m.name; if($null -ne $v){ $sumRaw += [double]$v; $k++; $any=$true } }
+    if(-not $any){ continue }
+    $totalBase = if($m.unit -eq 'micros'){ [double]$totalRaw/1e6 } else { [double]$totalRaw }
+    $sumBase   = if($m.unit -eq 'micros'){ $sumRaw/1e6 } else { $sumRaw }
+    $ulp=[math]::Max((Get-MetricUlp $m.id $m.unit $cc $sumBase),(Get-MetricUlp $m.id $m.unit $cc $totalBase))
+    $tol=[math]::Max(2,$k) * $ulp
+    $dispSum=Format-Metric $m.id $m.unit $sumRaw $cc
+    $dispTotal=Format-Metric $m.id $m.unit $totalRaw $cc
+    if(($sumBase - $totalBase) -gt $tol){
+      if($isPartition){
+        [void]$out.Add([ordered]@{ ruleId='DISC_DETAIL_EXCEEDS_TOTAL'; severity='major'; platform=$pname; metric=$m.name; widgetId=$w.id
+          statement="$pname '$($m.name)' detail rows sum to $dispSum, exceeding the widget total $dispTotal on the '$($dims[0])' partition - possible duplicated/double-counted rows"
+          evidence=[ordered]@{ shownSum=$dispSum; total=$dispTotal } })
+      } else {
+        [void]$out.Add([ordered]@{ ruleId='RECON_ROW_OVERSUM'; severity='info'; platform=$pname; metric=$m.name; widgetId=$w.id
+          statement="$pname '$($m.name)' listed rows sum to $dispSum, above the widget total $dispTotal; the '$($dims[0])' dimension may double-count (overlapping/multi-attribution values)"
+          evidence=[ordered]@{ shownSum=$dispSum; total=$dispTotal } })
+      }
+    }
+    elseif(($totalBase - $sumBase) -gt $tol){
+      $remainderRaw=[double]$totalRaw - $sumRaw
+      if($remainderRaw -ge 0){
+        $dispOther=Format-Metric $m.id $m.unit $remainderRaw $cc
+        [void]$out.Add([ordered]@{ ruleId='RECON_ROW_REMAINDER'; severity='info'; platform=$pname; metric=$m.name; widgetId=$w.id
+          statement="$pname '$($m.name)': listed rows sum to $dispSum of a $dispTotal total; $dispOther is in unshown rows (other)"
+          evidence=[ordered]@{ total=$dispTotal; shownSum=$dispSum; other=$dispOther } })
+      }
+    }
+  }
+  return @($out)
+}
+# Check #5: a dimensioned slice total exceeding a MEASURED account KPI. Info only (R17): filtered KPI cards and
+# per-widget date ranges make "subset exceeds whole" legitimately possible and undetectable from schema v2. The
+# account KPI is found by scanning ALL non-blended zero-dim data widgets of the same provider (not the doc-order
+# headline winner); ambiguous ceiling => skip. Summable metrics only (ratio/dedup slices can exceed the account).
+function Get-SliceAccountFindings($w,$dataWidgets,$periods){
+  $out=[System.Collections.ArrayList]@()
+  $dims=@($w.dimensions | Where-Object {$_}); if($dims.Count -eq 0){ return @() }
+  $tr=Total-Row $w; if(-not $tr){ return @() }
+  $cc=$w.currencyCode
+  $prov=Get-WidgetProvider $w
+  $pname=if($w.providers -and @($w.providers).Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $prov }
+  foreach($m in @($w.metrics)){
+    if(-not (Test-Summable $m.id)){ continue }
+    $sliceRaw=Row-Cur $tr $m.name; if($null -eq $sliceRaw){ continue }
+    $kpiCands=@()
+    foreach($ow in @($dataWidgets)){
+      if(Test-Blended $ow){ continue }
+      if(@($ow.dimensions | Where-Object {$_}).Count -ne 0){ continue }   # zero-dim account KPI only
+      if((Get-WidgetProvider $ow) -ne $prov){ continue }
+      $otr=Total-Row $ow; if(-not $otr){ continue }
+      $om=@(@($ow.metrics) | Where-Object { $_.id -eq $m.id }); if($om.Count -eq 0){ continue }
+      $ov=Row-Cur $otr $om[0].name; if($null -eq $ov){ continue }
+      $kpiCands += @{ unit=$om[0].unit; currency=$ow.currencyCode; value=[double]$ov }
+    }
+    if($kpiCands.Count -eq 0){ continue }
+    $uniqVals=@($kpiCands | ForEach-Object { $_.value } | Sort-Object -Unique)
+    if($uniqVals.Count -gt 1){ continue }   # ambiguous ceiling
+    $kpi=$kpiCands[0]
+    if(-not (Test-SameBasis $m.unit $cc $kpi.unit $kpi.currency)){ continue }
+    $sliceBase = if($m.unit -eq 'micros'){ [double]$sliceRaw/1e6 } else { [double]$sliceRaw }
+    $kpiBase   = if($kpi.unit -eq 'micros'){ $kpi.value/1e6 } else { $kpi.value }
+    $ulp=[math]::Max((Get-MetricUlp $m.id $m.unit $cc $sliceBase),(Get-MetricUlp $m.id $kpi.unit $kpi.currency $kpiBase))
+    if(($sliceBase - $kpiBase) -gt (2*$ulp)){
+      $dispSlice=Format-Metric $m.id $m.unit $sliceRaw $cc
+      $dispKpi=Format-Metric $m.id $kpi.unit $kpi.value $kpi.currency
+      [void]$out.Add([ordered]@{ ruleId='RECON_SLICE_OVER_ACCOUNT'; severity='info'; platform=$pname; metric=$m.name; widgetId=$w.id
+        statement="$pname '$($m.name)' slice total $dispSlice exceeds the measured account KPI $dispKpi (dimension '$($dims[0])')"
+        evidence=[ordered]@{ slice=$dispSlice; account=$dispKpi; dimension=$dims[0]; note='slice exceeds measured account KPI; if the KPI card is filtered or the table spans a different period this is expected' } })
+    }
+  }
+  return @($out)
+}
+
 if($DefineOnly){ return }   # dot-source stops here
 
 # ============================ run ============================
@@ -363,15 +594,36 @@ foreach($w in $doc.widgets){
 foreach($nf in @($NotesFile)){ if($nf -and (Test-Path -LiteralPath $nf)){ $ntext=([IO.File]::ReadAllText($nf)).Trim(); if($ntext){ $ntext = ($ntext -replace $script:KeyPattern,'[redacted-share-link]'); $annN++; $annotations += [ordered]@{ aid="ANN#$annN"; section='(notes)'; source=(Split-Path $nf -Leaf); text=$ntext } } } }
 
 
-# per-platform headline (role-qualified) + provider discovery
+# per-platform headline (role-qualified) + provider discovery.
+# U6/A2: provider discovery still walks ALL data widgets (so a blended-only or no-total-only provider keeps
+# its platform entry + surfaces GAP_NO_ACCOUNT_TOTAL); a blended widget (D6) and a dimensioned no-total table
+# (A1 -> $tr=$null) never SUPPLY a headline value. Every legacy field is populated byte-for-byte as before
+# (raw total-row cell, NOT Row-Cur's [double] cast); only the additive `canonical` provenance is new.
 $platforms=@{}
 foreach($w in $dataWidgets){
-  $prov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { ($w.metrics | Select-Object -First 1).id -split ':' | Select-Object -First 1 }
+  # discovery: register EVERY provider present on the widget (each side of a blended widget included), so a
+  # provider that appears ONLY as a non-primary side of a blended widget still earns a platform entry (empty
+  # headline) + GAP_NO_ACCOUNT_TOTAL rather than vanishing silently. Single-provider widgets are unaffected.
+  foreach($pe in @($w.providers)){
+    if($pe.id -and -not $platforms.ContainsKey($pe.id)){
+      $pn = if($pe.name){ $pe.name } else { $pe.id }
+      $platforms[$pe.id]=[ordered]@{ id=$pe.id; name=$pn; category=(Get-Category $pe.id); headline=[ordered]@{}; hasComparison=$false }
+    }
+  }
+  $prov = Get-WidgetProvider $w
   if(-not $prov){ continue }
-  if(-not $platforms.ContainsKey($prov)){ $pname=if($w.providers -and $w.providers.Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name }else{ $prov }; $platforms[$prov]=[ordered]@{ id=$prov; name=$pname; category=(Get-Category $prov); headline=[ordered]@{}; hasComparison=$false } }
+  if(-not $platforms.ContainsKey($prov)){   # metric-prefix-only widget (no providers[]) discovered here
+    $pname = if($w.providers -and @($w.providers).Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $prov }
+    $platforms[$prov]=[ordered]@{ id=$prov; name=$pname; category=(Get-Category $prov); headline=[ordered]@{}; hasComparison=$false }
+  }
+  if(Test-Blended $w){ continue }             # D6: never a headline source (discovery above still counted it)
   $tr = Total-Row $w
-  if(-not $tr){ continue }
-  $cc = $w.currencyCode
+  if(-not $tr){ continue }                     # A1: dimensioned no-total -> $null -> contributes no headline value
+  $cc   = $w.currencyCode
+  $dims = @($w.dimensions | Where-Object {$_})
+  $isKpi= ($dims.Count -eq 0)
+  $scope= if($isKpi){ 'account' } else { "table-total:$($dims[0])" }   # honest scope; never bare 'account' for a table total
+  $src  = if($isKpi){ 'kpi-widget' } else { 'total-row' }
   foreach($m in $w.metrics){
     $cell = $tr.metrics.$($m.name)
     if(-not $cell){ continue }
@@ -382,12 +634,15 @@ foreach($w in $dataWidgets){
     $delta = Get-DeltaPct $cell.current $cell.compare
     $hasCmp = ($null -ne $cell.compare)
     if($hasCmp){ $platforms[$prov].headline.hasComparison=$true; $platforms[$prov].hasComparison=$true }
+    $dispCur = (Format-Metric $m.id $m.unit $cell.current $cc)
     $platforms[$prov].headline[$key]=[ordered]@{
       metric=$m.name; id=$m.id; unit=$m.unit; type=(Metric-Type $m.id $m.unit $cc); direction=$dir; currency=$cc
       current=$cell.current; previous=$cell.compare; deltaPct=$delta; hasComparison=$hasCmp
-      displayCurrent=(Format-Metric $m.id $m.unit $cell.current $cc)
+      displayCurrent=$dispCur
       displayPrevious=(Format-Metric $m.id $m.unit $cell.compare $cc)
       displayDelta=(Format-Delta $delta)
+      # ---- U6 provenance (additive; canonical.display IS displayCurrent so the closer needs no change) ----
+      canonical=[ordered]@{ display=$dispCur; sourceWidgetId=$w.id; scope=$scope; period=$periods.current; source=$src }
     }
   }
 }
@@ -403,6 +658,29 @@ foreach($warn in @($doc.meta.warnings)){ if($warn){ [void]$gaps.Add([ordered]@{ 
 # mistaken for a complete one (the completeness gate covers only what was pulled).
 $pff = Get-ProviderFilterFinding $doc.meta.providerFilter $doc.meta.providerInventory
 if($pff){ [void]$gaps.Add($pff) }
+# U6/A2.4: GAP_NO_ACCOUNT_TOTAL - one info finding per provider for metric ids that were OBSERVED (attributed
+# by metric-id prefix, so a blended widget contributes each metric to its true owner) but got NO headline cell
+# (all their widgets were dimensioned-no-total and/or blended). Info => never force-surfaced => never blocks.
+$observed=@{}
+foreach($w in $dataWidgets){
+  foreach($m in @($w.metrics)){
+    $mp=($m.id -split ':')[0]; if(-not $mp){ continue }
+    if(-not $observed.ContainsKey($mp)){ $observed[$mp]=[System.Collections.Generic.HashSet[string]]::new() }
+    [void]$observed[$mp].Add($m.id)
+  }
+}
+foreach($prov in @($observed.Keys)){
+  if(-not $platforms.ContainsKey($prov)){ continue }   # only discovered platforms
+  $pf=$platforms[$prov]
+  $missing=@($observed[$prov] | Where-Object { -not $pf.headline.Contains($_) } | Sort-Object)
+  if($missing.Count -eq 0){ continue }
+  $shown = if($missing.Count -gt 20){ (@($missing[0..19]) + @("+$($missing.Count-20) more")) } else { $missing }
+  [void]$gaps.Add([ordered]@{
+    ruleId='GAP_NO_ACCOUNT_TOTAL'; severity='info'; platform=$pf.name
+    statement="no account-level total available for $($missing.Count) metric(s) of $($pf.name): only dimensioned rows with no total row (or blended widgets); metrics: $($shown -join ', ')"
+    evidence=[ordered]@{ metrics=@($shown); count="$($missing.Count)" }
+  })
+}
 # per-platform win/loss + gaps
 foreach($pk in $platforms.Keys){
   $pf=$platforms[$pk]
@@ -461,6 +739,17 @@ foreach($key in $byMetric.Keys){
   }
 }
 
+# ---- U7a cross-widget reconciliation (#3 ratio-recompute, #4 detail-vs-total, #5 slice-vs-account) ----
+# Only a provably-impossible direction is major (DISC_RATIO_UNIT confirmed-unit ~1e6; DISC_DETAIL_EXCEEDS_TOTAL
+# on a partition dim); every other relation is info. Disjoint from DISC_CROSS_WIDGET (identical dimSig only),
+# so no pair double-fires. Blended widgets excluded (R6).
+$u7discRules=@('DISC_RATIO_UNIT','DISC_RATIO_RECOMPUTE','DISC_DETAIL_EXCEEDS_TOTAL','RECON_SLICE_OVER_ACCOUNT')
+foreach($w in $dataWidgets){
+  if(Test-Blended $w){ continue }
+  $u7f=@(); $u7f+=@(Get-RatioReconFindings $w $periods); $u7f+=@(Get-DetailSumFindings $w $periods); $u7f+=@(Get-SliceAccountFindings $w $dataWidgets $periods)
+  foreach($f in $u7f){ if($f.ruleId -in $u7discRules){ [void]$disc.Add($f) } else { [void]$gaps.Add($f) } }
+}
+
 # ---- row-level breakdown rules (per-category, config-driven; see Get-BreakdownFindings) ----
 foreach($w in $dataWidgets){ foreach($fnd in (Get-BreakdownFindings $w)){ [void]$anoms.Add($fnd) } }
 
@@ -494,7 +783,7 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 }
 $facts=[ordered]@{
   meta=[ordered]@{
-    tool='Analyze-SwydoReport.ps1'; factsVersion=1; computedFrom=$doc.meta.tool
+    tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence

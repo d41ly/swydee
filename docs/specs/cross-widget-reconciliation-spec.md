@@ -183,12 +183,14 @@ Returns `$null` for a non-ratio id, else `[ordered]@{ kind; numPat; numRole; den
 | cpc | `average_cpc\|(^\|_)cpc$` | `cost_micros\|(^\|_)cost$\|spend\|amount_spent` | cost | `(^\|_)clicks?$` | 1 | currency | cost/clicks |
 | cpm | `average_cpm\|(^\|_)cpm$` | `cost_micros\|(^\|_)cost$\|spend\|amount_spent` | cost | `impression` | 1000 | currency | cost/impr*1000 |
 | cpl | `cost_per.*lead\|(^\|_)cpl$` | `cost_micros\|(^\|_)cost$\|spend\|amount_spent` | cost | `(^\|_)lead` | 1 | currency | cost/leads |
-| cpa | `cost_per_conversion\|(^\|_)cpa$\|costperactiontype` | `cost_micros\|(^\|_)cost$\|spend\|amount_spent` | cost | `(^\|:)conversions?$` | 1 | currency | cost/conv |
+| cpa | `cost_per_conversion\|(^\|_)cpa$` | `cost_micros\|(^\|_)cost$\|spend\|amount_spent` | cost | `(^\|:)conversions?$` | 1 | currency | cost/conv |
 | cvr | `conversion_rate\|conv_rate\|(^\|_)cvr$` | `(^\|:)conversions?$` | conv | `(^\|_)clicks?$\|session` | 1 | percent | conv/clicks |
 | roas | `roas` | `conversions_value\|conversion_value\|revenue\|(^\|_)value$` | value | `cost_micros\|(^\|_)cost$\|spend` | 1 | ratio | value/cost |
 | aov | `aov\|average_order_value` | `conversions_value\|conversion_value\|revenue\|(^\|_)value$` | value | `order` | 1 | currency | revenue/orders |
 
 Numerators are cost-only for cost-ratios (never revenue), value-only for roas/aov (never cost) - closes the ambiguous-`(money)` mis-pair. `numRole`/qualifier drives R20 role agreement and skip-on-ambiguity.
+
+**Post-build amendment:** `costperactiontype` is REMOVED from the cpa row. A Facebook `costPerActionType::<action>` metric's denominator is the `<action>` count (link_click, video_view, landing_page_view, ...), NOT conversions; blanket-mapping it to a conversions denominator recomputed an unrelated ratio and produced false findings - a routine false `DISC_RATIO_RECOMPUTE` and, when link_clicks >> conversions, a false `DISC_RATIO_UNIT` **major**. Only the unambiguous google `cost_per_conversion`/`cpa` is reconciled; compound `costPerActionType::<action>` ratios are skipped (`Get-RatioSpec` returns `$null`). Deriving a per-action denominator is possible future work but risks self-matching the reported metric, so it is deferred. Also note R20 role-agreement is enforced in `Get-RatioReconFindings` (an `all` ratio pairs only with an unqualified numerator, a `link` ratio only with a link-qualified one), and link-basis CTR ids (`inline_link_click_ctr`, ...) are matched to the `ctr-link` row BEFORE the plain `ctr` row.
 
 ---
 

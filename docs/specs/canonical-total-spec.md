@@ -120,14 +120,22 @@ function Test-Blended($w){ return ($w.providers -and @($w.providers).Count -gt 1
 
 ### A2.2 Rewire the headline loop (replace A:367-393)
 
-Keep provider discovery exactly as today (walk all data widgets, create `$platforms[$prov]`). Add: skip blended widgets as a headline source (D6, discovery already done); attach `canonical{}` additively. Every pre-existing legacy field is populated **from the raw total-row cell**, byte-for-byte as today (NOT via `Row-Cur`'s `[double]` cast - so an int KPI's `current` stays an int in JSON).
+Discovery walks all data widgets and registers **every provider present on each widget** (both sides of a blended widget). **Post-build amendment:** the draft said "create `$platforms[$prov]`" from the primary provider only; that silently dropped a provider appearing ONLY as a non-primary side of a blended widget (no platform, no headline, no gap) - contradicting M3/D6 and the test-17 guarantee. Discovery therefore registers each `providers[]` entry, so such a provider still earns a platform entry (empty headline) + `GAP_NO_ACCOUNT_TOTAL`. Single-provider widgets are unaffected. Headline **population** still attributes to the primary provider (`Get-WidgetProvider`) only, skips blended widgets as a headline source (D6), and attaches `canonical{}` additively. Every pre-existing legacy field is populated **from the raw total-row cell**, byte-for-byte as today (NOT via `Row-Cur`'s `[double]` cast - so an int KPI's `current` stays an int in JSON).
 
 ```powershell
 $platforms=@{}
 foreach($w in $dataWidgets){
+  # discovery: register EVERY provider present on the widget (each side of a blended widget), so a provider that
+  # appears ONLY as a non-primary side of a blended widget still earns a platform entry + GAP (post-build fix).
+  foreach($pe in @($w.providers)){
+    if($pe.id -and -not $platforms.ContainsKey($pe.id)){
+      $pn = if($pe.name){ $pe.name } else { $pe.id }
+      $platforms[$pe.id]=[ordered]@{ id=$pe.id; name=$pn; category=(Get-Category $pe.id); headline=[ordered]@{}; hasComparison=$false }
+    }
+  }
   $prov = Get-WidgetProvider $w
   if(-not $prov){ continue }
-  if(-not $platforms.ContainsKey($prov)){
+  if(-not $platforms.ContainsKey($prov)){   # metric-prefix-only widget (no providers[]) discovered here
     $pname = if($w.providers -and @($w.providers).Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $prov }
     $platforms[$prov]=[ordered]@{ id=$prov; name=$pname; category=(Get-Category $prov); headline=[ordered]@{}; hasComparison=$false }
   }
