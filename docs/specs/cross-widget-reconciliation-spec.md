@@ -42,7 +42,7 @@ Net severity effect: v2 ships **one** single-report force-surfaced major (#4, ti
 
 ---
 
-**Status:** SPEC (unattended build to follow). Extends `docs/specs/context-and-canon-spec.md`; **depends on U6** (`docs/specs/canonical-total-spec.md`) including new dependency **D-period** (below). Same discipline: PS 5.1/.NET, pure-ASCII source, functions-first + `-DefineOnly`, hardened scripts reused via `-DefineOnly` dot-source (never mutated), default single-report path byte-for-byte unchanged except additive findings, every credential path fail-closed.
+**Status:** U7a SHIPPED (built, reviewed, merged to main); U7b DEFERRED. Extends `docs/specs/context-and-canon-spec.md`; **depends on U6** (`docs/specs/canonical-total-spec.md`) including new dependency **D-period** (below). Same discipline: PS 5.1/.NET, pure-ASCII source, functions-first + `-DefineOnly`, hardened scripts reused via `-DefineOnly` dot-source (never mutated), default single-report path byte-for-byte unchanged except additive findings, every credential path fail-closed.
 
 **Blast radius (two sub-units, two commit/review boundaries):**
 - **U7a** - checks #3, #4, #5 in `skill/scripts/Analyze-SwydoReport.ps1` ONLY. New tests in `Test-Analyze.ps1`.

@@ -7,7 +7,7 @@
 >
 > Build verdict: **GO.** Build order: U6 (this spec) -> U7a -> [U7b deferred].
 
-**Status:** SPEC (unattended build to follow). Extends `docs/specs/context-and-canon-spec.md`; same discipline (PS 5.1/.NET, ASCII, functions-first + `-DefineOnly`, default single-report path additive-only, every credential path fail-closed). **Blast radius: `skill/scripts/Analyze-SwydoReport.ps1` ONLY** (v2 keeps the draft's Analyze-only scope by *deferring* the two things that would have touched the ledger). New tests in `Test-Analyze.ps1`. Decisions below are RATIFIED unless marked **[USER-FACING]**.
+**Status:** SHIPPED (built, reviewed, merged to main). Extends `docs/specs/context-and-canon-spec.md`; same discipline (PS 5.1/.NET, ASCII, functions-first + `-DefineOnly`, default single-report path additive-only, every credential path fail-closed). **Blast radius: `skill/scripts/Analyze-SwydoReport.ps1` ONLY** (v2 keeps the draft's Analyze-only scope by *deferring* the two things that would have touched the ledger). New tests in `Test-Analyze.ps1`. Decisions below are RATIFIED unless marked **[USER-FACING]**.
 
 Green-count contract to preserve: **Analyze 135, Closer 119, Extractor 94, Archive 94, TrendFacts 19, Ledger 50, TrendAnalyze 24, Sync 4.** New Analyze cases are additive on top of 135.
 

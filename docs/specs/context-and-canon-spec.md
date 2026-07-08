@@ -12,8 +12,8 @@ Ship independently, one commit/review boundary per unit — NOT one build. Order
 | U3 | Text-widget annotations | this doc | shipped |
 | U4 | Auto-trend-on-pull | this doc | shipped |
 | U5 | Change-history CSV ingestion | this doc | DEFERRED (YAGNI) |
-| U6 | Canonical account total with provenance | [canonical-total-spec.md](canonical-total-spec.md) | SPEC, GO |
-| U7a | Cross-widget reconciliation #3/#4/#5 | [cross-widget-reconciliation-spec.md](cross-widget-reconciliation-spec.md) | SPEC, GO |
+| U6 | Canonical account total with provenance | [canonical-total-spec.md](canonical-total-spec.md) | shipped |
+| U7a | Cross-widget reconciliation #3/#4/#5 | [cross-widget-reconciliation-spec.md](cross-widget-reconciliation-spec.md) | shipped |
 | U7b | Cross-widget reconciliation #6 (monthly-sum vs period KPI) | [cross-widget-reconciliation-spec.md](cross-widget-reconciliation-spec.md) | SPEC, DEFERRED (needs extractor RELATIVE->concrete-month resolution) |
 
 Computation-quality build order (this review): U6 -> U7a -> [U7b deferred].
