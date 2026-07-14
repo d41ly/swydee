@@ -619,6 +619,7 @@ foreach($nf in @($NotesFile)){ if($nf -and (Test-Path -LiteralPath $nf)){ $ntext
 # (A1 -> $tr=$null) never SUPPLY a headline value. Every legacy field is populated byte-for-byte as before
 # (raw total-row cell, NOT Row-Cur's [double] cast); only the additive `canonical` provenance is new.
 $platforms=@{}
+$displaced=@{}   # U9/D2: per-provider list of rank displacements (a later zero-dim KPI supersedes a doc-earlier table total)
 foreach($w in $dataWidgets){
   # discovery: register EVERY provider present on the widget (each side of a blended widget included), so a
   # provider that appears ONLY as a non-primary side of a blended widget still earns a platform entry (empty
@@ -648,7 +649,17 @@ foreach($w in $dataWidgets){
     if(-not $cell){ continue }
     if(-not ($cell.current -is [double] -or $cell.current -is [int] -or $cell.current -is [long] -or $cell.current -is [decimal])){ continue }  # scalar-guard: drop echo objects
     $key = $m.id  # role-qualified store key by metric id (dedup across widgets keeps first/total)
-    if($platforms[$prov].headline.Contains($key)){ continue }
+    $existing = $null
+    if($platforms[$prov].headline.Contains($key)){ $existing = $platforms[$prov].headline[$key] }
+    if($null -ne $existing){
+      # U9/D2: a TRUE zero-dim KPI (rank 1) supersedes a document-earlier table total (rank 2) for the same
+      # metric id; same-rank candidates keep document-order first-wins (identical to pre-U9 for every other pair).
+      # Null-check $existing.canonical so a metric id colliding with the boolean 'hasComparison' key (an ordered-
+      # dict entry, case-insensitive) degrades to exact pre-U9 first-wins and never corrupts hasComparison / D7.
+      if(-not ($isKpi -and $existing.canonical -and ($existing.canonical.source -ne 'kpi-widget'))){ continue }
+      if(-not $displaced.ContainsKey($prov)){ $displaced[$prov]=[System.Collections.ArrayList]@() }
+      [void]$displaced[$prov].Add([ordered]@{ metricId=$key; supersededWidgetId=$existing.canonical.sourceWidgetId })
+    }
     $dir = Get-Direction $m.id
     $delta = Get-DeltaPct $cell.current $cell.compare
     $hasCmp = ($null -ne $cell.compare)
@@ -663,7 +674,21 @@ foreach($w in $dataWidgets){
       # ---- U6 provenance (additive; canonical.display IS displayCurrent so the closer needs no change) ----
       canonical=[ordered]@{ display=$dispCur; sourceWidgetId=$w.id; scope=$scope; period=$periods.current; source=$src }
     }
+    # U9/D5: a displaced cell records the widget it superseded (last canonical key; absent on non-flipped cells).
+    if($null -ne $existing){ $platforms[$prov].headline[$key].canonical.supersededWidgetId = $existing.canonical.sourceWidgetId }
   }
+}
+# U9/D7: platforms that had a displacement recompute comparison flags from the SURVIVING headline cells.
+# Value-only: no key is added or removed. Non-flip reports never enter this branch (byte-identical).
+foreach($dpk in @($displaced.Keys)){
+  if(-not $platforms.ContainsKey($dpk)){ continue }
+  $pfD=$platforms[$dpk]; $anyCmp=$false
+  foreach($hk in @($pfD.headline.Keys)){
+    if($hk -eq 'hasComparison'){ continue }
+    if($pfD.headline[$hk].hasComparison){ $anyCmp=$true; break }
+  }
+  if($pfD.headline.Contains('hasComparison')){ $pfD.headline['hasComparison']=$anyCmp }
+  $pfD.hasComparison=$anyCmp
 }
 
 # findings
@@ -698,6 +723,22 @@ foreach($prov in @($observed.Keys)){
     ruleId='GAP_NO_ACCOUNT_TOTAL'; severity='info'; platform=$pf.name
     statement="no account-level total available for $($missing.Count) metric(s) of $($pf.name): only dimensioned rows with no total row (or blended widgets); metrics: $($shown -join ', ')"
     evidence=[ordered]@{ metrics=@($shown); count="$($missing.Count)" }
+  })
+}
+# U9/D4: GAP_HEADLINE_SOURCE_CHANGED - one info finding per provider with >= 1 rank displacement (a later zero-dim
+# KPI superseded a document-earlier table total). Provenance note, routed to $gaps (a sourcing note, NOT a numbers-
+# disagree discrepancy). D11-style rollup: ids + count only, NO metric values echoed (the displaced total is
+# deliberately not re-surfaced; RECON_SLICE_OVER_ACCOUNT carries values when its gates pass). Flip-only, info.
+foreach($dpk in @($displaced.Keys)){
+  $items=@($displaced[$dpk]); if($items.Count -eq 0){ continue }
+  $dmet=@($items | ForEach-Object { $_.metricId } | Sort-Object -Unique)
+  $dwid=@($items | ForEach-Object { $_.supersededWidgetId } | Where-Object { $_ } | Sort-Object -Unique)
+  $dshown = if($dmet.Count -gt 20){ (@($dmet[0..19]) + @("+$($dmet.Count-20) more")) } else { $dmet }
+  $pnameD = if($platforms.ContainsKey($dpk)){ $platforms[$dpk].name } else { $dpk }
+  [void]$gaps.Add([ordered]@{
+    ruleId='GAP_HEADLINE_SOURCE_CHANGED'; severity='info'; platform=$pnameD
+    statement="headline for $($dmet.Count) metric(s) of ${pnameD} comes from the account KPI card rather than the document-earlier table total: $($dshown -join ', '); superseded widget(s): $($dwid -join ', ')"
+    evidence=[ordered]@{ metrics=@($dshown); count="$($dmet.Count)"; supersededWidgets=@($dwid) }
   })
 }
 # per-platform win/loss + gaps
@@ -802,7 +843,7 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 }
 $facts=[ordered]@{
   meta=[ordered]@{
-    tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=1; computedFrom=$doc.meta.tool
+    tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=2; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence; period=$periodMeta

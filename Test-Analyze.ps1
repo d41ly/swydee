@@ -355,18 +355,22 @@ A (HasFind $r8.facts 'GAP_NO_ACCOUNT_TOTAL') "e2e8: dimensioned no-total => GAP_
 $r10 = RunAnalyze (MkDoc @( (DW 'w-tot' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 3000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 1000000000)}))) ))
 $h10 = Hl $r10.facts 'google-adwords' 'google-adwords:cost_micros'
 A ($null -ne $h10 -and $h10.canonical.scope -eq 'table-total:Campaign' -and $h10.canonical.source -eq 'total-row') "e2e10: dimensioned total row => scope=table-total:Campaign source=total-row (never bare account)"
-# 11. two widgets same (prov,metricId): document-order first-wins decides sourceWidgetId (no rank reordering)
+# 11. two widgets same (prov,metricId): U9/D2 rank precedence - a later zero-dim KPI (w-second) supersedes the
+# doc-earlier table total (w-first). THIS IS THE U9 FLIP PIN (was document-order first-wins pre-U9).
 $r11 = RunAnalyze (MkDoc @(
   (DW 'w-first' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)}))),
   (DW 'w-second' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 9999000000)})))
 ))
-A ((Hl $r11.facts 'google-adwords' 'google-adwords:cost_micros').canonical.sourceWidgetId -eq 'w-first') "e2e11: document-order first-wins (w-first, not the later KPI card)"
+$h11 = Hl $r11.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($h11.canonical.sourceWidgetId -eq 'w-second') "e2e11/U9: rank-1 KPI (w-second) supersedes doc-earlier table total (w-first)"
+A ($h11.canonical.scope -eq 'account' -and $h11.canonical.source -eq 'kpi-widget') "e2e11/U9: winner canonical scope=account source=kpi-widget"
+A ($h11.canonical.supersededWidgetId -eq 'w-first') "e2e11/U9: canonical.supersededWidgetId names the displaced table (w-first)"
 # 12/13. every headline cell carries the canonical struct; canonical.display==displayCurrent; no value/basisVersion/synthesizedFrom
 A ($h9.canonical.display -eq $h9.displayCurrent) "e2e12: canonical.display == displayCurrent"
 foreach($kk in 'display','sourceWidgetId','scope','period','source'){ A ($h9.canonical.PSObject.Properties.Name -contains $kk) "e2e12: canonical carries '$kk'" }
 foreach($bad in 'value','basisVersion','synthesizedFrom'){ A (-not ($h9.canonical.PSObject.Properties.Name -contains $bad)) "e2e13: canonical has NO '$bad'" }
 # 14. meta versions
-A ($r9.facts.meta.canonicalVersion -eq 1 -and $r9.facts.meta.factsVersion -eq 1) "e2e14: meta.canonicalVersion=1, factsVersion=1"
+A ($r9.facts.meta.canonicalVersion -eq 2 -and $r9.facts.meta.factsVersion -eq 1) "e2e14/U9: meta.canonicalVersion=2 (D6 global bump), factsVersion=1"
 # 15. GAP_NO_ACCOUNT_TOTAL shape: info + fid + evidence.metrics
 $g15 = GetFind $r8.facts 'GAP_NO_ACCOUNT_TOTAL'
 A ($g15.severity -eq 'info' -and $g15.fid -and @($g15.evidence.metrics).Count -ge 1) "e2e15: GAP_NO_ACCOUNT_TOTAL severity=info, has fid, evidence.metrics listed"
@@ -609,6 +613,174 @@ A ($resA9.violations.Count -eq 0) "A9 closer clean with populated meta.period ('
 
 # U8-A10 (cross-derivation pin, D13): same anchor -> months and label agree
 A ($per.startYm -eq '2026-04' -and $per.endYm -eq '2026-06' -and $rA6.facts.meta.currentPeriod -eq 'Q2 2026') "A10 months (2026-04..2026-06) and label (Q2 2026) agree on the same anchor"
+
+Write-Host "== U9: headline rank precedence (zero-dim KPI beats doc-earlier table total) =="
+# U9-T1 flip core (E1): table-then-KPI -> KPI wins; GAP_HEADLINE_SOURCE_CHANGED info + fid + id/count evidence.
+$t1 = RunAnalyze (MkDoc @(
+  (DW 'w1-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)}))),
+  (DW 'w1-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 9999000000)})))
+))
+$h1 = Hl $t1.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($h1.current -eq 9999000000) "U9-T1: headline current is the KPI's (9999000000)"
+A ($h1.displayCurrent -eq (Format-Metric 'google-adwords:cost_micros' 'micros' 9999000000 'USD')) "U9-T1: displayCurrent is the KPI's"
+$f1 = GetFind $t1.facts 'GAP_HEADLINE_SOURCE_CHANGED'
+A ($null -ne $f1 -and $f1.severity -eq 'info' -and $f1.fid) "U9-T1: GAP_HEADLINE_SOURCE_CHANGED present, info, has fid"
+A (@($f1.evidence.metrics) -contains 'google-adwords:cost_micros') "U9-T1: evidence.metrics contains the flipped metric id"
+A (@($f1.evidence.supersededWidgets) -contains 'w1-tab') "U9-T1: evidence.supersededWidgets contains the table widget id"
+A ($f1.evidence.count -eq '1') "U9-T1: evidence.count == '1'"
+
+# U9-T2 no-flip byte guard (E2): KPI-then-table -> KPI wins at first encounter, byte-identical except D6 token.
+$t2 = RunAnalyze (MkDoc @(
+  (DW 'w2-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 9999000000)}))),
+  (DW 'w2-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)})))
+))
+$h2 = Hl $t2.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($h2.canonical.sourceWidgetId -eq 'w2-kpi' -and $h2.canonical.source -eq 'kpi-widget') "U9-T2: KPI-first wins at first encounter (no displacement)"
+A ($t2.text -notmatch 'supersededWidgetId') "U9-T2: no supersededWidgetId anywhere in non-flip facts"
+A (-not (HasFind $t2.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T2: no precedence finding on non-flip"
+A ($t2.facts.meta.canonicalVersion -eq 2) "U9-T2: canonicalVersion=2 even on non-flip (D6 global)"
+A ($t2.text -match '"current":9999000000,') "U9-T2: legacy current field byte-pinned unchanged"
+A ($t2.text -match [regex]::Escape('"displayCurrent":"$9,999.00"')) "U9-T2: legacy displayCurrent string byte-pinned unchanged"
+
+# U9-T3 same-rank doc-order pins (E3)
+$t3a = RunAnalyze (MkDoc @(
+  (DW 'w3a-k1' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 100000000)}))),
+  (DW 'w3a-k2' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 200000000)})))
+))
+A ((Hl $t3a.facts 'google-adwords' 'google-adwords:cost_micros').canonical.sourceWidgetId -eq 'w3a-k1') "U9-T3a: two KPIs => doc-first wins"
+A (-not (HasFind $t3a.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T3a: same-rank KPIs => no precedence finding"
+$t3b = RunAnalyze (MkDoc @(
+  (DW 'w3b-t1' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 300000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 300000000)}))),
+  (DW 'w3b-t2' 'google-adwords' 'Google Ads' @('Device') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Device' @{Cost=(Cell 400000000)}),(DRow 'data' 'B' 'Device' @{Cost=(Cell 400000000)})))
+))
+A ((Hl $t3b.facts 'google-adwords' 'google-adwords:cost_micros').canonical.sourceWidgetId -eq 'w3b-t1') "U9-T3b: two table totals => doc-first wins"
+A (-not (HasFind $t3b.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T3b: same-rank totals => no precedence finding"
+
+# U9-T4 single displacement (E7): table, KPI-1, KPI-2 -> KPI-1 wins; second cannot re-displace; one metric entry.
+$t4 = RunAnalyze (MkDoc @(
+  (DW 'w4-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)}))),
+  (DW 'w4-k1' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 5000000000)}))),
+  (DW 'w4-k2' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 6000000000)})))
+))
+$h4 = Hl $t4.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($h4.canonical.sourceWidgetId -eq 'w4-k1') "U9-T4: first KPI (w4-k1) wins; second KPI cannot re-displace"
+A ($h4.canonical.supersededWidgetId -eq 'w4-tab') "U9-T4: supersededWidgetId still names the rank-2 table, never a KPI"
+$f4 = GetFind $t4.facts 'GAP_HEADLINE_SOURCE_CHANGED'
+A (@($f4.evidence.metrics).Count -eq 1 -and $f4.evidence.count -eq '1') "U9-T4: exactly one displacement recorded (no chaining)"
+
+# U9-T5 blended never displaces (E4)
+$t5 = RunAnalyze (MkDoc @(
+  (DW 'w5-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)}))),
+  (DW 'w5-blend' $null $null @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 9999000000)})) @([pscustomobject]@{id='google-adwords';name='Google Ads'},[pscustomobject]@{id='provb';name='Provider B'}))
+))
+A ((Hl $t5.facts 'google-adwords' 'google-adwords:cost_micros').canonical.sourceWidgetId -eq 'w5-tab') "U9-T5: blended zero-dim widget never displaces (table stays)"
+A (-not (HasFind $t5.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T5: blended non-displacement => no finding"
+A ($t5.text -notmatch 'w5-blend') "U9-T5: blended widget absent from any canonical.sourceWidgetId"
+
+# U9-T6 (D9): #5 independence - the u5a layout (table 120 > KPI 100) flips headline to the KPI, #5 still fires,
+# and the headline winner + #5's ceiling now cite the same figure.
+$h6 = Hl $u5a.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($h6.canonical.sourceWidgetId -eq 'w5a-kpi' -and $h6.canonical.source -eq 'kpi-widget') "U9-T6: u5a headline flips to the 100 KPI (w5a-kpi)"
+A (HasFind $u5a.facts 'RECON_SLICE_OVER_ACCOUNT') "U9-T6: #5 still fires (re-derived from dataWidgets, flip-independent)"
+A ($h6.displayCurrent -eq $f5a.evidence.account) "U9-T6: headline winner and #5 evidence.account now cite the same figure"
+A (HasFind $u5a.facts 'GAP_HEADLINE_SOURCE_CHANGED') "U9-T6: the u5a flip is disclosed"
+
+# U9-T7 key-order stability: only the MIDDLE of three metrics flips -> headline key order unchanged.
+$t7 = RunAnalyze (MkDoc @(
+  (DW 'w7-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Clicks' 'google-adwords:clicks'),(Met 'Impr' 'google-adwords:impressions'),(Met 'Conv' 'google-adwords:conversions')) @((DRow 'total' $null 'Campaign' @{Clicks=(Cell 10);Impr=(Cell 100);Conv=(Cell 5)}),(DRow 'data' 'A' 'Campaign' @{Clicks=(Cell 10);Impr=(Cell 100);Conv=(Cell 5)}))),
+  (DW 'w7-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Impr' 'google-adwords:impressions')) @((KRow @{Impr=(Cell 999)})))
+))
+$pi_c = $t7.text.IndexOf('google-adwords:clicks'); $pi_i = $t7.text.IndexOf('google-adwords:impressions'); $pi_v = $t7.text.IndexOf('google-adwords:conversions')
+A ($pi_c -ge 0 -and $pi_c -lt $pi_i -and $pi_i -lt $pi_v) "U9-T7: headline key order stable across in-place flip (clicks<impressions<conversions)"
+A ((Hl $t7.facts 'google-adwords' 'google-adwords:impressions').canonical.sourceWidgetId -eq 'w7-kpi') "U9-T7: middle metric flipped to the KPI"
+
+# U9-T8 rollup + cap (FP-2): 25 table-won metrics displaced by a later 25-metric KPI -> ONE finding, count 25, cap 20.
+$mets8=@(); $mv8=@{}; foreach($i in 1..25){ $mets8 += (Met "M$i" "google-adwords:m$i"); $mv8["M$i"]=(Cell (1000+$i)) }
+$t8 = RunAnalyze (MkDoc @(
+  (DW 'w8-tab' 'google-adwords' 'Google Ads' @('Campaign') $mets8 @((DRow 'total' $null 'Campaign' $mv8),(DRow 'data' 'A' 'Campaign' $mv8))),
+  (DW 'w8-kpi' 'google-adwords' 'Google Ads' @() $mets8 @((KRow $mv8)))
+))
+$f8=@((AllFind $t8.facts) | Where-Object { $_.ruleId -eq 'GAP_HEADLINE_SOURCE_CHANGED' })
+A ($f8.Count -eq 1) "U9-T8: exactly ONE GAP_HEADLINE_SOURCE_CHANGED per provider (rollup)"
+A ($f8[0].evidence.count -eq '25') "U9-T8: evidence.count == '25' (full count)"
+A (@($f8[0].evidence.metrics).Count -eq 21 -and ($f8[0].evidence.metrics[-1] -match '^\+5 more$')) "U9-T8: metrics capped at 20 + '+5 more' sentinel"
+
+# U9-T9 comparison recompute (E10): displaced compare-bearing cell + compareless KPI -> hasComparison false; control stays true.
+$t9 = RunAnalyze (MkDoc @(
+  (DW 'w9-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000 1000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000 1000000000)}))),
+  (DW 'w9-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 5000000000)})))
+))
+A ($t9.facts.meta.hasComparison -eq $false) "U9-T9: displaced compare cell + compareless KPI => meta.hasComparison false (D7)"
+A (@($t9.facts.meta.comparisonCaveats).Count -eq 0) "U9-T9: seasonality caveat drops when comparison drops"
+$t9b = RunAnalyze (MkDoc @(
+  (DW 'w9b-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Clicks' 'google-adwords:clicks')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000 1000000000);Clicks=(Cell 50 40)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000 1000000000);Clicks=(Cell 50 40)}))),
+  (DW 'w9b-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 5000000000)})))
+))
+A ($t9b.facts.meta.hasComparison -eq $true) "U9-T9: surviving compare-bearing cell (Clicks) keeps meta.hasComparison true"
+
+# U9-T10 winner-follows-facts (D8/E9): flip changes WIN->LOSS; null-unit KPI variant recomputes GAP_UNIT_UNCONFIRMED.
+$t10 = RunAnalyze (MkDoc @(
+  (DW 'w10-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Clicks' 'google-adwords:clicks')) @((DRow 'total' $null 'Campaign' @{Clicks=(Cell 200 100)}),(DRow 'data' 'A' 'Campaign' @{Clicks=(Cell 200 100)}))),
+  (DW 'w10-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks')) @((KRow @{Clicks=(Cell 50 100)})))
+))
+A ((HasFind $t10.facts 'LOSS') -and -not (HasFind $t10.facts 'WIN')) "U9-T10: WIN/LOSS follow the KPI winner (LOSS from KPI, not WIN from displaced table)"
+$t10b = RunAnalyze (MkDoc @(
+  (DW 'w10b-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)}))),
+  (DW 'w10b-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros')) @((KRow @{Cost=(Cell 500000000)})))
+))
+$g10b = GetFind $t10b.facts 'GAP_UNIT_UNCONFIRMED'; $h10b = Hl $t10b.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($h10b.canonical.sourceWidgetId -eq 'w10b-kpi') "U9-T10b: null-unit money KPI displaced the micros table (winner-follows-facts)"
+A ($null -ne $g10b -and $g10b.statement -match [regex]::Escape([string]$h10b.displayCurrent)) "U9-T10b: GAP_UNIT_UNCONFIRMED recomputes from the KPI raw display"
+
+# U9-T11 closer graceful-ignore + no-value evidence (FP-3)
+$rep11 = "## Google Ads`n<!-- platform:google-adwords -->`nCost was $($h1.displayCurrent) this period.`n"
+$res11 = Invoke-Closer $rep11 $t1.facts
+A ($res11.violations.Count -eq 0) "U9-T11: closer clean over flip facts, finding not cited (info never force-surfaces; got $($res11.violations.Count))"
+A ($f1.statement -notmatch '[\$%]') "U9-T11: precedence statement carries no formatted metric value (id-only)"
+
+# U9-T12 gap invariance (D9)
+$t12 = RunAnalyze (MkDoc @(
+  (DW 'w12-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)}))),
+  (DW 'w12-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 5000000000)}))),
+  (DW 'w12-notot' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Clicks' 'google-adwords:clicks')) @((DRow 'data' 'A' 'Campaign' @{Clicks=(Cell 10)}),(DRow 'data' 'B' 'Campaign' @{Clicks=(Cell 20)})))
+))
+$g12 = GetFind $t12.facts 'GAP_NO_ACCOUNT_TOTAL'
+A ($null -ne $g12 -and (@($g12.evidence.metrics) -contains 'google-adwords:clicks')) "U9-T12: uncovered metric (clicks, no total) still gets GAP_NO_ACCOUNT_TOTAL"
+A (-not (@($g12.evidence.metrics) -contains 'google-adwords:cost_micros')) "U9-T12: flipped metric (cost) NOT in gap (headline key exists)"
+A (HasFind $t12.facts 'GAP_HEADLINE_SOURCE_CHANGED') "U9-T12: cost flip disclosed"
+
+# U9-T13 null-dimensions KPI displaces (E5): dimensions literally $null (not @()) is treated as zero-dim.
+$w13tab = (DW 'w13-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)})))
+$w13kpi = [pscustomobject]@{ kind='data'; id='w13-kpi'; providers=@([pscustomobject]@{id='google-adwords';name='Google Ads'}); currencyCode='USD'; dimensions=$null; metrics=@((Met 'Cost' 'google-adwords:cost_micros' 'micros')); rows=@((KRow @{Cost=(Cell 5000000000)})) }
+$t13 = RunAnalyze (MkDoc @($w13tab,$w13kpi))
+$h13 = Hl $t13.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($h13.canonical.sourceWidgetId -eq 'w13-kpi' -and $h13.canonical.source -eq 'kpi-widget') "U9-T13: null-dimensions KPI treated as zero-dim => displaces the table"
+
+# U9-T14 non-numeric KPI cell does not displace (E6): echo-object current fails the scalar guard.
+$t14 = RunAnalyze (MkDoc @(
+  (DW 'w14-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)}))),
+  (DW 'w14-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell ([pscustomobject]@{lo=1;hi=2}))})))
+))
+A ((Hl $t14.facts 'google-adwords' 'google-adwords:cost_micros').canonical.sourceWidgetId -eq 'w14-tab') "U9-T14: echo-object KPI cell fails scalar guard => table stays"
+A (-not (HasFind $t14.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T14: no displacement => no finding"
+
+# U9-T15 DISC unchanged (D9): two disagreeing KPIs after a table -> flip to doc-first KPI + DISC_CROSS_WIDGET major.
+$t15 = RunAnalyze (MkDoc @(
+  (DW 'w15-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 2000000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 2000000000)}))),
+  (DW 'w15-k1' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 5000000000)}))),
+  (DW 'w15-k2' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 8000000000)})))
+))
+A ((Hl $t15.facts 'google-adwords' 'google-adwords:cost_micros').canonical.sourceWidgetId -eq 'w15-k1') "U9-T15: flip to doc-first KPI (w15-k1); second KPI cannot re-displace"
+A (HasFind $t15.facts 'DISC_CROSS_WIDGET') "U9-T15: DISC_CROSS_WIDGET still fires on the disagreeing KPI pair (headline-independent)"
+
+# U9-T16 displacement-guard null-check (AMENDMENTS): a metric id colliding with the boolean 'hasComparison'
+# headline key must NOT be displaced/corrupted - it degrades to exact pre-U9 first-wins.
+$t16 = RunAnalyze (MkDoc @(
+  (DW 'w16-a' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks')) @((KRow @{Clicks=(Cell 200 100)}))),
+  (DW 'w16-b' 'google-adwords' 'Google Ads' @() @((Met 'HC' 'hasComparison')) @((KRow @{HC=(Cell 5)})))
+))
+A ($t16.facts.meta.hasComparison -eq $true) "U9-T16: 'hasComparison'-colliding metric id degrades to first-wins; boolean key uncorrupted"
+A (-not (HasFind $t16.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T16: collision with the boolean key does not register as a displacement"
 
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
