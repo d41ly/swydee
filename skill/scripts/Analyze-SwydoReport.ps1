@@ -160,7 +160,7 @@ function Get-BrandTokens($clientName){
   return $out
 }
 function Test-PMaxLabel($label){
-  return [bool](([string]$label) -match '(?i)((^|[^a-z])p[\s._-]?max([^a-z]|$))|performance[\s._-]*max')
+  return [bool](([string]$label) -match '(?i)((^|[^a-z])p[\s._-]?max([^a-z]|$))|performance[\s._-]*max([^a-z]|$)')
 }
 # U10/D6-S2: self-declared "brand" (lookahead [\s_-]+new kills "Brand New"/"Brand-New"); S3: full client phrase
 # (space-padded Contains so client "Metro Bank" does NOT match campaign "Metro Bankers Golf Promo").

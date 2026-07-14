@@ -811,7 +811,7 @@ A (-not (Test-RankableCostWidget $nr6)) "U10-4 not rankable: only link_click cos
 # 5. Test-PMaxLabel TRUE
 foreach($l in 'inS - PMax - Quincy General','Performance Max - Brand','pmax_general','P Max Launch','P.Max 2026'){ A (Test-PMaxLabel $l) "U10-5 PMax TRUE: $l" }
 # 6. Test-PMaxLabel FALSE
-foreach($l in 'TopMax Deals','CompMax','Search - Auto Loans'){ A (-not (Test-PMaxLabel $l)) "U10-6 PMax FALSE: $l" }
+foreach($l in 'TopMax Deals','CompMax','Search - Auto Loans','High Performance Maximizer','Performance Maximization Campaign'){ A (-not (Test-PMaxLabel $l)) "U10-6 PMax FALSE: $l" }
 A (-not (Test-PMaxLabel '')) "U10-6 PMax FALSE: empty"
 A (-not (Test-PMaxLabel $null)) "U10-6 PMax FALSE: null"
 # 7. Get-BrandTokens
