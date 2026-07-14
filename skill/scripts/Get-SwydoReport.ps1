@@ -324,6 +324,44 @@ function Get-WidgetCeiling($w){
   return $R
 }
 
+# U8: resolve the report's RELATIVE date range to a concrete calendar span at extraction time.
+# Accepted domain (live-verified family ONLY): type RELATIVE, count -1, measure month|quarter|year
+# => the single complete calendar <measure> immediately BEFORE the anchor's current one (the
+# Derive-Periods rule, verified live on the QCU quarter report). Anything else => primary=$null
+# plus a note: an honest non-answer, never a guessed span (a wrong span could later feed U7b's
+# only major). Pure; $anchor is a [datetime]; date-only arithmetic; InvariantCulture formatting.
+# count cast is [double] NOT [int]: PS 5.1 [int] banker's-rounds -0.6/-1.4 to -1, which would
+# resolve a fractional hand-edited count to a complete span (violates D1). [double] keeps -1 exact.
+function Resolve-ReportPeriod($dateRange,$anchor){
+  $inv=[Globalization.CultureInfo]::InvariantCulture
+  $out=[ordered]@{ resolverVersion=1; rule='relative-last-complete'
+                   anchorDate=(([datetime]$anchor).Date).ToString('yyyy-MM-dd',$inv); primary=$null }
+  $p=$null; if($dateRange){ $p=$dateRange.primary }
+  if($null -eq $p){ $out.note='unresolved: no primary date range'; return $out }
+  if([string]$p.type -ne 'RELATIVE'){ $out.note=('unresolved: type ''' + [string]$p.type + ''''); return $out }
+  $n=$null; try{ $n=[double]$p.count }catch{}
+  if($n -ne -1){ $out.note=('unresolved: count ''' + [string]$p.count + ''' (only -1 verified)'); return $out }
+  $meas=([string]$p.measure).ToLowerInvariant()
+  # UNATTENDED DOMAIN (amendment, fatigue must-fix): accepted measure SHRINKS to 'quarter' only.
+  # quarter/-1 is the sole live-verified pair; month/-1 and year/-1 cannot be resolved unattended
+  # (the last-complete-vs-current-partial semantic needs a credentialed live probe) so they resolve
+  # to the null triple. The arithmetic below stays measure-general for the post-probe widening.
+  if(@('quarter') -notcontains $meas){ $out.note=('unresolved: measure ''' + [string]$p.measure + ''' (unattended domain: quarter/-1 only)'); return $out }
+  $a=([datetime]$anchor).Date
+  $curStart=New-Object DateTime($a.Year,$a.Month,1); $span=1
+  if($meas -eq 'quarter'){ $qm=((([int][math]::Floor(($a.Month-1)/3))*3)+1); $curStart=New-Object DateTime($a.Year,$qm,1); $span=3 }
+  elseif($meas -eq 'year'){ $curStart=New-Object DateTime($a.Year,1,1); $span=12 }
+  $startDate=$curStart.AddMonths(-1*$span)
+  $endDate=$curStart.AddDays(-1)
+  $out.primary=[ordered]@{
+    measure=$meas; count=-1
+    startDate=$startDate.ToString('yyyy-MM-dd',$inv); endDate=$endDate.ToString('yyyy-MM-dd',$inv)
+    startYm=$startDate.ToString('yyyy-MM',$inv);      endYm=$endDate.ToString('yyyy-MM',$inv)
+    calendarAligned=(($startDate.Day -eq 1) -and ($endDate.AddDays(1).Day -eq 1))
+  }
+  return $out
+}
+
 if($DefineOnly){ return }   # dot-source stops here (functions loaded, nothing run)
 
 # ================================ run ================================
@@ -350,6 +388,8 @@ $structRaw = Invoke-GQL $structQ @{id=$reportId}
 $s = ($structRaw | ConvertFrom-Json).data.report
 if(-not $s){ throw "structure query returned no report: $structRaw" }
 $script:dr=$s.dateRange; $script:cp=$s.compareDateRange
+$script:drResolved = Resolve-ReportPeriod $s.dateRange (Get-Date)   # U8: anchor = structure-fetch moment
+if($script:drResolved.primary){ Write-Host ("period resolved: {0}..{1}" -f $script:drResolved.primary.startYm, $script:drResolved.primary.endYm) }
 $script:secMap=@{}; if($s.sections){ $s.sections | ForEach-Object { $script:secMap[$_.id]=$_.name } }
 # full provider inventory (from the UNFILTERED structure) so downstream always knows what exists,
 # even when --platform pulls a subset (additive-in-facts; a filtered report can't look complete).
@@ -485,7 +525,7 @@ $doc = [ordered]@{
   report = [ordered]@{
     name=$s.name; subtitle=$s.subtitle; orientation=$s.orientation
     client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName
-    dateRange=$s.dateRange; compareDateRange=$s.compareDateRange
+    dateRange=$s.dateRange; compareDateRange=$s.compareDateRange; dateRangeResolved=$script:drResolved
     sections=@($s.sections|ForEach-Object{ [ordered]@{id=$_.id;name=$_.name} }); custom=$s.custom
   }
   widgets = $widgetsOut

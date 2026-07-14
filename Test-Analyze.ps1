@@ -54,6 +54,45 @@ A ($p.confidence -eq 'derived') "period confidence derived"
 $p2=Derive-Periods '2026-02-15T00:00:00+00:00' $dr   # extracted in Q1 -> last complete = Q4 2025
 A ($p2.current -eq 'Q4 2025' -and $p2.previous -eq 'Q3 2025') "cross-year quarter (got $($p2.current)/$($p2.previous))"
 
+Write-Host "== U8/D-period: Get-PeriodMeta (-DefineOnly) =="
+function PmDR($measure){ [pscustomobject]@{ primary=[pscustomobject]@{ count=-1; measure=$measure; type='RELATIVE' } } }
+function PmRes($startYm,$endYm,$aligned,$version){ if($null -eq $version){ $version=1 }; [pscustomobject]@{ resolverVersion=$version; rule='relative-last-complete'; anchorDate='2026-07-06'; primary=[pscustomobject]@{ measure='quarter'; count=-1; startDate='2026-04-01'; endDate='2026-06-30'; startYm=$startYm; endYm=$endYm; calendarAligned=$aligned } } }
+
+# U8-A1: resolved input -> full triple copied
+$pm1 = Get-PeriodMeta (PmDR 'quarter') (PmRes '2026-04' '2026-06' $true $null)
+A ($pm1.measure -eq 'quarter') "A1 measure quarter"
+A ($pm1.startYm -eq '2026-04' -and $pm1.endYm -eq '2026-06') "A1 startYm/endYm copied"
+A ($pm1.calendarAligned -eq $true) "A1 calendarAligned true"
+A ((@($pm1.Keys) -join ',') -eq 'measure,startYm,endYm,calendarAligned') "A1 exactly four keys"
+
+# U8-A2: resolved $null (legacy doc) -> measure from wire, null triple
+$pm2 = Get-PeriodMeta (PmDR 'quarter') $null
+A ($pm2.measure -eq 'quarter' -and $null -eq $pm2.startYm -and $null -eq $pm2.endYm -and $pm2.calendarAligned -eq $false) "A2 legacy => measure from wire, null triple"
+
+# U8-A3 (FP): malformed startYm -> null triple (regex guard, no partial copy)
+foreach($bad in @('2026-4','garbage',$null,'2026-13','2026-00')){
+  $pmB = Get-PeriodMeta (PmDR 'quarter') (PmRes $bad '2026-06' $true $null)
+  A ($null -eq $pmB.startYm -and $null -eq $pmB.endYm -and $pmB.calendarAligned -eq $false) "A3 malformed startYm '$bad' => null triple"
+}
+# Unicode-digit fixture: '2026-04' rendered in Arabic-Indic digits must be REJECTED (guard is [0-9], not \d)
+$ai = -join @([char]0x0662,[char]0x0660,[char]0x0662,[char]0x0666,'-',[char]0x0660,[char]0x0664)
+$pmU = Get-PeriodMeta (PmDR 'quarter') (PmRes $ai '2026-06' $true $null)
+A ($null -eq $pmU.startYm -and $pmU.calendarAligned -eq $false) "A3 Unicode-digit startYm => rejected (null triple)"
+# and a Unicode-digit endYm with a valid startYm
+$pmU2 = Get-PeriodMeta (PmDR 'quarter') (PmRes '2026-04' $ai $true $null)
+A ($null -eq $pmU2.startYm -and $null -eq $pmU2.endYm) "A3 Unicode-digit endYm => rejected (both null)"
+
+# U8-A4 (FP): unrecognized resolverVersion -> null triple (not trusted)
+$pm4 = Get-PeriodMeta (PmDR 'quarter') (PmRes '2026-04' '2026-06' $true 99)
+A ($null -eq $pm4.startYm -and $null -eq $pm4.endYm -and $pm4.calendarAligned -eq $false) "A4 resolverVersion 99 => null triple"
+
+# U8-A5: dateRange $null -> measure 'custom', null triple
+$pm5 = Get-PeriodMeta $null $null
+A ($pm5.measure -eq 'custom' -and $null -eq $pm5.startYm -and $pm5.calendarAligned -eq $false) "A5 null dateRange => measure custom, null triple"
+
+# meta.period is ALWAYS present (all branches return the 4-key dict)
+A ((@($pm2.Keys) -join ',') -eq 'measure,startYm,endYm,calendarAligned') "A5 shape always 4 keys (legacy)"
+
 Write-Host "== Scrub / Assert-NoCredential =="
 $doc=[pscustomobject]@{ meta=[pscustomobject]@{ shareKey='ofDCabc'; shareUrl='https://swy.do/shares/ofDCabc'; extractedAt='2026' } }
 $doc=Scrub-Credential $doc
@@ -277,11 +316,13 @@ function DW($id,$prov,$pname,$dims,$mets,$rows,$providersOverride,$cc){
   $ccv = if($cc){ $cc } else { 'USD' }
   [pscustomobject]@{ kind='data'; id=$id; providers=$provs; currencyCode=$ccv; dimensions=@($dims); metrics=$mets; rows=$rows }
 }
-function MkDoc($widgets,$measure){
+function MkDoc($widgets,$measure,$resolved){
   if(-not $measure){ $measure='quarter' }
+  $rep=[pscustomobject]@{ name='E2E Test'; client='E2E Client'; dateRange=[pscustomobject]@{ primary=[pscustomobject]@{ count=-1; measure=$measure; type='RELATIVE' } }; sections=@() }
+  if($null -ne $resolved){ $rep | Add-Member -NotePropertyName dateRangeResolved -NotePropertyValue $resolved }   # U8: additive key ONLY when non-null (legacy fixtures stay byte-identical)
   [pscustomobject]@{
     meta=[pscustomobject]@{ schemaVersion=2; tool='Get-SwydoReport.ps1'; extractedAt='2026-07-06T02:23:57+03:00'; warnings=@(); providerFilter=@(); providerInventory=@(); clientId='C1'; unitBasis=$null }
-    report=[pscustomobject]@{ name='E2E Test'; client='E2E Client'; dateRange=[pscustomobject]@{ primary=[pscustomobject]@{ count=-1; measure=$measure; type='RELATIVE' } }; sections=@() }
+    report=$rep
     widgets=@($widgets)
   }
 }
@@ -533,6 +574,41 @@ A (CloserHasT $resU4b 'unsurfaced-finding') "closer-u7a4: dropping the #4 major'
 $repU3 = "## Google Ads`n<!-- platform:google-adwords -->`nReported ROAS was $($f3j.evidence.reported); the components imply $($f3j.evidence.recomputed). <!-- finding:$($f3j.fid) -->`n"
 $resU3 = Invoke-Closer $repU3 $u3j.facts
 A (-not (CloserHasT $resU3 'untraceable-number')) "closer-u7a3: ROAS recompute ($($f3j.evidence.recomputed)) traces on fid line (plain numeric, not <mult>-exempt)"
+
+Write-Host "== U8/D-period: e2e (real script over a v2 doc) =="
+function MkQtrResolved(){ [pscustomobject]@{ resolverVersion=1; rule='relative-last-complete'; anchorDate='2026-07-06'; primary=[pscustomobject]@{ measure='quarter'; count=-1; startDate='2026-04-01'; endDate='2026-06-30'; startYm='2026-04'; endYm='2026-06'; calendarAligned=$true } } }
+$wKPI = @( (DW 'w-p' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Clicks' 'google-adwords:clicks')) @((KRow @{Cost=(Cell 10864723050);Clicks=(Cell 15627)}))) )
+
+# U8-A6: doc WITH dateRangeResolved -> facts.meta.period == the 4-key resolved triple
+$rA6 = RunAnalyze (MkDoc $wKPI 'quarter' (MkQtrResolved))
+$per = $rA6.facts.meta.period
+A ($null -ne $per) "A6 meta.period present"
+A ($per.measure -eq 'quarter' -and $per.startYm -eq '2026-04' -and $per.endYm -eq '2026-06' -and $per.calendarAligned -eq $true) "A6 meta.period == resolved triple"
+A ((@($per.PSObject.Properties.Name) -join ',') -eq 'measure,startYm,endYm,calendarAligned') "A6 meta.period key set exactly four"
+
+# U8-A7 (FP): legacy doc (no dateRangeResolved) -> meta.period present, null triple, no GAP_WARNINGS, finding parity
+$rA7 = RunAnalyze (MkDoc $wKPI)          # no resolved param => no dateRangeResolved key (legacy)
+$perL = $rA7.facts.meta.period
+A ($null -ne $perL -and $null -eq $perL.startYm -and $null -eq $perL.endYm -and $perL.calendarAligned -eq $false) "A7 legacy => meta.period present, null triple"
+A (-not (HasFind $rA7.facts 'GAP_WARNINGS')) "A7 legacy => no GAP_WARNINGS from period"
+A ((AllFind $rA7.facts).Count -eq (AllFind $rA6.facts).Count) "A7 zero-findings parity (resolved vs legacy same finding count)"
+
+# U8-A8 (byte-stability): the human-facing period labels are byte-identical on BOTH fixtures
+foreach($rr in @($rA6,$rA7)){
+  A ($rr.facts.meta.currentPeriod -eq 'Q2 2026') "A8 currentPeriod 'Q2 2026' unchanged"
+  A ($rr.facts.meta.previousPeriod -eq 'Q1 2026') "A8 previousPeriod 'Q1 2026' unchanged"
+  A ($rr.facts.meta.periodConfidence -eq 'derived') "A8 periodConfidence 'derived' unchanged"
+}
+$hlA6 = Hl $rA6.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($hlA6.canonical.period -eq (Hl $rA7.facts 'google-adwords' 'google-adwords:cost_micros').canonical.period) "A8 canonical.period byte-identical resolved vs legacy"
+
+# U8-A9 (closer pin): closer over facts carrying a populated meta.period stays clean (haystack unchanged)
+$repA9 = "## Google Ads`n<!-- platform:google-adwords -->`nCost was `$10,864.72 on 15,627 clicks this period.`n"
+$resA9 = Invoke-Closer $repA9 $rA6.facts
+A ($resA9.violations.Count -eq 0) "A9 closer clean with populated meta.period ('2026-04' tokens do not become traceable numbers; got $($resA9.violations.Count))"
+
+# U8-A10 (cross-derivation pin, D13): same anchor -> months and label agree
+A ($per.startYm -eq '2026-04' -and $per.endYm -eq '2026-06' -and $rA6.facts.meta.currentPeriod -eq 'Q2 2026') "A10 months (2026-04..2026-06) and label (Q2 2026) agree on the same anchor"
 
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})

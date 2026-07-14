@@ -228,6 +228,24 @@ function Derive-Periods($extractedAt,$dateRange){
   } catch {}
   return $out
 }
+# U8/D-period read-through: facts.meta.period, consumed by U7b #6 (cross-widget-reconciliation-spec
+# R18 gate 1). A pure COPY of the extractor-persisted resolution -- NO date arithmetic here (resolve
+# once, at extraction time, persist as data; the analyzer/model never derives months from a label).
+# Null triple (startYm/endYm=$null, calendarAligned=$false) for legacy/unresolved/unrecognized input;
+# U7b hard-degrades that to info RECON_TREND_COVERAGE, never major. The YYYY-MM guard uses [0-9] and an
+# explicit month range (NOT \d, which admits Unicode digits + months 13-99) so hand-edited garbage
+# (e.g. '2026-13', Arabic-Indic digits) cannot reach facts.meta.period. meta.period is ALWAYS present.
+function Get-PeriodMeta($dateRange,$resolved){
+  $meas='custom'
+  if($dateRange -and $dateRange.primary -and $dateRange.primary.measure){ $meas=([string]$dateRange.primary.measure).ToLowerInvariant() }
+  $out=[ordered]@{ measure=$meas; startYm=$null; endYm=$null; calendarAligned=$false }
+  $rp=$null; if($resolved -and ($resolved.resolverVersion -eq 1)){ $rp=$resolved.primary }
+  if($rp -and ([string]$rp.startYm -match '^[0-9]{4}-(0[1-9]|1[0-2])$') -and ([string]$rp.endYm -match '^[0-9]{4}-(0[1-9]|1[0-2])$')){
+    $out.startYm=[string]$rp.startYm; $out.endYm=[string]$rp.endYm
+    $out.calendarAligned=($rp.calendarAligned -eq $true)
+  }
+  return $out
+}
 # credential scrub: remove shareKey/shareUrl in place on a parsed doc
 function Scrub-Credential($doc){
   if($doc.meta){ 'shareKey','shareUrl' | ForEach-Object { if($doc.meta.PSObject.Properties.Name -contains $_){ $doc.meta.PSObject.Properties.Remove($_) } } }
@@ -572,6 +590,7 @@ if(-not $doc.report -or -not $doc.report.name -or -not $doc.widgets){ throw "not
 $doc = Scrub-Credential $doc
 
 $periods = Derive-Periods $doc.meta.extractedAt $doc.report.dateRange
+$periodMeta = Get-PeriodMeta $doc.report.dateRange $doc.report.dateRangeResolved   # U8: D-period read-through
 $dataWidgets = @($doc.widgets | Where-Object { $_.kind -eq 'data' })
 if($dataWidgets.Count -eq 0){ throw "no data widgets to analyze (all text/empty)" }
 
@@ -786,7 +805,7 @@ $facts=[ordered]@{
     tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
-    currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence
+    currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence; period=$periodMeta
     hasComparison=$hasCmp; comparisonCaveats=$caveats;
     providers=@($platforms.Values | ForEach-Object { [ordered]@{ id=$_.id; name=$_.name; category=$_.category } })
     dataWidgets=$dataWidgets.Count; unitBasis=$doc.meta.unitBasis

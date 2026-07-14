@@ -173,6 +173,97 @@ Assert (-not (Test-ProviderMatch @('facebook-ads') @('google-adwords'))) "match:
 Assert (Test-ProviderMatch @('google-adwords','facebook-ads') @('facebook-ads')) "match: blended widget kept if ANY provider wanted (whole widget)"
 Assert (Test-ProviderMatch @('anything') @()) "match: no filter => keep all"
 
+Write-Host "== U8: Resolve-ReportPeriod =="
+# build a wire-shaped dateRange fixture: { primary: { count, measure, type } }
+function DR($count,$measure,$type){ [pscustomobject]@{ primary=[pscustomobject]@{ count=$count; measure=$measure; type=$type }; comparison=$null; baseDate=$null; timeZone=$null } }
+function AT($y,$m,$d){ New-Object DateTime($y,$m,$d) }
+
+# U8-E1: the live-verified pair (quarter/-1 @ 2026-07-06) => 2026-04..2026-06, wrapper fields
+$r1 = Resolve-ReportPeriod (DR -1 'quarter' 'RELATIVE') (AT 2026 7 6)
+Assert ($r1.resolverVersion -eq 1) "E1 resolverVersion 1"
+Assert ($r1.rule -eq 'relative-last-complete') "E1 rule"
+Assert ($r1.anchorDate -eq '2026-07-06') "E1 anchorDate"
+Assert (-not $r1.Contains('note')) "E1 no note when resolved"
+Assert ($r1.primary.startDate -eq '2026-04-01') "E1 startDate 2026-04-01"
+Assert ($r1.primary.endDate -eq '2026-06-30') "E1 endDate 2026-06-30"
+Assert ($r1.primary.startYm -eq '2026-04') "E1 startYm 2026-04"
+Assert ($r1.primary.endYm -eq '2026-06') "E1 endYm 2026-06"
+Assert ($r1.primary.calendarAligned -eq $true) "E1 calendarAligned true"
+Assert ($r1.primary.measure -eq 'quarter' -and $r1.primary.count -eq -1) "E1 measure/count echo"
+
+# U8-E2: cross-year quarter (mirrors TA label pin @ 2026-02-15 => Q4 2025)
+$r2 = Resolve-ReportPeriod (DR -1 'quarter' 'RELATIVE') (AT 2026 2 15)
+Assert ($r2.primary.startYm -eq '2025-10' -and $r2.primary.endYm -eq '2025-12') "E2 2025-10..2025-12"
+
+# U8-E3: boundary day (July 1 belongs to the new quarter; Q2 is last complete)
+$r3 = Resolve-ReportPeriod (DR -1 'quarter' 'RELATIVE') (AT 2026 7 1)
+Assert ($r3.primary.startYm -eq '2026-04' -and $r3.primary.endYm -eq '2026-06') "E3 boundary day still Q2"
+
+# U8-E4: month/-1 UNRESOLVED under the unattended domain (shrunk to quarter/-1 only)
+$r4 = Resolve-ReportPeriod (DR -1 'month' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $r4.primary) "E4 month/-1 -> null (unattended domain: quarter-only)"
+Assert ($r4.Contains('note') -and $r4.note -match 'measure') "E4 month note names measure"
+
+# U8-E5: year/-1 UNRESOLVED under the unattended domain
+$r5 = Resolve-ReportPeriod (DR -1 'year' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $r5.primary) "E5 year/-1 -> null (unattended domain: quarter-only)"
+Assert ($r5.Contains('note') -and $r5.note -match 'measure') "E5 year note names measure"
+
+# U8-E8 (FP): week/-1 -> null, note names measure, no throw
+$r8 = Resolve-ReportPeriod (DR -1 'week' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $r8.primary -and $r8.note -match 'measure') "E8 week/-1 -> null with measure note"
+
+# U8-E9 (FP): day/-30 -> null (count out of domain first)
+$r9 = Resolve-ReportPeriod (DR -30 'day' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $r9.primary) "E9 day/-30 -> null"
+
+# U8-E10 (FP): multi-count relative -> all null with a count note (EC-7)
+foreach($cc in @(-3,-2,0,1)){
+  $rc = Resolve-ReportPeriod (DR $cc 'quarter' 'RELATIVE') (AT 2026 7 6)
+  Assert ($null -eq $rc.primary -and $rc.note -match 'count') "E10 quarter/$cc -> null with count note"
+}
+$rm3 = Resolve-ReportPeriod (DR -3 'month' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $rm3.primary -and $rm3.note -match 'count') "E10 month/-3 -> null (count note)"
+
+# U8-E11 (FP): non-RELATIVE type, null type, null dateRange, missing primary -> null, no throw
+$r11a = Resolve-ReportPeriod (DR -1 'quarter' 'PERIOD') (AT 2026 7 6)
+Assert ($null -eq $r11a.primary -and $r11a.note -match 'type') "E11 type PERIOD -> null with type note"
+$r11b = Resolve-ReportPeriod (DR -1 'quarter' $null) (AT 2026 7 6)
+Assert ($null -eq $r11b.primary -and $r11b.note -match 'type') "E11 type null -> null with type note"
+$r11c = Resolve-ReportPeriod $null (AT 2026 7 6)
+Assert ($null -eq $r11c.primary -and $r11c.note -match 'primary') "E11 null dateRange -> null, no throw"
+$r11d = Resolve-ReportPeriod ([pscustomobject]@{ primary=$null }) (AT 2026 7 6)
+Assert ($null -eq $r11d.primary -and $r11d.note -match 'primary') "E11 missing primary -> null, no throw"
+
+# U8-E12: count typing tolerance + fractional banker's-rounding guard (the [double] cast must-fix)
+$r12a = Resolve-ReportPeriod (DR ([long]-1) 'quarter' 'RELATIVE') (AT 2026 7 6)
+Assert ($r12a.primary.startYm -eq '2026-04') "E12 [long]-1 resolves"
+$r12b = Resolve-ReportPeriod (DR ([double]-1.0) 'quarter' 'RELATIVE') (AT 2026 7 6)
+Assert ($r12b.primary.startYm -eq '2026-04') "E12 [double]-1.0 resolves"
+$r12c = Resolve-ReportPeriod (DR '-1' 'quarter' 'RELATIVE') (AT 2026 7 6)
+Assert ($r12c.primary.startYm -eq '2026-04') "E12 string '-1' resolves"
+$r12d = Resolve-ReportPeriod (DR 'abc' 'quarter' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $r12d.primary) "E12 'abc' count -> null (no crash)"
+# the [double]-not-[int] must-fix: fractional counts must NOT resolve (banker's rounding to -1)
+$r12e = Resolve-ReportPeriod (DR -1.4 'quarter' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $r12e.primary) "E12 count -1.4 -> null (would be -1 under [int] banker's round)"
+$r12f = Resolve-ReportPeriod (DR -0.6 'quarter' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $r12f.primary) "E12 count -0.6 -> null (would be -1 under [int] banker's round)"
+
+# U8-E13: every resolved output is invariant-culture shaped + calendarAligned recomputable from dates
+$r13 = Resolve-ReportPeriod (DR -1 'quarter' 'RELATIVE') (AT 2026 7 6)
+$sd=[datetime]::ParseExact($r13.primary.startDate,'yyyy-MM-dd',$null); $ed=[datetime]::ParseExact($r13.primary.endDate,'yyyy-MM-dd',$null)
+Assert ((($sd.Day -eq 1) -and ($ed.AddDays(1).Day -eq 1)) -eq $r13.primary.calendarAligned) "E13 calendarAligned recomputable"
+Assert ($r13.primary.startYm -match '^[0-9]{4}-(0[1-9]|1[0-2])$') "E13 startYm shape"
+Assert ($r13.primary.endYm -match '^[0-9]{4}-(0[1-9]|1[0-2])$') "E13 endYm shape"
+Assert ($r13.anchorDate -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') "E13 anchorDate shape"
+
+# U8-E14: wrapper key contract
+$k1 = @($r1.Keys)
+Assert (($k1 -join ',') -eq 'resolverVersion,rule,anchorDate,primary') "E14 resolved wrapper keys exactly 4"
+$k4 = @($r4.Keys)
+Assert (($k4 -join ',') -eq 'resolverVersion,rule,anchorDate,primary,note') "E14 unresolved wrapper adds note"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
