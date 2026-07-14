@@ -782,6 +782,215 @@ $t16 = RunAnalyze (MkDoc @(
 A ($t16.facts.meta.hasComparison -eq $true) "U9-T16: 'hasComparison'-colliding metric id degrades to first-wins; boolean key uncorrupted"
 A (-not (HasFind $t16.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T16: collision with the boolean key does not register as a displacement"
 
+Write-Host "== U10: rule (a)/(b) pure predicates (-DefineOnly) =="
+function BF($fs,$id){ @($fs | Where-Object { $_.ruleId -eq $id })[0] }
+# 1. Test-ValueMetricId TRUE (incl. widened value_per_ catching value_per_all_conversions; return_on_ad_spend)
+foreach($id in 'google-adwords:conversions_value','google-adwords:all_conversions_value','google-adwords:value_per_conversion','google-adwords:value_per_all_conversions','facebook-ads:actionValues::purchase','x:purchase_roas','shopify:revenue','x:websitePurchaseRoas','bing-ads:return_on_ad_spend'){ A (Test-ValueMetricId $id) "U10-1 Test-ValueMetricId TRUE: $id" }
+# 2. Test-ValueMetricId FALSE (incl. target_-guard: target_roas/target_cpa must NOT suppress)
+foreach($id in 'google-adwords:cost_micros','google-adwords:conversions','facebook-ads:actions::lead','facebook-ads:costPerActionType::lead','google-adwords:active_view_non_viewable_impression_rate','google-adwords:search_lost_is_budget','google-analytics-4:eventValue','google-adwords:target_roas','google-adwords:target_cpa'){ A (-not (Test-ValueMetricId $id)) "U10-2 Test-ValueMetricId FALSE: $id" }
+# 3. Test-RankableCostWidget TRUE
+$rk1 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Cost=@(1000,$null);Conv=@(100,$null)}),(Rw 'data' 'A' 'Campaign' @{Cost=@(600,$null);Conv=@(60,$null)}),(Rw 'data' 'B' 'Campaign' @{Cost=@(400,$null);Conv=@(40,$null)}))
+A (Test-RankableCostWidget $rk1) "U10-3 rankable: campaign + cost + conversions (implicit pair)"
+$rk2 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'CPA' 'google-adwords:cost_per_conversion')) @((Rw 'total' $null 'Campaign' @{CPA=@(10,$null)}),(Rw 'data' 'A' 'Campaign' @{CPA=@(9,$null)}),(Rw 'data' 'B' 'Campaign' @{CPA=@(11,$null)}))
+A (Test-RankableCostWidget $rk2) "U10-3 rankable: campaign + explicit cost_per_conversion"
+$rk3 = Wgt 'facebook-ads' 'Facebook Ads' 'Campaign' @((Met 'Spend' 'facebook-ads:spend' 'micros'),(Met 'Leads' 'facebook-ads:actions::lead')) @((Rw 'total' $null 'Campaign' @{Spend=@(1000,$null);Leads=@(100,$null)}),(Rw 'data' 'A' 'Campaign' @{Spend=@(600,$null);Leads=@(60,$null)}),(Rw 'data' 'B' 'Campaign' @{Spend=@(400,$null);Leads=@(40,$null)}))
+A (Test-RankableCostWidget $rk3) "U10-3 rankable: campaign + spend + actions::lead (FB pair)"
+# 4. Test-RankableCostWidget FALSE
+$nr1 = [pscustomobject]@{ dimensions=@(); metrics=@((Met 'CPA' 'google-adwords:cost_per_conversion')); rows=@((Rw 'data' $null 'x' @{CPA=@(10,$null)})) }
+A (-not (Test-RankableCostWidget $nr1)) "U10-4 not rankable: zero-dim KPI"
+$nr2 = Wgt 'google-adwords' 'Google Ads' 'Month' @((Met 'CPA' 'google-adwords:cost_per_conversion')) @((Rw 'total' $null 'Month' @{CPA=@(10,$null)}),(Rw 'data' '2026-04' 'Month' @{CPA=@(9,$null)}),(Rw 'data' '2026-05' 'Month' @{CPA=@(11,$null)}))
+A (-not (Test-RankableCostWidget $nr2)) "U10-4 not rankable: Month time dim (E6)"
+$nr3 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((Rw 'total' $null 'Campaign' @{Cost=@(1000,$null)}),(Rw 'data' 'A' 'Campaign' @{Cost=@(600,$null)}),(Rw 'data' 'B' 'Campaign' @{Cost=@(400,$null)}))
+A (-not (Test-RankableCostWidget $nr3)) "U10-4 not rankable: cost only, no outcome (E8)"
+$nr4 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'A' 'Campaign' @{Conv=@(60,$null)}),(Rw 'data' 'B' 'Campaign' @{Conv=@(40,$null)}))
+A (-not (Test-RankableCostWidget $nr4)) "U10-4 not rankable: outcome only, no cost (E8)"
+$nr5 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Cost=@(1000,$null);Conv=@(100,$null)}),(Rw 'data' 'A' 'Campaign' @{Cost=@(1000,$null);Conv=@(100,$null)}))
+A (-not (Test-RankableCostWidget $nr5)) "U10-4 not rankable: single detail row (<2)"
+$nr6 = Wgt 'facebook-ads' 'Facebook Ads' 'Campaign' @((Met 'CPC' 'facebook-ads:costPerActionType::link_click'),(Met 'Clicks' 'facebook-ads:actions::link_click')) @((Rw 'total' $null 'Campaign' @{CPC=@(2,$null);Clicks=@(100,$null)}),(Rw 'data' 'A' 'Campaign' @{CPC=@(2,$null);Clicks=@(60,$null)}),(Rw 'data' 'B' 'Campaign' @{CPC=@(2,$null);Clicks=@(40,$null)}))
+A (-not (Test-RankableCostWidget $nr6)) "U10-4 not rankable: only link_click cost-per (click denominator, not an outcome)"
+# 5. Test-PMaxLabel TRUE
+foreach($l in 'inS - PMax - Quincy General','Performance Max - Brand','pmax_general','P Max Launch','P.Max 2026'){ A (Test-PMaxLabel $l) "U10-5 PMax TRUE: $l" }
+# 6. Test-PMaxLabel FALSE
+foreach($l in 'TopMax Deals','CompMax','Search - Auto Loans'){ A (-not (Test-PMaxLabel $l)) "U10-6 PMax FALSE: $l" }
+A (-not (Test-PMaxLabel '')) "U10-6 PMax FALSE: empty"
+A (-not (Test-PMaxLabel $null)) "U10-6 PMax FALSE: null"
+# 7. Get-BrandTokens
+$bt1 = Get-BrandTokens 'Quincy Credit Union (QCU)'
+A ($bt1.phrase -eq 'quincy credit union' -and (@($bt1.abbr) -contains 'qcu') -and $bt1.lead -eq 'quincy') "U10-7 tokens QCU: phrase/abbr/lead"
+$bt2 = Get-BrandTokens 'First National Bank'
+A ($bt2.lead -eq 'first' -and @($bt2.abbr).Count -eq 0 -and $bt2.phrase -eq 'first national bank') "U10-7 tokens First National Bank: lead first, no abbr"
+$bt3 = Get-BrandTokens $null; $bt4 = Get-BrandTokens ''
+A ($null -eq $bt3.phrase -and @($bt3.abbr).Count -eq 0 -and $null -eq $bt3.lead) "U10-7 tokens null => empty shape (no throw)"
+A ($null -eq $bt4.phrase -and $null -eq $bt4.lead) "U10-7 tokens '' => empty shape"
+$bt5 = Get-BrandTokens 'Acme'
+A ($null -eq $bt5.phrase -and $bt5.lead -eq 'acme') "U10-7 tokens single-token Acme: no phrase, lead acme"
+# 8. Test-BrandLabel TRUE
+A (Test-BrandLabel 'Quincy Credit Union - Search' $bt1) "U10-8 brand TRUE: full client phrase (S3)"
+A (Test-BrandLabel 'Brand - Exact' $null) "U10-8 brand TRUE: 'Brand' self-declared (S2)"
+A (Test-BrandLabel 'Branded Search' $null) "U10-8 brand TRUE: 'Branded' (S2)"
+# 9. Test-BrandLabel FALSE (F1 hyphen/space, F10, F3 abbr-never-fires, F4 lead-never-fires, S3 boundary)
+A (-not (Test-BrandLabel 'Brand New Auto Loans' $null)) "U10-9 brand FALSE: 'Brand New' idiom (F1)"
+A (-not (Test-BrandLabel 'Brand-New Auto Loans Sale' $null)) "U10-9 brand FALSE: 'Brand-New' hyphenated (F1 lookahead fix)"
+A (-not (Test-BrandLabel 'Rebranding Campaign' $null)) "U10-9 brand FALSE: 'Rebranding' word boundary (F10)"
+A (-not (Test-BrandLabel 'QCU | Mortgages' $bt1)) "U10-9 brand FALSE: abbr never fires (F3)"
+A (-not (Test-BrandLabel 'First Time Buyer Promo' $bt2)) "U10-9 brand FALSE: lead token never fires (F4)"
+$btMetro = Get-BrandTokens 'Metro Bank'
+A (-not (Test-BrandLabel 'Metro Bankers Golf Promo' $btMetro)) "U10-9 brand FALSE: 'Metro Bankers Golf Promo' vs 'Metro Bank' (S3 token boundary)"
+A (Test-BrandLabel 'Metro Bank - Q2' $btMetro) "U10-9 brand TRUE control: 'Metro Bank - Q2' matches phrase"
+# 10. Get-MatchedBrandToken (annotation-only)
+A ((Get-MatchedBrandToken 'inS - PMax - Quincy General' $bt1) -eq 'quincy') "U10-10 matched: lead 'quincy'"
+A ((Get-MatchedBrandToken 'General QCU - Awareness Video' $bt1) -eq 'qcu') "U10-10 matched: abbr 'qcu'"
+A ($null -eq (Get-MatchedBrandToken 'Auto Loans' $bt1)) "U10-10 matched: none => null"
+
+Write-Host "== U10: rule (b) Get-BreakdownFindings fixtures (-DefineOnly) =="
+# 11. PMax row at 40% => ONE ANOM_BRAND_BASELINE info; evidence byte-equal to Format-Metric
+$b11 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'inS - PMax - Alpha' 'Campaign' @{Conv=@(40,$null)}),(Rw 'data' 'Search Beta' 'Campaign' @{Conv=@(60,$null)}))
+$f11 = @(Get-BreakdownFindings $b11 'Some Client')
+$bb11 = BF $f11 'ANOM_BRAND_BASELINE'
+A (@($f11 | Where-Object { $_.ruleId -eq 'ANOM_BRAND_BASELINE' }).Count -eq 1 -and $bb11.severity -eq 'info') "U10-11 PMax 40% => ONE ANOM_BRAND_BASELINE (info)"
+A ($bb11.evidence.share -eq '40%' -and $bb11.evidence.matchedTotal -eq (Format-Metric 'google-adwords:conversions' $null 40 'USD') -and $bb11.evidence.total -eq (Format-Metric 'google-adwords:conversions' $null 100 'USD')) "U10-11 evidence share/matchedTotal/total byte-equal to Format-Metric"
+# 12. two PMax rows 15%+13% combined 28% => fires once, both labels quoted (combined-set semantics)
+$b12 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'PMax - One' 'Campaign' @{Conv=@(15,$null)}),(Rw 'data' 'PMax - Two' 'Campaign' @{Conv=@(13,$null)}),(Rw 'data' 'Search' 'Campaign' @{Conv=@(72,$null)}))
+$f12 = @(Get-BreakdownFindings $b12 $null); $bb12 = BF $f12 'ANOM_BRAND_BASELINE'
+A (@($f12 | Where-Object { $_.ruleId -eq 'ANOM_BRAND_BASELINE' }).Count -eq 1 -and $bb12.evidence.share -eq '28%') "U10-12 two PMax rows combined 28% => fires once, rolled up"
+A ($bb12.statement -match "PMax - One" -and $bb12.statement -match "PMax - Two") "U10-12 both matched labels quoted (D7 combined-set)"
+# 13. PMax row at 10% => silent (F6)
+$b13 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'PMax - Low' 'Campaign' @{Conv=@(10,$null)}),(Rw 'data' 'Search' 'Campaign' @{Conv=@(90,$null)}))
+A (-not (HasRule (Get-BreakdownFindings $b13 $null) 'ANOM_BRAND_BASELINE')) "U10-13 PMax 10% => silent (F6)"
+# 14. 'Brand New Auto Loans' dominant => silent (F1)
+$b14 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'Brand New Auto Loans' 'Campaign' @{Conv=@(80,$null)}),(Rw 'data' 'Search' 'Campaign' @{Conv=@(20,$null)}))
+A (-not (HasRule (Get-BreakdownFindings $b14 $null) 'ANOM_BRAND_BASELINE')) "U10-14 'Brand New' dominant => silent (F1)"
+$b14b = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'Brand-New Auto Loans Sale' 'Campaign' @{Conv=@(80,$null)}),(Rw 'data' 'Search' 'Campaign' @{Conv=@(20,$null)}))
+A (-not (HasRule (Get-BreakdownFindings $b14b $null) 'ANOM_BRAND_BASELINE')) "U10-14 'Brand-New' hyphenated dominant => silent (F1 lookahead)"
+# 15. convention-prefix ('QCU | ...') everywhere, QCU client => silent (F3)
+$b15 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'QCU | Auto Loans' 'Campaign' @{Conv=@(60,$null)}),(Rw 'data' 'QCU | Mortgages' 'Campaign' @{Conv=@(40,$null)}))
+A (-not (HasRule (Get-BreakdownFindings $b15 'Quincy Credit Union (QCU)') 'ANOM_BRAND_BASELINE')) "U10-15 QCU-prefix everywhere => silent (F3 abbr never fires)"
+# 16. 'Quincy Credit Union - Brand' dominant with client => fires with evidence.brandToken
+$b16 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'Quincy Credit Union - Brand' 'Campaign' @{Conv=@(60,$null)}),(Rw 'data' 'Search' 'Campaign' @{Conv=@(40,$null)}))
+$bb16 = BF @(Get-BreakdownFindings $b16 'Quincy Credit Union (QCU)') 'ANOM_BRAND_BASELINE'
+A ($null -ne $bb16 -and $bb16.evidence.brandToken -eq 'quincy') "U10-16 full-client-phrase row fires with evidence.brandToken 'quincy'"
+# 17. matched sum 12 of 20 (60%, sum<30) => confidence low (F11)
+$b17 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(20,$null)}),(Rw 'data' 'PMax - Small' 'Campaign' @{Conv=@(12,$null)}),(Rw 'data' 'Search' 'Campaign' @{Conv=@(8,$null)}))
+$bb17 = BF @(Get-BreakdownFindings $b17 $null) 'ANOM_BRAND_BASELINE'
+A ($null -ne $bb17 -and $bb17.confidence -eq 'low') "U10-17 matched sum 12 (<30) => confidence low (F11)"
+# 18. non-campaign dim => silent; non-ads => silent; dimensioned no-total => silent
+$b18a = Wgt 'google-adwords' 'Google Ads' 'Device' @((Met 'Conv' 'google-adwords:conversions')) @((Rw 'total' $null 'Device' @{Conv=@(100,$null)}),(Rw 'data' 'PMax Mobile' 'Device' @{Conv=@(80,$null)}),(Rw 'data' 'DESKTOP' 'Device' @{Conv=@(20,$null)}))
+A (-not (HasRule (Get-BreakdownFindings $b18a $null) 'ANOM_BRAND_BASELINE')) "U10-18 non-campaign dim (Device + PMax row) => silent (F8)"
+$b18b = Wgt 'shopify' 'Shopify' 'Campaign' @((Met 'Conv' 'shopify:conversions')) @((Rw 'total' $null 'Campaign' @{Conv=@(100,$null)}),(Rw 'data' 'PMax - Brand' 'Campaign' @{Conv=@(80,$null)}),(Rw 'data' 'Organic' 'Campaign' @{Conv=@(20,$null)}))
+A (-not (HasRule (Get-BreakdownFindings $b18b $null) 'ANOM_BRAND_BASELINE')) "U10-18 non-ads category (shopify) => silent (E7)"
+$b18c = [pscustomobject]@{ providers=@([pscustomobject]@{id='google-adwords';name='Google Ads'}); currencyCode='USD'; dimensions=@('Campaign'); metrics=@((Met 'Conv' 'google-adwords:conversions')); rows=@((Rw 'data' 'PMax - Brand' 'Campaign' @{Conv=@(80,$null)}),(Rw 'data' 'Search' 'Campaign' @{Conv=@(20,$null)})) }
+A (-not (HasRule (Get-BreakdownFindings $b18c $null) 'ANOM_BRAND_BASELINE')) "U10-18 dimensioned no-total campaign => silent (F9 early-return)"
+# 19. existing adsAware fixture: still ANOM_SHARE_MISMATCH info, NO ANOM_BRAND_BASELINE (F6 pin, one-arg call)
+$fAware = Get-BreakdownFindings $adsAware
+A ((HasRule $fAware 'ANOM_SHARE_MISMATCH') -and -not (HasRule $fAware 'ANOM_BRAND_BASELINE')) "U10-19 adsAware ('Brand Awareness' 2%) => share-mismatch yes, brand-baseline no (F6)"
+# 26. live-shape QCU regression (direct Get-BreakdownFindings, clientName explicit per AMENDMENTS)
+$b26 = Wgt 'google-adwords' 'Google Ads' 'Campaign' @((Met 'Conv' 'google-adwords:conversions')) @(
+  (Rw 'total' $null 'Campaign' @{Conv=@(860.9,$null)}),
+  (Rw 'data' 'inS - PMax - Quincy General' 'Campaign' @{Conv=@(214.9,$null)}),
+  (Rw 'data' 'inS - PMax - Mortgages' 'Campaign' @{Conv=@(111.6,$null)}),
+  (Rw 'data' 'inS - PMax - Visa Traditional Card' 'Campaign' @{Conv=@(40.5,$null)}),
+  (Rw 'data' 'inS - PMax - HELOC' 'Campaign' @{Conv=@(34.3,$null)}),
+  (Rw 'data' 'inS - PMax - Hanover' 'Campaign' @{Conv=@(3,$null)}),
+  (Rw 'data' 'Search - Auto Loans' 'Campaign' @{Conv=@(200,$null)}),
+  (Rw 'data' 'Search - HELOC' 'Campaign' @{Conv=@(156.6,$null)}),
+  (Rw 'data' 'Display Prospecting' 'Campaign' @{Conv=@(100,$null)}))
+$bb26 = BF @(Get-BreakdownFindings $b26 'Quincy Credit Union (QCU)') 'ANOM_BRAND_BASELINE'
+A ($null -ne $bb26 -and $bb26.evidence.share -eq '47%') "U10-26 QCU live shape: share '47%'"
+A ($bb26.evidence.matchedTotal -eq '404.3' -and $bb26.evidence.total -eq '860.9') "U10-26 QCU: matchedTotal '404.3', total '860.9'"
+A ($bb26.evidence.brandToken -eq 'quincy') "U10-26 QCU: brandToken 'quincy'"
+
+Write-Host "== U10: rule (a)/(b) e2e (real script) + closer integration =="
+# helpers to build ads campaign widgets that fire rule (a)
+$gPair = @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Conv' 'google-adwords:conversions'))
+$gRows = @((DRow 'total' $null 'Campaign' @{Cost=(Cell 1000000000);Conv=(Cell 100)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 340000000);Conv=(Cell 34)}),(DRow 'data' 'B' 'Campaign' @{Cost=(Cell 330000000);Conv=(Cell 33)}),(DRow 'data' 'C' 'Campaign' @{Cost=(Cell 330000000);Conv=(Cell 33)}))
+$fPair = @((Met 'Spend' 'facebook-ads:spend' 'micros'),(Met 'Leads' 'facebook-ads:actions::lead'))
+$fRows = @((DRow 'total' $null 'Campaign' @{Spend=(Cell 900000000);Leads=(Cell 90)}),(DRow 'data' 'A' 'Campaign' @{Spend=(Cell 300000000);Leads=(Cell 30)}),(DRow 'data' 'B' 'Campaign' @{Spend=(Cell 300000000);Leads=(Cell 30)}),(DRow 'data' 'C' 'Campaign' @{Spend=(Cell 300000000);Leads=(Cell 30)}))
+# 20. two rankable ads platforms, no value anywhere => exactly ONE GAP_COST_RANKING_NO_VALUE, digit-free statement
+$r20 = RunAnalyze (MkDoc @(
+  (DW 'g20' 'google-adwords' 'Google Ads' @('Campaign') $gPair $gRows),
+  (DW 'f20' 'facebook-ads' 'Facebook Ads' @('Campaign') $fPair $fRows)
+))
+$g20 = @((AllFind $r20.facts) | Where-Object { $_.ruleId -eq 'GAP_COST_RANKING_NO_VALUE' })
+A ($g20.Count -eq 1) "U10-20 exactly ONE GAP_COST_RANKING_NO_VALUE"
+A ($g20[0].severity -eq 'major' -and $g20[0].requiresDownstreamData -eq $true -and $g20[0].fid -eq 'GAP_COST_RANKING_NO_VALUE#1') "U10-20 severity major, requiresDownstreamData true, fid #1"
+A ($g20[0].evidence.platforms -match 'Google Ads' -and $g20[0].evidence.platforms -match 'Facebook Ads') "U10-20 evidence.platforms names both"
+A ($g20[0].statement -match 'downstream' -and $g20[0].statement -notmatch '\d') "U10-20 statement has 'downstream', no digit (pair-only phrase)"
+A ($g20[0].statement -match 'pairing cost with conversions/leads' -and $g20[0].evidence.rankingMetrics -notmatch 'Cost') "U10-20 pair-only: generic phrase, spend column NOT labelled cost-per-result"
+A ($g20[0].statement -match 'no positive conversion-value, revenue, or ROAS recorded') "U10-20 value clause reworded ('no positive ... recorded')"
+# 21. + Google zero-dim KPI carrying conversions_value>0 => finding names Facebook only (E1/E2)
+$r21b = RunAnalyze (MkDoc @(
+  (DW 'g21' 'google-adwords' 'Google Ads' @('Campaign') $gPair $gRows),
+  (DW 'f21' 'facebook-ads' 'Facebook Ads' @('Campaign') $fPair $fRows),
+  (DW 'gv21' 'google-adwords' 'Google Ads' @() @((Met 'CV' 'google-adwords:conversions_value')) @((KRow @{CV=(Cell 500)})))
+))
+$g21 = @((AllFind $r21b.facts) | Where-Object { $_.ruleId -eq 'GAP_COST_RANKING_NO_VALUE' })
+A ($g21.Count -eq 1 -and $g21[0].evidence.platforms -match 'Facebook Ads' -and $g21[0].evidence.platforms -notmatch 'Google Ads') "U10-21 value on Google KPI => finding names Facebook only (E1/E2)"
+# 22. value metric present but all cells 0 => still fires (E4)
+$gRows0 = @((DRow 'total' $null 'Campaign' @{Cost=(Cell 1000000000);Conv=(Cell 100);CV=(Cell 0)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 340000000);Conv=(Cell 34);CV=(Cell 0)}),(DRow 'data' 'B' 'Campaign' @{Cost=(Cell 330000000);Conv=(Cell 33);CV=(Cell 0)}),(DRow 'data' 'C' 'Campaign' @{Cost=(Cell 330000000);Conv=(Cell 33);CV=(Cell 0)}))
+$r22b = RunAnalyze (MkDoc @( (DW 'g22' 'google-adwords' 'Google Ads' @('Campaign') @($gPair[0],$gPair[1],(Met 'CV' 'google-adwords:conversions_value')) $gRows0) ))
+$g22 = @((AllFind $r22b.facts) | Where-Object { $_.ruleId -eq 'GAP_COST_RANKING_NO_VALUE' })
+A ($g22.Count -eq 1 -and $g22[0].evidence.platforms -match 'Google Ads') "U10-22 zero-valued value column still fires (E4)"
+A ($g22[0].statement -match 'no positive conversion-value') "U10-22 reworded clause stays true in present-but-zero branch"
+# 23. all rankable platforms carry value>0 => absent (E3)
+$gRowsV = @((DRow 'total' $null 'Campaign' @{Cost=(Cell 1000000000);Conv=(Cell 100);CV=(Cell 500)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 340000000);Conv=(Cell 34);CV=(Cell 170)}),(DRow 'data' 'B' 'Campaign' @{Cost=(Cell 330000000);Conv=(Cell 33);CV=(Cell 165)}),(DRow 'data' 'C' 'Campaign' @{Cost=(Cell 330000000);Conv=(Cell 33);CV=(Cell 165)}))
+$r23 = RunAnalyze (MkDoc @( (DW 'g23' 'google-adwords' 'Google Ads' @('Campaign') @($gPair[0],$gPair[1],(Met 'CV' 'google-adwords:conversions_value')) $gRowsV) ))
+A (-not (HasFind $r23.facts 'GAP_COST_RANKING_NO_VALUE')) "U10-23 value>0 on rankable platform => absent (E3)"
+# 24. KPI-only / time-only / shopify => absent (E5/E6/E7)
+$r24a = RunAnalyze (MkDoc @( (DW 'k24' 'google-adwords' 'Google Ads' @() @((Met 'CPA' 'google-adwords:cost_per_conversion')) @((KRow @{CPA=(Cell 10)}))) ))
+A (-not (HasFind $r24a.facts 'GAP_COST_RANKING_NO_VALUE')) "U10-24 zero-dim cost-per KPI => absent (E5)"
+$r24b = RunAnalyze (MkDoc @( (DW 'm24' 'google-adwords' 'Google Ads' @('Month') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Conv' 'google-adwords:conversions')) @((DRow 'total' $null 'Month' @{Cost=(Cell 1000000000);Conv=(Cell 100)}),(DRow 'data' '2026-04' 'Month' @{Cost=(Cell 600000000);Conv=(Cell 60)}),(DRow 'data' '2026-05' 'Month' @{Cost=(Cell 400000000);Conv=(Cell 40)}))) ))
+A (-not (HasFind $r24b.facts 'GAP_COST_RANKING_NO_VALUE')) "U10-24 time-dim-only cost breakdown => absent (E6)"
+$r24c = RunAnalyze (MkDoc @( (DW 's24' 'shopify' 'Shopify' @('Channel') @((Met 'Sessions' 'shopify:sessions'),(Met 'Orders' 'shopify:orders'),(Met 'Rev' 'shopify:revenue' 'micros')) @((DRow 'total' $null 'Channel' @{Sessions=(Cell 1000);Orders=(Cell 30);Rev=(Cell 5000000000)}),(DRow 'data' 'Organic' 'Channel' @{Sessions=(Cell 600);Orders=(Cell 20);Rev=(Cell 3000000000)}),(DRow 'data' 'Direct' 'Channel' @{Sessions=(Cell 400);Orders=(Cell 10);Rev=(Cell 2000000000)}))) ))
+A (-not (HasFind $r24c.facts 'GAP_COST_RANKING_NO_VALUE')) "U10-24 shopify (non-ads) => absent (E7)"
+# 25. rule (b) e2e: dominant PMax row, force-included in breakdown past the cap (A:757-758 synergy)
+$rows25 = [System.Collections.ArrayList]@()
+[void]$rows25.Add((DRow 'total' $null 'Campaign' @{Cost=(Cell 21000000000);Conv=(Cell 121)}))
+foreach($i in 1..21){ [void]$rows25.Add((DRow 'data' ("Camp{0:D2}" -f $i) 'Campaign' @{Cost=(Cell (1000000000*$i));Conv=(Cell 1)})) }
+[void]$rows25.Add((DRow 'data' 'inS - PMax - Brand' 'Campaign' @{Cost=(Cell 1000000);Conv=(Cell 100)}))
+$r25 = RunAnalyze (MkDoc @( (DW 'g25' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Conv' 'google-adwords:conversions')) @($rows25)) ))
+$bb25 = GetFind $r25.facts 'ANOM_BRAND_BASELINE'
+A ($null -ne $bb25 -and $bb25.fid) "U10-25 ANOM_BRAND_BASELINE in findings.anomalies with fid"
+$pf25 = Plat $r25.facts 'google-adwords'; $bdRows25 = @($pf25.breakdowns[0].rows | ForEach-Object { $_.label })
+A ($bdRows25 -contains 'inS - PMax - Brand') "U10-25 flagged low-cost PMax label force-included in breakdown past top-20 cap"
+# 27-29. closer over rule (a): dedicated single-platform facts (balanced rows => only GAP_COST_RANKING_NO_VALUE)
+$rC = RunAnalyze (MkDoc @( (DW 'gc' 'google-adwords' 'Google Ads' @('Campaign') $gPair $gRows) ))
+$gcF = GetFind $rC.facts 'GAP_COST_RANKING_NO_VALUE'
+$repC27 = "## Google Ads`n<!-- platform:google-adwords -->`n$($gcF.statement) <!-- finding:$($gcF.fid) -->`n"
+$resC27 = Invoke-Closer $repC27 $rC.facts
+A ($resC27.violations.Count -eq 0) "U10-27 rule(a) statement + fid => 0 violations (got $($resC27.violations.Count): $(($resC27.violations | ForEach-Object { $_.type }) -join ','))"
+$resC28 = Invoke-Closer ($repC27 -replace '<!--\s*finding:[^>]+?-->','') $rC.facts
+A ([bool](@($resC28.violations | Where-Object { $_.type -eq 'unsurfaced-finding' }).Count)) "U10-28 fid stripped => unsurfaced-finding (forced-caveat path)"
+$repC29 = "## Google Ads`n<!-- platform:google-adwords -->`nCost efficiency rankings appear in this section. <!-- finding:$($gcF.fid) -->`n"
+$resC29 = Invoke-Closer $repC29 $rC.facts
+A ([bool](@($resC29.violations | Where-Object { $_.type -eq 'missing-downstream-caveat' }).Count)) "U10-29 surfaced but no downstream clause => missing-downstream-caveat (3c engages)"
+# 30. closer over rule (b): byFid scoping pin (47%/404.3 byFid-only; 860.9 traces platform-wide)
+$r30 = RunAnalyze (MkDoc @( (DW 'g30' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Conv' 'google-adwords:conversions')) @(
+  (DRow 'total' $null 'Campaign' @{Conv=(Cell 860.9)}),
+  (DRow 'data' 'inS - PMax - Quincy General' 'Campaign' @{Conv=(Cell 214.9)}),
+  (DRow 'data' 'inS - PMax - Mortgages' 'Campaign' @{Conv=(Cell 111.6)}),
+  (DRow 'data' 'inS - PMax - Visa Traditional Card' 'Campaign' @{Conv=(Cell 40.5)}),
+  (DRow 'data' 'inS - PMax - HELOC' 'Campaign' @{Conv=(Cell 34.3)}),
+  (DRow 'data' 'inS - PMax - Hanover' 'Campaign' @{Conv=(Cell 3)}),
+  (DRow 'data' 'Search - Auto Loans' 'Campaign' @{Conv=(Cell 200)}),
+  (DRow 'data' 'Search - HELOC' 'Campaign' @{Conv=(Cell 156.6)}),
+  (DRow 'data' 'Display Prospecting' 'Campaign' @{Conv=(Cell 100)}))) ))
+$bb30 = GetFind $r30.facts 'ANOM_BRAND_BASELINE'
+A ($null -ne $bb30 -and $bb30.evidence.share -eq '47%') "U10-30 rule(b) e2e fires (share 47%)"
+# 30a: omit rule (b) entirely => 0 violations (info advisory, D8)
+$rep30omit = "## Google Ads`n<!-- platform:google-adwords -->`nConversions totalled 860.9 this period.`n"
+$res30omit = Invoke-Closer $rep30omit $r30.facts
+A ($res30omit.violations.Count -eq 0) "U10-30a omitting info rule(b) => 0 violations (D8 advisory; 860.9 traces)"
+# 30b: quote 47%/404.3/860.9 on the fid-anchored line => all trace
+$rep30ok = "## Google Ads`n<!-- platform:google-adwords -->`nBrand-demand suspects were 47% of conversions (404.3 of 860.9). <!-- finding:$($bb30.fid) -->`n"
+$res30ok = Invoke-Closer $rep30ok $r30.facts
+A (-not [bool](@($res30ok.violations | Where-Object { $_.type -eq 'untraceable-number' }).Count)) "U10-30b 47%/404.3/860.9 on fid line => all trace (0 untraceable)"
+# 30c: same numbers on a NON-anchored line => 47% and 404.3 untraceable; 860.9 traces platform-wide
+$rep30bad = "## Google Ads`n<!-- platform:google-adwords -->`nBrand-demand suspects were 47% of conversions (404.3 of 860.9).`n"
+$res30bad = Invoke-Closer $rep30bad $r30.facts
+$unt30 = @($res30bad.violations | Where-Object { $_.type -eq 'untraceable-number' } | ForEach-Object { $_.snippet })
+A (($unt30 -join '|') -match '47' -and ($unt30 -join '|') -match '404\.3') "U10-30c non-anchored: 47% and 404.3 flagged untraceable"
+A (-not (($unt30 -join '|') -match '860')) "U10-30c non-anchored: widget total 860.9 traces platform-wide (never flagged)"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

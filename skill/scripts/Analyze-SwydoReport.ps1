@@ -21,6 +21,7 @@ param(
   [string]$OutDir,
   [double]$WinLossPct = 10.0,   # |delta%| >= this on a directional metric => win/loss
   [int]$SmallN = 30,            # moved-side events below this => confidence:low
+  [double]$BrandSharePct = 25.0,# U10/D11: rule (b) dominance gate - matched brand set must be >= this % of outcome total
   [string[]]$NotesFile,         # optional plain-text context/notes file(s) ingested as annotations (client-supplied)
   [switch]$DefineOnly
 )
@@ -126,6 +127,59 @@ function Get-DimLabel($c){
 function Test-GroupRow($label){ return ($null -eq $label -or $label -eq '(group)' -or $label -eq 'All') }
 # first metric in a widget whose metric-part matches a regex (for config-driven rules)
 function Find-Metric($w,$pat){ if($w.metrics){ foreach($m in $w.metrics){ if((Get-MetricPart $m.id) -match $pat){ return $m } } } return $null }
+# U10/D3: does this metric id measure downstream value (conversion value / revenue / ROAS)?
+# target-guard FIRST (a target_roas/target_cpa is a bid SETTING, not measured value - it must NOT suppress).
+function Test-ValueMetricId($id){
+  $p = Get-MetricPart $id
+  if($p -match '(?i)(^|_)target'){ return $false }
+  return [bool]($p -match 'conversions?_value|conversion_value|action_?values?|value_per_|(^|_)value$|revenue|roas|return_on_ad_spend')
+}
+# U10/D2: does this widget expose a cross-row cost-efficiency ranking surface?
+function Test-RankableCostWidget($w){
+  $wdims=@($w.dimensions | Where-Object {$_}); if($wdims.Count -eq 0){ return $false }
+  if($wdims[0] -match '(?i)day|week|month|date'){ return $false }
+  $detail=@($w.rows | Where-Object { $_.kind -eq 'data' -and -not (Test-GroupRow (Row-Label $_)) })
+  if($detail.Count -lt 2){ return $false }
+  if(Find-Metric $w 'cost_per_conversion|cost_per.*lead|costperactiontype::lead|(^|_)cpa$|(^|_)cpl$'){ return $true }
+  $costM=Find-Metric $w 'cost_micros|(^|_)cost$|spend|amount_spent'
+  $outM =Find-Metric $w '(^|:)conversions?$|(^|_)lead|actions::lead'
+  return [bool]($costM -and $outM)
+}
+# U10/D6: deterministic brand-token derivation from the Swydo client entity name (meta.client).
+# phrase (>=2 tokens, parentheticals stripped) may FIRE via Test-BrandLabel; abbr/lead ANNOTATE only.
+function Get-BrandTokens($clientName){
+  $out=[ordered]@{ phrase=$null; abbr=@(); lead=$null }
+  $s=[string]$clientName; if([string]::IsNullOrWhiteSpace($s)){ return $out }
+  foreach($m in [regex]::Matches($s,'\(([^)]+)\)')){
+    foreach($t in ($m.Groups[1].Value -split '[^A-Za-z]+')){ if($t.Length -ge 3){ $out.abbr+=$t.ToLower() } }
+  }
+  $core=(($s -replace '\([^)]*\)',' ') -replace '\s+',' ').Trim()
+  $toks=@($core -split '[^A-Za-z0-9]+' | Where-Object { $_ })
+  if($toks.Count -ge 2){ $out.phrase=(($toks -join ' ').ToLower()) }
+  if($toks.Count -gt 0 -and $toks[0].Length -ge 4){ $out.lead=$toks[0].ToLower() }
+  return $out
+}
+function Test-PMaxLabel($label){
+  return [bool](([string]$label) -match '(?i)((^|[^a-z])p[\s._-]?max([^a-z]|$))|performance[\s._-]*max')
+}
+# U10/D6-S2: self-declared "brand" (lookahead [\s_-]+new kills "Brand New"/"Brand-New"); S3: full client phrase
+# (space-padded Contains so client "Metro Bank" does NOT match campaign "Metro Bankers Golf Promo").
+function Test-BrandLabel($label,$tokens){
+  $l=[string]$label
+  if($l -match '(?i)\bbrand(ed)?\b(?![\s_-]+new\b)'){ return $true }
+  if($tokens -and $tokens.phrase){
+    $norm=((($l -replace '[^A-Za-z0-9]+',' ') -replace '\s+',' ').Trim().ToLower())
+    if((' '+$norm+' ').Contains(' '+$tokens.phrase+' ')){ return $true }
+  }
+  return $false
+}
+function Get-MatchedBrandToken($label,$tokens){
+  if(-not $tokens){ return $null }
+  $norm=' ' + ((([string]$label -replace '[^A-Za-z0-9]+',' ') -replace '\s+',' ').Trim().ToLower()) + ' '
+  foreach($t in @($tokens.abbr)){ if($t -and $norm.Contains(" $t ")){ return $t } }
+  if($tokens.lead -and $norm.Contains(" $($tokens.lead) ")){ return $tokens.lead }
+  return $null
+}
 # U6: the provider a widget's headline is attributed to (declared provider, else first-metric id-prefix).
 # One source of truth for discovery, headline population, and the GAP_NO_ACCOUNT_TOTAL pass so they can't drift.
 function Get-WidgetProvider($w){
@@ -150,7 +204,7 @@ function Total-Row($w){
 }
 # Row-level breakdown findings for ONE widget (concentration, new/paused, segment-divergence,
 # effort->result, share-mismatch). Pure over the widget + $script:RuleCfg; returns a findings array.
-function Get-BreakdownFindings($w){
+function Get-BreakdownFindings($w,$clientName){
   $out=[System.Collections.ArrayList]@()
   $wdims=@($w.dimensions); if($wdims.Count -eq 0){ return @() }
   $tr=Total-Row $w; if(-not $tr){ return @() }
@@ -204,6 +258,42 @@ function Get-BreakdownFindings($w){
           $rShare=$rr/$totR
           if(($eShare/$rShare) -ge 3){ $hint=([string](Row-Label $r)) -match '(?i)awareness|brand|video|launch|opening'; $sev=if($hint){'info'}else{'major'}
             [void]$out.Add([ordered]@{ ruleId='ANOM_SHARE_MISMATCH'; severity=$sev; platform=$pname; widget=$dimName; requiresDownstreamData=$true; statement="${pname}: '$(Row-Label $r)' is $([math]::Round($eShare*100,0))% of $($em.name) but only $([math]::Round($rShare*100,1))% of $($rm.name)$(if($hint){' (looks upper-funnel/awareness)'})"; evidence=[ordered]@{ effortShare="$([math]::Round($eShare*100,0))%"; resultShare="$([math]::Round($rShare*100,1))%" } }) }
+        }
+      }
+    }
+  }
+  # U10 rule (b): brand-demand-harvest suspects dominating the outcome total (data_gaps.md Tier 1.2).
+  if($wcat -eq 'ads' -and $dimName -match '(?i)campaign'){
+    # robust display name (@()-wrap so a JSON-collapsed single-provider scalar still yields the name, not the id -
+    # keeps this finding's platform == the discovered $platforms[..].name so the $plLabels force-include matches).
+    $bpname = if(@($w.providers).Count -gt 0 -and @($w.providers)[0].name){ [string](@($w.providers)[0].name) } else { $pname }
+    $btok=Get-BrandTokens $clientName
+    $om=Find-Metric $w '(^|:)conversions?$'; if(-not $om){ $om=Find-Metric $w '(^|_)lead|actions::lead' }
+    if($om){
+      $btot=Row-Cur $tr $om.name
+      if($btot -and $btot -gt 0){
+        $bm=[System.Collections.ArrayList]@(); $bsum=0.0; $btk=$null
+        foreach($r in $detail){
+          $lbl=[string](Row-Label $r)
+          $sig=$null
+          if(Test-PMaxLabel $lbl){ $sig='pmax' } elseif(Test-BrandLabel $lbl $btok){ $sig='brand-name' }
+          if(-not $sig){ continue }
+          $v=Row-Cur $r $om.name
+          if($null -ne $v -and $v -gt 0){
+            $bsum+=[double]$v; [void]$bm.Add($lbl)
+            if(-not $btk){ $btk=Get-MatchedBrandToken $lbl $btok }
+          }
+        }
+        if(@($bm).Count -gt 0 -and ($bsum/$btot) -ge ($BrandSharePct/100)){
+          $bshare="$([math]::Round(($bsum/$btot)*100,0))%"
+          $bLbls = if(@($bm).Count -gt 5){ @($bm[0..4]) + @("+$(@($bm).Count-5) more") } else { @($bm) }
+          $bconf = if($bsum -lt $SmallN){ 'low' } else { 'normal' }
+          $bev=[ordered]@{ campaigns=($bLbls -join '; '); share=$bshare
+            matchedTotal=(Format-Metric $om.id $om.unit $bsum $cc); total=(Format-Metric $om.id $om.unit $btot $cc) }
+          if($btk){ $bev.brandToken=$btk }
+          [void]$out.Add([ordered]@{ ruleId='ANOM_BRAND_BASELINE'; severity='info'; platform=$bpname; widget=$dimName; confidence=$bconf
+            statement="${bpname}: brand-demand-suspect campaigns ($(($bLbls | ForEach-Object { "'$_'" }) -join ', ')) account for $bshare of $($om.name) ($(Format-Metric $om.id $om.unit $bsum $cc) of $(Format-Metric $om.id $om.unit $btot $cc)) - Performance Max / brand-named campaigns harvest existing brand demand, so treat this share as baseline-suspect context, not proof of driven demand"
+            evidence=$bev })
         }
       }
     }
@@ -741,6 +831,55 @@ foreach($dpk in @($displaced.Keys)){
     evidence=[ordered]@{ metrics=@($dshown); count="$($dmet.Count)"; supersededWidgets=@($dwid) }
   })
 }
+# U10 rule (a): cost-per-result rankings with no measured downstream value (data_gaps.md Tier 1.1).
+# ONE finding per report, listing every affected ads platform. Value attribution is by metric-id
+# prefix (blended widgets contribute value metrics to their true owner, like the $observed map).
+$valueProv=@{}
+foreach($w in $dataWidgets){
+  foreach($m in @($w.metrics)){
+    if(-not (Test-ValueMetricId $m.id)){ continue }
+    $mp=($m.id -split ':')[0]; if(-not $mp -or $valueProv[$mp]){ continue }
+    foreach($r in @($w.rows)){ $v=Row-Cur $r $m.name; if($null -ne $v -and $v -gt 0){ $valueProv[$mp]=$true; break } }
+  }
+}
+$rankProv=@{}    # providerId -> $true when it carries >= 1 rankable non-blended ads widget
+$explNames=@{}   # providerId -> ArrayList of EXPLICIT cost-per-outcome display names (never raw spend columns)
+$pairOnly=@{}    # providerId -> $true when a rankable surface exists only via the cost+outcome PAIR
+foreach($w in $dataWidgets){
+  if(Test-Blended $w){ continue }
+  $prov=Get-WidgetProvider $w; if(-not $prov){ continue }
+  if((Get-Category $prov) -ne 'ads'){ continue }
+  if(-not (Test-RankableCostWidget $w)){ continue }
+  $rankProv[$prov]=$true
+  $rmet=Find-Metric $w 'cost_per_conversion|cost_per.*lead|costperactiontype::lead|(^|_)cpa$|(^|_)cpl$'
+  if($rmet){
+    if(-not $explNames.ContainsKey($prov)){ $explNames[$prov]=[System.Collections.ArrayList]@() }
+    if($explNames[$prov] -notcontains [string]$rmet.name){ [void]$explNames[$prov].Add([string]$rmet.name) }
+  } else {
+    $pairOnly[$prov]=$true
+  }
+}
+$affected=@($rankProv.Keys | Where-Object { -not $valueProv[$_] } | Sort-Object)
+if($affected.Count -gt 0){
+  $affNames=@($affected | ForEach-Object { if($platforms.ContainsKey($_)){ $platforms[$_].name } else { $_ } })
+  $rmNames=@(); $hasPair=$false
+  foreach($p in $affected){
+    if($explNames.ContainsKey($p)){ foreach($n in @($explNames[$p])){ if($rmNames -notcontains $n){ $rmNames+=$n } } }
+    if($pairOnly[$p]){ $hasPair=$true }
+  }
+  $rmShown = if(@($rmNames).Count -gt 6){ (@($rmNames[0..5]) + @("+$(@($rmNames).Count-6) more")) } else { @($rmNames) }
+  # parenthetical lists ONLY explicit cost-per-outcome names; pair-only surfaces get a generic digit-free phrase
+  # (raw spend columns like 'Cost'/'Amount spent' are NEVER labelled as cost-per-result comparisons).
+  $parts=@()
+  if(@($rmShown).Count -gt 0){ $parts+=($rmShown -join ', ') }
+  if($hasPair){ $parts+='tables pairing cost with conversions/leads' }
+  $paren=($parts -join ' and ')
+  [void]$gaps.Add([ordered]@{
+    ruleId='GAP_COST_RANKING_NO_VALUE'; severity='major'; requiresDownstreamData=$true
+    statement=("Cost-per-result comparisons (" + $paren + ") are reported for " + ($affNames -join ', ') + " with no positive conversion-value, revenue, or ROAS recorded; cost-based rankings order campaigns by acquisition cost alone - confirm downstream (funded/closed) value before treating a cheaper cost-per-result as better.")
+    evidence=[ordered]@{ platforms=($affNames -join ', '); rankingMetrics=($rmShown -join ', ') }
+  })
+}
 # per-platform win/loss + gaps
 foreach($pk in $platforms.Keys){
   $pf=$platforms[$pk]
@@ -811,7 +950,7 @@ foreach($w in $dataWidgets){
 }
 
 # ---- row-level breakdown rules (per-category, config-driven; see Get-BreakdownFindings) ----
-foreach($w in $dataWidgets){ foreach($fnd in (Get-BreakdownFindings $w)){ [void]$anoms.Add($fnd) } }
+foreach($w in $dataWidgets){ foreach($fnd in (Get-BreakdownFindings $w $doc.report.client)){ [void]$anoms.Add($fnd) } }
 
 # ---- breakdown tables into facts (force-include finding-referenced rows) ----
 $plLabels=@{}
