@@ -81,7 +81,9 @@ check: grep the units index for the next free `U<seq>`.
   **never behaviorally modified**; guard captured vars with the `$my*` prefix when dot-sourcing.
 - `@($null).Count -eq 1`: always `@(...)`-wrap collections before `.Count`/indexing.
 - The default single-report output path must stay **byte-for-byte unchanged** — every change is
-  additive-in-facts (new `meta` fields / findings only).
+  additive-in-facts (new `meta` fields / findings only). Sole exception: the reviewed, disclosed U9
+  flip-set waiver (`headline-rank-precedence-spec.md` D1/D3) — a zero-dim KPI superseding a doc-earlier
+  table total changes the flipped cells (always disclosed in-facts) and bumps `meta.canonicalVersion` 1->2.
 - Every write path keeps its **fail-closed credential gate**; only `ConvertTo-SwydoTrendFacts`
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the
