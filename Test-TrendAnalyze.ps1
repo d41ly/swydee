@@ -196,6 +196,13 @@ try {
   # gate 1b: agreeing server labels -> proceeds to the mismatch
   $fa=Run-Trend (New-Led 'Acme Co' $months3 $null $null $null $null) (New-Pk 'Acme Co' $MID $null $null 35000 'account' $QP @('2026-04','2026-05','2026-06'))
   Assert (@(Recon $fa 'RECON_TREND_MISMATCH').Count -eq 1) "gate1b agreeing labels: mismatch fires"
+  # gate 1b (MF-4 scoping): a LONGER trailing monthly trend chart (6 months) alongside a clean-reconciling quarter
+  # KPI is a DIFFERENT date range, NOT period skew -> gate 1b must skip it and reconcile cleanly (no false coverage).
+  $fa=Run-Trend (New-Led 'Acme Co' $months3 $null $null $null $null) (New-Pk 'Acme Co' $MID $null $null 30000 'account' $QP @('2026-01','2026-02','2026-03','2026-04','2026-05','2026-06'))
+  Assert (@(Recon $fa 'RECON_TREND_COVERAGE').Count -eq 0 -and @(Recon $fa 'RECON_TREND_MISMATCH').Count -eq 0) "gate1b longer trend chart: not period skew, reconciles cleanly (no false coverage)"
+  # ...and the same longer chart with a MISMATCHING KPI still reconciles to a mismatch (chart is not consulted for skew)
+  $fa=Run-Trend (New-Led 'Acme Co' $months3 $null $null $null $null) (New-Pk 'Acme Co' $MID $null $null 35000 'account' $QP @('2026-01','2026-02','2026-03','2026-04','2026-05','2026-06'))
+  Assert (@(Recon $fa 'RECON_TREND_MISMATCH').Count -eq 1 -and @(Recon $fa 'RECON_TREND_COVERAGE').Count -eq 0) "gate1b longer trend chart: mismatch still fires (no spurious coverage)"
 
   # gate 2: identity mismatch -> ONE coverage info, never a mismatch
   $fa=Run-Trend (New-Led 'Acme Co' $months3 $null $null $null $null) (New-Pk 'Other Co' $MID $null $null 35000 'account' $QP $null)

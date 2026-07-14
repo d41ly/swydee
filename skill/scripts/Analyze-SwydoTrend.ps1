@@ -227,20 +227,30 @@ if($myPeriodKpiFacts){
       $covMsg="identity mismatch: -PeriodKpiFacts client '$pkClient' vs ledger client '$ldClient'"; $periodOk=$false
     }
   }
-  # ---- gate 1b: observed server-month cross-check (MF-4). When -PeriodKpiFacts carries a monthly timeSeries
-  #      whose bucket labels ALL match strict YYYY-MM, that label set must equal startYm..endYm; disagreement ->
-  #      coverage info (off-by-one-period resolution near a boundary); absence of such a series -> proceed. ----
+  # ---- gate 1b: observed server-month cross-check (MF-4). When -PeriodKpiFacts carries -- FOR A COMPARED
+  #      PROVIDER (one the ledger has, else it is never reconciled) -- a monthly timeSeries OF THE SAME REPORT
+  #      PERIOD whose bucket labels ALL match strict YYYY-MM, that label set must equal startYm..endYm;
+  #      disagreement -> coverage info (off-by-one-period resolution near a boundary); absence of such a series ->
+  #      proceed. "Same report period" is keyed on month COUNT: an off-by-one skew preserves the span length
+  #      (k months, shifted), whereas a longer/shorter monthly widget (e.g. a trailing 6/12-month trend chart)
+  #      is a DIFFERENT date range -- not evidence of period skew -- so it is skipped, not flagged. Restricting
+  #      to compared providers + same-length series is the literal MF-4 scoping; both guards only NARROW when the
+  #      gate trips (they never manufacture a coverage finding), so MF-8's single-emit cardinality is preserved. ----
   if($periodOk){
     $span1b=Get-MonthSpan $startYm $endYm
     $expected=@($span1b.months) -join ','
+    $expectedCount=@($span1b.months).Count
     foreach($plat in @($PK.platforms)){
       if($covMsg){ break }
+      if(-not $series.ContainsKey([string]$plat.id)){ continue }   # not a compared provider -> its widgets are not report-period evidence
       foreach($ts in @($plat.timeSeries)){
         $labels=@(@($ts.buckets) | ForEach-Object { [string]$_.label })
         if($labels.Count -eq 0){ continue }
         $allYm=(@($labels | Where-Object { $_ -notmatch '^[0-9]{4}-(0[1-9]|1[0-2])$' }).Count -eq 0)
         if(-not $allYm){ continue }                 # not a strict-month series -> not an observed-month check
-        $observedSet=(@($labels | Sort-Object -Unique) -join ',')
+        $observedLabels=@($labels | Sort-Object -Unique)
+        if($observedLabels.Count -ne $expectedCount){ continue }   # different-length window -> a different-range widget, not this report period
+        $observedSet=($observedLabels -join ',')
         if($observedSet -ne $expected){ $covMsg="resolved period disagrees with server-labeled report months (resolved $startYm..$endYm; observed $observedSet)"; $periodOk=$false; break }
       }
     }
