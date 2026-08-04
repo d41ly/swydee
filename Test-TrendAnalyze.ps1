@@ -58,6 +58,11 @@ try {
   # structural: R1 finding present, sev major, has fid; a QoQ/YoY comparison present
   $rest = @($factsR1.findings.anomalies | Where-Object { $_.ruleId -eq 'GAP_RESTATEMENT_SUPPRESSED' })
   Assert ($rest.Count -eq 1) "GAP_RESTATEMENT_SUPPRESSED emitted"
+  # EXTR-aPatientHarvest-1 S16: this path reads the LEDGER, and Update-SwydoLedger already refuses to
+  # merge an incomplete pull - so anything here was complete when pulled. Stated explicitly rather
+  # than left absent, so the closer's completeness gate reads the same on both report paths.
+  Assert ($factsR1.meta.extractionComplete -eq $true) "trend analysis facts assert completeness (enforced upstream at the ledger)"
+  Assert (@($factsR1.meta.incompleteWidgets).Count -eq 0) "no incomplete widgets on the ledger-backed path"
   Assert ($rest.Count -gt 0 -and $rest[0].severity -eq 'major' -and $rest[0].fid) "restatement finding is sev major + has fid"
   $comp = @($factsR1.findings.wins) + @($factsR1.findings.losses)
   Assert ($comp.Count -ge 1) "at least one QoQ/YoY win/loss emitted"

@@ -347,6 +347,44 @@ Ok ($clean -match 'Impressions were 95,302 in Q2 against 53,398 in Q1 \(a whoppi
 Ok (-not ($clean -match '\n{3,}')) 'Strip-Anchors collapses the blank runs left by anchor-only lines'
 Ok (-not ($clean -match '[ \t]+\n')) 'Strip-Anchors trims trailing whitespace left by inline anchors'
 
+Write-Host "== EXTR-aPatientHarvest-1: a partial extraction is not publishable =="
+# Deep-clone the good facts through JSON so each case starts from the same verified baseline.
+function CloneFacts($f){ return (($f | ConvertTo-Json -Depth 40 -Compress) | ConvertFrom-Json) }
+
+# 1. Absent key - every facts file written before this unit. It MUST still pass, which is what makes
+#    the gate inert by construction rather than by a feature flag.
+Ok (-not (HasT $rOk 'incomplete-extraction')) 'absent extractionComplete => no violation (pre-change facts still publish)'
+
+# 2. Explicit true - stated complete, still passes.
+$fTrue = CloneFacts $factsObj
+$fTrue.meta | Add-Member -NotePropertyName extractionComplete -NotePropertyValue $true
+$fTrue.meta | Add-Member -NotePropertyName incompleteWidgets -NotePropertyValue @()
+$rTrue = Invoke-Closer $reportOk $fTrue
+Ok (-not (HasT $rTrue 'incomplete-extraction')) 'explicit true => no violation'
+Ok ($rTrue.violations.Count -eq $rOk.violations.Count) 'explicit true changes nothing else about the verdict'
+
+# 3. Explicit false - blocks, no matter how cleanly the numbers trace. This is the whole point: the
+#    numbers CAN trace perfectly and still be totals over partial data.
+$fTrue2 = CloneFacts $factsObj
+$fFalse = CloneFacts $factsObj
+$fFalse.meta | Add-Member -NotePropertyName extractionComplete -NotePropertyValue $false
+$fFalse.meta | Add-Member -NotePropertyName incompleteWidgets -NotePropertyValue @('w-lost','w-also-lost')
+$rFalse = Invoke-Closer $reportOk $fFalse
+Ok (HasT $rFalse 'incomplete-extraction') 'explicit false => incomplete-extraction violation'
+Ok ((CountT $rFalse 'incomplete-extraction') -eq 1) 'exactly one such violation'
+$vInc = @($rFalse.violations | Where-Object { $_.type -eq 'incomplete-extraction' })[0]
+Ok ($vInc.detail -match '2 widget') 'the violation counts the incomplete widgets'
+Ok ($vInc.snippet -match 'w-lost') 'the violation names them'
+Ok ($rFalse.violations.Count -eq ($rOk.violations.Count + 1)) 'it ADDS a violation rather than masking the tracing result'
+# The report tracing itself is unaffected - this is a separate, additive gate.
+Ok ($rFalse.measuresChecked -eq $rOk.measuresChecked) 'tracing still runs over the same measures'
+
+# 4. Empty incompleteWidgets with an explicit false still blocks (the flag is authoritative, not the list).
+$fBare = CloneFacts $factsObj
+$fBare.meta | Add-Member -NotePropertyName extractionComplete -NotePropertyValue $false
+$rBare = Invoke-Closer $reportOk $fBare
+Ok (HasT $rBare 'incomplete-extraction') 'false with no id list still blocks'
+
 Write-Host ''
 Write-Host ("Test-Closer: {0} passed, {1} failed." -f $script:pass,$script:fail)
 if($script:fail -gt 0){ exit 1 }

@@ -264,6 +264,329 @@ Assert (($k1 -join ',') -eq 'resolverVersion,rule,anchorDate,primary') "E14 reso
 $k4 = @($r4.Keys)
 Assert (($k4 -join ',') -eq 'resolverVersion,rule,anchorDate,primary,note') "E14 unresolved wrapper adds note"
 
+# ============================================================================================
+# EXTR-aPatientHarvest-1 - completeness under a slow Swydo backend.
+# Offline throughout: a fake ClientWebSocket plus test-scope overrides of Invoke-GQL / Connect-Ws /
+# Start-Sleep. No network, no sleeping.
+# ============================================================================================
+Write-Host "== aPatientHarvest: fake websocket harness =="
+
+# A stand-in for ClientWebSocket. ReceiveAsync hands back a real Task<WebSocketReceiveResult> so the
+# production Ws-Recv exercises its genuine Wait/Result/pending logic rather than a mock of it.
+function New-FakeWs {
+  $ws = [pscustomobject]@{ State='Open'; Q=(New-Object System.Collections.Queue); Sent=(New-Object System.Collections.ArrayList)
+                           Disposed=$false; NextFaults=$false; LastTcs=$null; PendingSeg=$null; Receives=0 }
+  Add-Member -InputObject $ws -MemberType ScriptMethod -Name ReceiveAsync -Value {
+    param($seg,$ct)
+    $this.Receives = $this.Receives + 1
+    $this.PendingSeg = $seg
+    $tcs = New-Object 'System.Threading.Tasks.TaskCompletionSource[System.Net.WebSockets.WebSocketReceiveResult]'
+    $this.LastTcs = $tcs
+    if($this.NextFaults){ $this.NextFaults=$false; $tcs.SetException((New-Object System.Exception('socket died'))); return $tcs.Task }
+    if($this.Q.Count -gt 0){
+      $b=[Text.Encoding]::UTF8.GetBytes([string]$this.Q.Dequeue())
+      [Array]::Copy($b,0,$seg.Array,$seg.Offset,$b.Length)
+      $tcs.SetResult((New-Object System.Net.WebSockets.WebSocketReceiveResult($b.Length,'Text',$true)))
+    }
+    return $tcs.Task
+  }
+  Add-Member -InputObject $ws -MemberType ScriptMethod -Name SendAsync -Value {
+    param($seg,$type,$eom,$ct)
+    [void]$this.Sent.Add([Text.Encoding]::UTF8.GetString($seg.Array,$seg.Offset,$seg.Count))
+    $t = New-Object 'System.Threading.Tasks.TaskCompletionSource[bool]'; $t.SetResult($true); return $t.Task
+  }
+  Add-Member -InputObject $ws -MemberType ScriptMethod -Name Dispose -Value { $this.Disposed=$true }
+  # Deliver a frame the way a real socket does: if a receive is already outstanding, COMPLETE it;
+  # otherwise buffer for the next one. Without this the fake would only ever hand over frames that
+  # were queued before ReceiveAsync was called, which is not how a push channel behaves.
+  Add-Member -InputObject $ws -MemberType ScriptMethod -Name Push -Value {
+    param($msg)
+    if($this.LastTcs -and (-not $this.LastTcs.Task.IsCompleted) -and $this.PendingSeg){
+      $b=[Text.Encoding]::UTF8.GetBytes([string]$msg)
+      [Array]::Copy($b,0,$this.PendingSeg.Array,$this.PendingSeg.Offset,$b.Length)
+      $this.LastTcs.SetResult((New-Object System.Net.WebSockets.WebSocketReceiveResult($b.Length,'Text',$true)))
+    } else {
+      [void]$this.Q.Enqueue([string]$msg)
+    }
+  }
+  return $ws
+}
+# Complete a receive that was left pending, writing into the very buffer segment production handed us.
+function Complete-FakeRecv($ws,$msg){
+  $b=[Text.Encoding]::UTF8.GetBytes([string]$msg)
+  [Array]::Copy($b,0,$ws.PendingSeg.Array,$ws.PendingSeg.Offset,$b.Length)
+  $ws.LastTcs.SetResult((New-Object System.Net.WebSockets.WebSocketReceiveResult($b.Length,'Text',$true)))
+}
+$VERDICT_OK  = '{"kind":3,"payload":{"id":"dataRows:view:abc-1","status":"RESOLVED"}}'
+$VERDICT_NO  = '{"kind":3,"payload":{"id":"dataRows:view:abc-2","status":"REJECTED"}}'
+$KEEPALIVE   = '{"kind":4,"payload":{}}'
+function RowsJson($n){
+  $edges = @(); for($i=0;$i -lt $n;$i++){ $edges += '{"node":{"cells":[1]}}' }
+  return ('{"data":{"widget":{"id":"w","content":null,"data":{"edges":[' + ($edges -join ',') + '],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}')
+}
+$EMPTY_JSON = '{"data":{"widget":{"id":"w","content":null,"data":{"edges":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}'
+
+# Neutralise the two things that would reach outside the process.
+function Start-Sleep { param([int]$Seconds,[int]$Milliseconds) }
+function Connect-Ws {
+  $script:connectCalls = $script:connectCalls + 1
+  $script:pendingRecv = $null
+  if($script:connectShouldWork){ $script:socketId='sock-reconnected'; return $true }
+  $script:socketId=$null; return $false
+}
+function Setup-Fetch($plan){
+  Reset-FetchState
+  if($null -eq $plan){ $plan = Get-FetchPlan 2 }
+  $script:fetchPlan=$plan; $script:runWaitCapSec=60; $script:socketId='sock1'
+  $script:dr=$null; $script:cp=$null
+  $script:connectCalls=0; $script:connectShouldWork=$true
+  $script:gqlCalls=0; $script:gqlVars=(New-Object System.Collections.ArrayList)
+  $script:lastFetchOutcome=$null
+  return @{ plan=$plan; maxWaitSec=$plan.maxWaitSec }
+}
+$W = @{ id='w'; visual='TABLE' }
+$srcPath = Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1'
+
+Write-Host "== AC1: a timed-out slice must not lose the frame that arrives next =="
+Reset-FetchState
+$fw = New-FakeWs; $script:ws=$fw
+Assert ($null -eq (Ws-Recv 20)) "AC1 empty socket => null"
+Assert ($null -ne $script:pendingRecv) "AC1 pending receive is HELD after a timed-out slice"
+Complete-FakeRecv $fw $VERDICT_OK
+$got = Ws-Recv 200
+Assert ($got -eq $VERDICT_OK) "AC1 the late frame is delivered to the NEXT call (shipped code lost it)"
+Assert ($null -eq $script:pendingRecv) "AC1 slot cleared once Result was read"
+Assert ($fw.Receives -eq 1) "AC1 exactly ONE ReceiveAsync across both calls (no illegal concurrent receive)"
+
+Write-Host "== AC14/AC15: a faulted receive must not deafen the run =="
+Reset-FetchState
+$fw2 = New-FakeWs; $script:ws=$fw2; $fw2.NextFaults=$true
+$null = Ws-Recv 50
+Assert ($null -eq $script:pendingRecv) "AC14 a faulted task is cleared, never re-awaited forever"
+$fw3 = New-FakeWs; $script:ws=$fw3; [void]$fw3.Q.Enqueue($VERDICT_OK)
+Assert ((Ws-Recv 200) -eq $VERDICT_OK) "AC14 receiver is live again after the fault"
+Reset-FetchState
+$fw4 = New-FakeWs; $script:ws=$fw4
+$null = Ws-Recv 20
+Assert ($null -ne $script:pendingRecv) "AC15 pending exists before reconnect"
+[void](Connect-Ws)
+Assert ($null -eq $script:pendingRecv) "AC15 reconnect drops the pre-reconnect receive (no resurrection)"
+$srcConn = Get-Content $srcPath -Raw
+Assert ($srcConn -match 'function Connect-Ws \{[^\r\n]*\r?\n\s*\$script:pendingRecv = \$null') "AC15 Connect-Ws nulls the pending slot as its FIRST statement"
+
+Write-Host "== Get-FetchPlan / Get-WidgetOutcome (pure) =="
+$pl = Get-FetchPlan 90
+Assert ($pl.maxWaitSec -eq 90) "plan echoes maxWaitSec"
+Assert ($pl.drainSliceMs -gt 0) "drainSliceMs is NON-zero (Wait(0) would no-op the drain)"
+Assert ((Get-FetchPlan 0).maxWaitSec -eq 1) "plan floors maxWaitSec at 1"
+Assert ((Get-FetchPlan $null).maxWaitSec -eq 90) "plan defaults to 90"
+Assert ((Get-WidgetOutcome 'RESOLVED' 3 5000 0) -eq 'filled') "rows => filled"
+Assert ((Get-WidgetOutcome $null 3 5000 0) -eq 'filled') "rows without a verdict => filled"
+Assert ((Get-WidgetOutcome 'RESOLVED' 0 5000 0) -eq 'empty-resolved') "resolved + no rows => genuinely empty"
+Assert ((Get-WidgetOutcome 'resolved' 0 5000 0) -eq 'empty-resolved') "verdict compare is case-insensitive"
+Assert ((Get-WidgetOutcome 'REJECTED' 0 5000 0) -eq 'rejected') "refused => rejected"
+Assert ((Get-WidgetOutcome $null 0 0 0) -eq 'incomplete') "no verdict => incomplete"
+Assert ((Get-WidgetOutcome 'RESOLVED' 0 5000 1) -eq 'incomplete') "AC16 core: resolved+empty is NOT trusted while a compute is outstanding"
+Assert ((Get-WidgetOutcome 'WHATEVER' 0 5000 0) -eq 'incomplete') "an unmapped status blocks conservatively"
+
+Write-Host "== AC7/AC8: Get-ExtractionCompleteness (pure) =="
+$plan90 = Get-FetchPlan 90
+$bs = @{ maxTotalWaitSec=420; totalWaitedMs=1234; budgetExhausted=$false }
+$cAll = Get-ExtractionCompleteness @(
+  @{ id='a'; visual='KPI'; outcome='filled'; reason=$null; waitedMs=0; lastVerdict=$null; queries=1; pagesFetched=1 }
+  @{ id='b'; visual='TABLE'; outcome='empty-resolved'; reason=$null; waitedMs=1200; lastVerdict='RESOLVED'; queries=2; pagesFetched=0 }
+) $plan90 $bs
+Assert ($cAll.extractionComplete -eq $true) "AC8 filled + empty-resolved => complete"
+Assert (@($cAll.incompleteWidgets).Count -eq 0) "AC8 incompleteWidgets is an @()-wrapped EMPTY array"
+Assert ($cAll.fetchBudget.totalWaitedMs -eq 1234) "fetchBudget carries what the run actually spent"
+Assert ($cAll.fetchBudget.maxWaitSec -eq 90) "fetchBudget echoes the per-widget budget"
+$cInc = Get-ExtractionCompleteness @(
+  @{ id='a'; visual='KPI'; outcome='filled'; reason=$null; waitedMs=0; lastVerdict=$null; queries=1; pagesFetched=1 }
+  @{ id='z'; visual='TABLE'; outcome='incomplete'; reason='budget-exhausted'; waitedMs=90000; lastVerdict=$null; queries=31; pagesFetched=0 }
+) $plan90 $bs
+Assert ($cInc.extractionComplete -eq $false) "AC7 one unverdicted widget => incomplete"
+Assert (@($cInc.incompleteWidgets).Count -eq 1) "AC7 exactly the offending widget is listed"
+Assert ($cInc.incompleteWidgets[0].id -eq 'z') "AC7 names the widget"
+Assert ($cInc.incompleteWidgets[0].reason -eq 'budget-exhausted') "AC7 carries the reason"
+$cRej = Get-ExtractionCompleteness @(@{ id='r'; visual='TABLE'; outcome='rejected'; reason=$null; waitedMs=50; lastVerdict='REJECTED'; queries=1; pagesFetched=0 }) $plan90 $bs
+Assert ($cRej.extractionComplete -eq $false) "owner fork 3: REJECTED on the report path blocks publish"
+Assert ($cRej.incompleteWidgets[0].reason -eq 'rejected') "rejected carries its own reason"
+$cNull = Get-ExtractionCompleteness @() $plan90 $bs
+Assert ($cNull.extractionComplete -eq $true) "no widgets => complete"
+Assert (@($cNull.incompleteWidgets).Count -eq 0) "empty outcome set => empty array"
+
+Write-Host "== AC2/AC3/AC4/AC5: verdict-driven fetch =="
+$opt = Setup-Fetch $null
+$fwA = New-FakeWs; $script:ws=$fwA
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; [void]$script:gqlVars.Add($vars); return (RowsJson 3) }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:gqlCalls -eq 1) "AC5 warm widget costs exactly ONE query"
+Assert ($script:lastFetchOutcome.outcome -eq 'filled') "AC5 warm widget => filled"
+Assert ($script:lastFetchOutcome.waitedMs -eq 0) "AC5 warm widget waits zero ms"
+Assert (@($o.data.widget.data.edges).Count -eq 3) "AC5 the object is returned unchanged"
+
+$opt = Setup-Fetch $null
+$fwB = New-FakeWs; $script:ws=$fwB
+# The verdict arrives AFTER the query that kicks off the compute, so it must be enqueued there. A
+# frame queued before the call would be eaten by the pre-fire drain - correctly, since such a frame
+# could only belong to a previous widget. That is exactly the mis-attribution AC16 covers.
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; if($script:gqlCalls -eq 1){ $script:ws.Push($VERDICT_OK); return $EMPTY_JSON }; return (RowsJson 2) }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'filled') "AC2 RESOLVED then rows => filled"
+Assert ($script:gqlCalls -eq 2) "AC2 re-queries as soon as the verdict lands (2 calls, not a poll cycle)"
+Assert ($script:lastFetchOutcome.lastVerdict -eq 'RESOLVED') "AC2 verdict recorded"
+
+$opt = Setup-Fetch $null
+$fwC = New-FakeWs; $script:ws=$fwC
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; if($script:gqlCalls -eq 1){ $script:ws.Push($VERDICT_NO) }; return $EMPTY_JSON }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'rejected') "AC3 REJECTED => rejected"
+Assert ($script:gqlCalls -eq 1) "AC3 no re-query after a refusal (rows are never coming)"
+
+$opt = Setup-Fetch $null
+$fwD = New-FakeWs; $script:ws=$fwD
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; if($script:gqlCalls -eq 1){ $script:ws.Push($KEEPALIVE); $script:ws.Push($VERDICT_OK); return $EMPTY_JSON }; return (RowsJson 1) }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'filled') "AC4 keepalive does not end the wait"
+Assert (@($fwD.Sent | Where-Object { $_ -match '"kind":5' }).Count -ge 1) "AC4 a kind:4 keepalive is answered with kind:5"
+
+$opt = Setup-Fetch $null
+$fwE = New-FakeWs; $script:ws=$fwE
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; if($script:gqlCalls -eq 1){ $script:ws.Push($VERDICT_OK) }; return $EMPTY_JSON }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'empty-resolved') "AC8 resolved + still empty => genuinely empty, not a failure"
+Assert ($script:lastFetchOutcome.lastVerdict -eq 'RESOLVED') "AC8 the verdict that justified 'empty' is recorded"
+
+Write-Host "== AC7 live / AC16: budget exhaustion and the stale-verdict trap =="
+$opt = Setup-Fetch (Get-FetchPlan 1)
+$fwF = New-FakeWs; $script:ws=$fwF
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; return $EMPTY_JSON }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'incomplete') "AC7 silent socket => incomplete"
+Assert ($script:lastFetchOutcome.reason -eq 'budget-exhausted') "AC7 reason is budget-exhausted"
+Assert ($script:connectCalls -ge 1) "AC16 an unverdicted widget forces a reconnect, orphaning its compute"
+Assert ($script:outstandingComputes -eq 0) "AC16 a SUCCESSFUL reconnect clears the outstanding counter"
+
+$opt = Setup-Fetch (Get-FetchPlan 1)
+$script:connectShouldWork = $false
+$fwG = New-FakeWs; $script:ws=$fwG
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; return $EMPTY_JSON }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:outstandingComputes -ge 1) "AC16 a failed reconnect leaves the compute outstanding"
+$script:socketId='sock1'; $script:gqlCalls=0     # count B's queries, not A's
+$fwH = New-FakeWs; $script:ws=$fwH
+# Widget A's compute finishes late and pushes ITS verdict while widget B is waiting. Reading that as
+# B's answer is the silent-gap bug: B would be certified 'empty-resolved' and ship as zero activity.
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; if($script:gqlCalls -eq 1){ $script:ws.Push($VERDICT_OK) }; return $EMPTY_JSON }
+$o = Fetch-Widget @{ id='wB'; visual='TABLE' } $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'incomplete') "AC16 a stale RESOLVED does NOT certify widget B as empty"
+Assert ($script:lastFetchOutcome.reason -eq 'stale-verdict-risk') "AC16 the reason names the risk"
+
+Write-Host "== AC6/AC17: transport faults never truncate silently =="
+$opt = Setup-Fetch (Get-FetchPlan 1)
+$fwI = New-FakeWs; $script:ws=$fwI; [void]$fwI.Q.Enqueue($VERDICT_OK)
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; if($script:gqlCalls -eq 1){ return (New-FetchFailure 'transport' 3 'timed out') }; return (RowsJson 2) }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'incomplete') "AC6 a transport fault ends the widget, it does not kill the run"
+Assert ($script:lastFetchOutcome.reason -eq 'transport-failed') "AC6 reason is transport-failed"
+Assert (Test-FetchFailed (New-FetchFailure 'transport' 3 'x')) "the failure marker is recognisable"
+Assert (-not (Test-FetchFailed '{"data":{}}')) "a JSON string is NOT a failure marker"
+Assert (-not (Test-FetchFailed $null)) "null is not a failure marker"
+
+$opt = Setup-Fetch $null
+$fwJ = New-FakeWs; $script:ws=$fwJ
+$P1 = '{"data":{"widget":{"id":"w","content":null,"data":{"edges":[{"node":{"cells":[1]}}],"pageInfo":{"hasNextPage":true,"endCursor":"CUR1"}}}}}'
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; if($script:gqlCalls -eq 1){ return $P1 }; return (New-FetchFailure 'transport' 3 'page 2 died') }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'incomplete') "AC17 a faulted page is NOT a last page"
+Assert ($script:lastFetchOutcome.reason -eq 'partial-pages') "AC17 reason is partial-pages"
+Assert ($script:lastFetchOutcome.endCursor -eq 'CUR1') "AC17 records where the truncation happened"
+$cPart = Get-ExtractionCompleteness @($script:lastFetchOutcome) (Get-FetchPlan 90) @{ maxTotalWaitSec=420; totalWaitedMs=0; budgetExhausted=$false }
+Assert ($cPart.extractionComplete -eq $false) "AC17 a truncated widget makes the extraction incomplete"
+
+Write-Host "== AC12/AC18: run budget and socket loss =="
+$opt = Setup-Fetch (Get-FetchPlan 5)
+$script:runWaitCapSec = 0
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; return $EMPTY_JSON }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -eq 'incomplete') "AC12 an exhausted run budget ends the widget"
+Assert ($script:lastFetchOutcome.reason -eq 'run-budget-exhausted') "AC12 reason distinguishes run budget from widget budget"
+Assert ($script:gqlCalls -eq 0) "AC12 no query is issued once the run budget is gone"
+
+$opt = Setup-Fetch (Get-FetchPlan 5)
+$script:connectShouldWork=$false; $script:socketId=$null
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; return $EMPTY_JSON }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.reason -eq 'socket-lost') "AC18 no socketId => socket-lost, not a full-budget wait"
+Assert ($script:gqlCalls -eq 0) "AC18 never queries without a socketId"
+Reset-FetchState
+$script:fetchPlan=(Get-FetchPlan 5); $script:connectShouldWork=$false; $script:connectCalls=0
+$r1=Reset-Socket; $r2=Reset-Socket; $r3=Reset-Socket; $r4=Reset-Socket
+Assert ((-not $r1) -and (-not $r4)) "AC18 failed reconnects report failure"
+Assert ($script:connectCalls -eq (Get-FetchPlan 5).maxReconnects) "AC18 reconnect attempts stop exactly at maxReconnects"
+
+Write-Host "== AC19: the request the run body sends is byte-identical to pre-change =="
+$opt = Setup-Fetch $null
+$script:dr = [pscustomobject]@{ primary=[pscustomobject]@{ count=-1; measure='quarter'; type='RELATIVE' } }
+$script:cp = 'PREVIOUS_PERIOD'
+$fwK = New-FakeWs; $script:ws=$fwK
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; [void]$script:gqlVars.Add($vars); return (RowsJson 1) }
+$null = Fetch-Widget $W $null $null $opt
+$v = $script:gqlVars[0]
+Assert ($v.sid -eq 'sock1') "AC19 socketId unchanged"
+Assert ($v.cp -eq 'PREVIOUS_PERIOD') "AC19 compare period unchanged"
+Assert ($v.dr.primary.measure -eq 'quarter') "AC19 a null dr still resolves to the report range"
+Assert ($null -eq $v.after) "AC19 first page still asks after=null"
+
+Write-Host "== AC23: the drain consumes a leftover verdict =="
+Reset-FetchState
+$script:fetchPlan=(Get-FetchPlan 2)
+$fwL = New-FakeWs; $script:ws=$fwL; [void]$fwL.Q.Enqueue($VERDICT_OK); [void]$fwL.Q.Enqueue($KEEPALIVE)
+$n = Drain-Ws $script:fetchPlan
+Assert ($n -eq 2) "AC23 the drain consumes everything already buffered"
+Assert ($null -eq (Ws-Recv 20)) "AC23 nothing is left to be mistaken for the next widget's verdict"
+
+Write-Host "== AC11: ceiling evidence (pure) =="
+Assert (Test-CeilingStillValid ([ordered]@{ state='has-months'; months=@('2025-01','2025-02') }) 2) "months present => admissible"
+Assert (-not (Test-CeilingStillValid ([ordered]@{ state='rejected'; months=@() }) 2)) "a refusal is not evidence of history"
+Assert (-not (Test-CeilingStillValid ([ordered]@{ state='unsettled'; months=@() }) 2)) "an unanswered window is NEVER read as a ceiling"
+Assert (-not (Test-CeilingStillValid ([ordered]@{ state='empty-resolved'; months=@() }) 2)) "resolved-but-empty carries no months"
+Assert (-not (Test-CeilingStillValid $null 2)) "null probe => not admissible"
+Assert (-not (Test-CeilingStillValid ([ordered]@{ state='has-months'; months=@('2025-01','2025-03') }) 2)) "gapped months => not admissible"
+
+Write-Host "== Get-TrendMonthCells: unsettled is not overshoot =="
+$emptyW = W ([pscustomobject]@{ metrics=(FieldsConn @()); dims=(FieldsConn @([pscustomobject]@{name='Month';id='d:month'})); data=[pscustomobject]@{edges=@()} })
+Assert ((Get-TrendMonthCells $emptyW).windowStatus -eq 'overshoot-empty') "empty with no outcome => overshoot-empty (unchanged)"
+Assert ((Get-TrendMonthCells $emptyW @{ outcome='incomplete' }).windowStatus -eq 'unsettled') "empty from an INCOMPLETE fetch => unsettled, never overshoot"
+Assert ((Get-TrendMonthCells (W $null) @{ outcome='incomplete' }).windowStatus -eq 'unsettled') "null widget from an incomplete fetch => unsettled"
+Assert ((Get-TrendMonthCells (W $null)).windowStatus -eq 'error') "null widget with no outcome => error (unchanged)"
+
+Write-Host "== Count-Edges: the @(`$null).Count trap (caught by live verification) =="
+# @($null).Count is 1. Left unguarded, a null edge list reads as ONE row and an empty widget is
+# classified 'filled' - the exact silent failure this unit exists to prevent.
+Assert ((Count-Edges $null) -eq 0) "null object => 0 rows, not 1"
+Assert ((Count-Edges (W $null)) -eq 0) "null widget => 0 rows, not 1"
+Assert ((Count-Edges (W ([pscustomobject]@{ data=$null }))) -eq 0) "null data => 0 rows, not 1"
+Assert ((Count-Edges (W ([pscustomobject]@{ data=[pscustomobject]@{ edges=$null } }))) -eq 0) "null edges => 0 rows, not 1"
+Assert ((Count-Edges (W ([pscustomobject]@{ data=[pscustomobject]@{ edges=@() } }))) -eq 0) "empty edges => 0 rows"
+Assert ((Count-Edges (($EMPTY_JSON | ConvertFrom-Json))) -eq 0) "a real empty response => 0 rows"
+Assert ((Count-Edges (((RowsJson 3) | ConvertFrom-Json))) -eq 3) "a real 3-row response => 3 rows"
+Assert ((Count-Edges (((RowsJson 1) | ConvertFrom-Json))) -eq 1) "a genuine single row is still 1 (not confused with the null case)"
+# and end to end: a widget whose response has no edges must never come back 'filled'
+$opt = Setup-Fetch (Get-FetchPlan 1)
+$fwM = New-FakeWs; $script:ws=$fwM
+function Invoke-GQL($q,$vars,[switch]$NoRetry){ $script:gqlCalls++; return '{"data":{"widget":{"id":"w","content":null,"data":null}}}' }
+$o = Fetch-Widget $W $null $null $opt
+Assert ($script:lastFetchOutcome.outcome -ne 'filled') "a null data block never classifies as filled"
+
+Write-Host "== AC22: no unbounded network call may exist in the extractor =="
+$srcG = Get-Content $srcPath -Raw
+$callSites = @([regex]::Matches($srcG,'Invoke-(WebRequest|RestMethod)[^\r\n]*'))
+Assert ($callSites.Count -ge 3) "AC22 the scan actually found the call sites (guard against a silent zero-match pass)"
+$unbounded = @($callSites | Where-Object { $_.Value -notmatch '-TimeoutSec' })
+Assert ($unbounded.Count -eq 0) ("AC22 every HTTP call passes -TimeoutSec (unbounded: " + (@($unbounded | ForEach-Object { $_.Value.Trim() }) -join ' | ') + ")")
+Assert (@([regex]::Matches($srcG,'\.Wait\(\s*\)')).Count -eq 0) "AC22 no .Wait() is called without a bound"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

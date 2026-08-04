@@ -1,6 +1,6 @@
 # EXTR-aPatientHarvest-1 — extractor completeness under a slow Swydo backend
 
-**Status:** SPECCED · rev-3 · 2026-08-04 · node a · Tier-2 · base ea721b4c · review 2026-08-04-review-aPatientHarvest-1
+**Status:** INPROGRESS · rev-5 · 2026-08-04 · node a · Tier-2 · base ea721b4c · review 2026-08-04-review-aPatientHarvest-1 · ratified 2026-08-04
 
 ## 1. Goal
 
@@ -213,7 +213,10 @@ precisely why batched fetching is out of scope.
 The pure helpers carry every decision a test needs, so no test sleeps or reaches the network:
 
 - `Get-FetchPlan($maxWaitSec)` returns `sliceMs`, `pollEveryMs`, `drainSliceMs`, `handshakeMs`,
-  `quietFallbackMs`, `minFallbackQueries`, `retryUnsettledOnce` and `maxReconnects`.
+  `quietFallbackMs`, `minFallbackQueries`, `retryUnsettledOnce`, `maxReconnects`, `emptyConfirms`
+  and `probeMaxWaitSec`.
+- `Count-Edges($obj)` is the ONLY rowcount path in the file, because `@($null).Count` is 1 and a null
+  edge list would otherwise read as one row and classify an empty widget `filled`.
 - `Get-WidgetOutcome($verdict, $rows, $budgetLeftMs, $outstandingComputes)` returns the four states.
 - `Get-ExtractionCompleteness($outcomes, $plan, $budgetState)` returns the whole `meta` block.
 - `Test-CeilingStillValid($probeResult, $minRun)` decides whether a probe result is admissible
@@ -423,16 +426,16 @@ into `$doc.meta` and `$tdoc.meta` are covered only by the live run.
   2026-08-04): write the document, flag it in facts, and let the closer refuse to publish.
 - **Fork 2, how much wall clock an extraction may spend.** RESOLVED (owner, 2026-08-04): configurable
   with a sane default. Realised as `-MaxWaitSec` and `-MaxTotalWaitSec`.
-- **Fork 3, whether `REJECTED` on the default report path should block publish.** Recommendation: yes,
-  treat it as `incomplete` with reason `rejected`. The default path asks for the report's own
+- **Fork 3, whether `REJECTED` on the default report path should block publish.** RESOLVED (owner,
+  2026-08-04): block, treating it as `incomplete` with reason `rejected`. The default path asks for the report's own
   configured date range, so a refusal is a genuine fault, and the alternative is publishing over a
   silently missing widget.
-- **Fork 4, whether `GAP_EXTRACTION_INCOMPLETE` should be `critical` or `major`.** Recommendation:
-  `critical`, because it means the input itself is untrustworthy rather than one number being
+- **Fork 4, whether `GAP_EXTRACTION_INCOMPLETE` should be `critical` or `major`.** RESOLVED (owner,
+  2026-08-04): `critical`, because it means the input itself is untrustworthy rather than one number being
   unavailable. The closer violation in S15 blocks publish either way.
 - **Fork 5, whether a persistently `unsettled` trend window should be conservative-overshoot or a hard
-  error.** Recommendation: conservative overshoot plus `ceilingUncertain`, per the measured silent
-  band. A hard error would have failed a trend pull that today produces the right answer.
+  error.** RESOLVED (owner, 2026-08-04, via the scope approval): conservative overshoot plus
+  `ceilingUncertain`, per the measured silent band. A hard error would have failed a trend pull that today produces the right answer.
 
 ## 9. Revision log
 
@@ -450,6 +453,20 @@ into `$doc.meta` and `$tdoc.meta` are covered only by the live run.
   socket fault, and the trend chain exempting itself from the gate via the absent-key rule. Also
   folded two probes run after the review launched, which measured a transient silent band and led to
   a deliberate divergence from must-fix 9, recorded in section 4.
+- rev-4 · 2026-08-04 · owner ratified the full 19-item scope; forks 3, 4 and 5 resolved in place as
+  block-on-REJECTED, `critical`, and conservative-overshoot. Status to INPROGRESS; build started.
+- rev-5 · 2026-08-04 · built, plus three corrections that only LIVE verification could find. (a) The
+  case-insensitivity trap in this repo's own manifest fired: `$script:maxTotalWaitSec` IS the
+  `[int]$MaxTotalWaitSec` param at one scope, so initialising it to `$null` coerced the param to 0 and
+  every widget started with an exhausted run budget. Renamed to `$script:runWaitCapSec`. (b) The
+  `@($null).Count -eq 1` trap fired too: a null response reported one row, which would have classified
+  an empty widget `filled`. All rowcounts now go through `Count-Edges`. (c) The stale-verdict class
+  recurred live in a shape `$outstandingComputes` does not cover - a widget that ends WITH a verdict
+  still leaves a compute from its own successful re-query, so the NEXT widget was reading that late
+  frame and being marked `empty-resolved` despite having data. Closed by `emptyConfirms`: a
+  resolved-but-empty result is believed only after one further quiet window yields no new verdict.
+  Also added `probeMaxWaitSec` (10 s) after a live trend run spent 349 s of its 420 s budget waiting
+  out the unsettled band at full per-widget budget; probes are cheap and expected to be refused.
 
 ## 10. Reuse audit
 

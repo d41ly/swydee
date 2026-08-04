@@ -340,6 +340,12 @@ $factsDoc=[ordered]@{
     horizonMonths=$null; ledgerUpdatedAt=$L.updatedAt; hasComparison=$hasCmp; comparisonCaveats=$caveats
     providers=@($platforms.Values | ForEach-Object { [ordered]@{ id=$_.id; name=$_.name; category=$_.category } })
     coverage=@($covByProv.Values)
+    # This path reads the LEDGER, not a single extraction, so there is no per-pull verdict to copy.
+    # Completeness is enforced one step upstream instead: Update-SwydoLedger refuses to merge trend
+    # facts whose extractionComplete is $false, so anything that reached the ledger was complete when
+    # it was pulled. Emitted as $true to keep the closer's completeness gate uniform across both
+    # report paths rather than silently absent on this one (EXTR-aPatientHarvest-1 S16).
+    extractionComplete=$true; incompleteWidgets=@()
   }
   platforms=@($platforms.Values)
   findings=[ordered]@{ wins=@($wins); losses=@($losses); anomalies=@($anoms); discrepancies=@($disc); dataGaps=@($gaps) }

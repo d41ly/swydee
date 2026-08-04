@@ -60,6 +60,29 @@ try {
     $of = $txt | ConvertFrom-Json
     Assert (@($of.cells).Count -eq 1 -and $of.cells[0].display -eq '$1.00') "cell shaped + formatted"
     Assert ((@($of.meta.providerFilter) -contains 'google-adwords') -and (@($of.meta.providerInventory) -contains 'facebook-ads')) "providerFilter/inventory carried into trend facts (so the ledger can refuse a partial pull)"
+    # EXTR-aPatientHarvest-1 S16: without this carry the ledger and the trend report would be
+    # permanently exempt from the completeness gate, because the closer reads a missing key as OK.
+    Assert ($of.meta.extractionComplete -eq $true) "an extraction with no completeness key => trend facts say complete"
+    Assert (@($of.meta.incompleteWidgets).Count -eq 0) "no incomplete widgets carried when there were none"
+  }
+  # (a2) the same doc, but the extractor said it could not finish -> the verdict must survive the hop
+  $incDoc = [ordered]@{
+    meta=[ordered]@{ tool='Get-SwydoReport.ps1'; schemaVersion=2; trend=$true; extractedAt='2026-07-06T00:00:00Z'
+      reportId='rid'; coverage=@(); warnings=@(); providerFilter=@(); providerInventory=@('google-adwords')
+      extractionComplete=$false; incompleteWidgets=@([ordered]@{ id='w-lost'; visual='TABLE'; reason='budget-exhausted' }) }
+    report=[ordered]@{ name='Test Client'; client='Test Client' }
+    trendCells=@( [ordered]@{ providerId='google-adwords'; metricId='google-adwords:clicks'; month='2025-01'; rawValue=5; currency=$null; unit=$null } )
+  }
+  $incP = Join-Path $tmp 'incomplete.trend.json'
+  [IO.File]::WriteAllText($incP, ($incDoc | ConvertTo-Json -Depth 40), (New-Object Text.UTF8Encoding($false)))
+  $incOut = Join-Path $tmp 'incout'; New-Item -ItemType Directory -Force -Path $incOut | Out-Null
+  & powershell -NoProfile -ExecutionPolicy Bypass -File "$scripts\ConvertTo-SwydoTrendFacts.ps1" -InFile $incP -OutDir $incOut *> $null
+  $incFile = Get-ChildItem (Join-Path $incOut '*.trendfacts.json') | Select-Object -First 1
+  Assert ($null -ne $incFile) "incomplete trend doc still produces facts (the refusal happens at the ledger, not here)"
+  if($incFile){
+    $iof = [IO.File]::ReadAllText($incFile.FullName) | ConvertFrom-Json
+    Assert ($iof.meta.extractionComplete -eq $false) "extractionComplete=false survives into trend facts"
+    Assert (@($iof.meta.incompleteWidgets) -contains 'w-lost') "the incomplete widget id survives as an id"
   }
 
   # (b) credential planted in a NON-scrubbed field (report.client) -> gate must FAIL closed (non-zero exit)

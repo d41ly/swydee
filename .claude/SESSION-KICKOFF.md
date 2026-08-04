@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-04T15:28:41+03:00 @ ea721b4c1ea110d22cf0af238d6f56ea5e1ed35c
+last-audit: 2026-08-04T16:49:05+03:00 @ ea721b4c1ea110d22cf0af238d6f56ea5e1ed35c
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -101,7 +101,7 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-933 assertions across the 8 suites.
+1064 assertions across the 8 suites (was 933 before EXTR-aPatientHarvest-1).
 
 ### Tier rule
 
@@ -159,6 +159,11 @@ true. Keep each to one line; link out for detail.*
 - Hardened scripts are reused via `-DefineOnly` dot-sourcing (functions-first pattern) and are
   **never behaviorally modified**; guard captured vars with the `$my*` prefix when dot-sourcing.
 - `@($null).Count -eq 1`: always `@(...)`-wrap collections before `.Count`/indexing.
+- Swydo orders the lists inside grouped cells **non-deterministically**: three QCU widgets differ
+  between ANY two extractions of the same report, including two runs of identical code. A
+  byte-comparison of two extractions is therefore only meaningful per-widget and after excluding
+  `raw` (which carries per-query node ids). Verified 2026-08-04 by running the pre-change extractor
+  twice. Prune when a run-to-run diff of unchanged code comes back empty.
 - The default single-report output path must stay **byte-for-byte unchanged** — every change is
   additive-in-facts (new `meta` fields / findings only). Sole exception: the reviewed, disclosed U9
   flip-set waiver (D1/D3) — a zero-dim KPI superseding a doc-earlier table total changes the flipped

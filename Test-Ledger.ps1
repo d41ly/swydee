@@ -150,6 +150,31 @@ try {
   [IO.File]::WriteAllText($filtPath, ($filt | ConvertTo-Json -Depth 40), (New-Object Text.UTF8Encoding($false)))
   & powershell -NoProfile -ExecutionPolicy Bypass -File "$scripts\Update-SwydoLedger.ps1" -InFile $filtPath -ArchiveRoot $tmp -NowIso '2026-07-06T00:00:00Z' *> $null
   Assert ($LASTEXITCODE -ne 0) "--platform-filtered trend facts => refused (whole-account ledger only)"
+  # EXTR-aPatientHarvest-1 S16: refuse an INCOMPLETE pull. Merging one would freeze partial months
+  # into the cumulative ledger, where a later trend report reads them as settled history.
+  $baseCells = @([ordered]@{ providerId='google-adwords'; metricId='google-adwords:clicks'; month='2025-01'; value=1; display='1'; unit=$null; currency=$null; status='returned' })
+  $incMeta = [ordered]@{ trendFactsVersion=1; reportName='Acme'; client='Acme'; clientId='C9'; coverage=@()
+                         extractionComplete=$false; incompleteWidgets=@('w-lost') }
+  $incPath = Join-Path $tmp 'incomplete.trendfacts.json'
+  [IO.File]::WriteAllText($incPath, (([ordered]@{ meta=$incMeta; cells=$baseCells }) | ConvertTo-Json -Depth 40), (New-Object Text.UTF8Encoding($false)))
+  & powershell -NoProfile -ExecutionPolicy Bypass -File "$scripts\Update-SwydoLedger.ps1" -InFile $incPath -ArchiveRoot $tmp -NowIso '2026-07-06T00:00:00Z' *> $null
+  Assert ($LASTEXITCODE -ne 0) "incomplete trend facts => refused (partial months must not enter the cumulative ledger)"
+
+  # ... and the same shape WITHOUT the flag still merges, so pre-change trend facts are unaffected.
+  $okMeta = [ordered]@{ trendFactsVersion=1; reportName='Acme2'; client='Acme2'; clientId='C10'; coverage=@() }
+  $okPath = Join-Path $tmp 'nokey.trendfacts.json'
+  [IO.File]::WriteAllText($okPath, (([ordered]@{ meta=$okMeta; cells=$baseCells }) | ConvertTo-Json -Depth 40), (New-Object Text.UTF8Encoding($false)))
+  & powershell -NoProfile -ExecutionPolicy Bypass -File "$scripts\Update-SwydoLedger.ps1" -InFile $okPath -ArchiveRoot $tmp -NowIso '2026-07-06T00:00:00Z' *> $null
+  Assert ($LASTEXITCODE -eq 0) "trend facts with NO completeness key still merge (pre-change artifacts unaffected)"
+
+  # ... and an explicit true merges too.
+  $trueMeta = [ordered]@{ trendFactsVersion=1; reportName='Acme3'; client='Acme3'; clientId='C11'; coverage=@()
+                          extractionComplete=$true; incompleteWidgets=@() }
+  $truePath = Join-Path $tmp 'complete.trendfacts.json'
+  [IO.File]::WriteAllText($truePath, (([ordered]@{ meta=$trueMeta; cells=$baseCells }) | ConvertTo-Json -Depth 40), (New-Object Text.UTF8Encoding($false)))
+  & powershell -NoProfile -ExecutionPolicy Bypass -File "$scripts\Update-SwydoLedger.ps1" -InFile $truePath -ArchiveRoot $tmp -NowIso '2026-07-06T00:00:00Z' *> $null
+  Assert ($LASTEXITCODE -eq 0) "explicitly complete trend facts merge"
+
 } finally { $ErrorActionPreference=$savedEAP; Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 
 Write-Host ""
