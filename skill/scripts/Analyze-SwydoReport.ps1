@@ -721,6 +721,126 @@ function Get-SliceAccountFindings($w,$dataWidgets,$periods){
   return @($out)
 }
 
+# ===================== ANLZ-aUniformLattice-4 (P3): the uniform per-platform matrix =====================
+# platforms[].metrics{} is a TOTAL map: every observed (platform, metricId) pair gets exactly one cell,
+# carrying either a value with full provenance or one reason token explaining its absence. It is a
+# SIBLING of headline{}, which stays byte-identical -- that is what keeps Analyze-SwydoTrend's gate 2c
+# and the closer's existing index working untouched.
+
+# D2: the single definition of a widget that may contribute a VALUE. Blended binds at EVERY rank (U6 D6,
+# U7 R6, U9 D1), not just where a sum would happen. There is deliberately no -Platform test: that filter
+# runs at EXTRACTION, so every widget reaching the analyzer already passed it.
+function Test-MatrixEligible($w){
+  if([string]$w.kind -ne 'data'){ return $false }
+  if(Test-Blended $w){ return $false }
+  if($w.sectionHidden -eq $true){ return $false }   # absent on schemaVersion 2 => visible
+  return $true
+}
+# The metric's OWN provider, never the widget's. Get-WidgetProvider falls back to the FIRST metric's
+# prefix, so on a mixed-prefix widget it files every metric under one provider; the key space files each
+# under its own. The matrix follows the key space so the group key and the key space are one function.
+function Get-MetricProviderId($m){
+  if($m.PSObject.Properties['providerId'] -and $m.providerId){ return [string]$m.providerId }
+  return (([string]$m.id -split ':')[0])
+}
+# D3: every candidate contribution, metric-level. A widget that DECLARES a metric but whose total row
+# has no cell for it -- or whose cell is a non-numeric echo object -- is NOT a contribution: those are
+# the same two guards the headline applies, and without them a structurally-ranked widget could win and
+# then supply nothing.
+function Get-MatrixContributions($dataWidgets){
+  $out=@(); $idx=-1
+  foreach($w in @($dataWidgets)){
+    $idx=$idx+1
+    $docIdx=$idx
+    if($w.PSObject.Properties['documentIndex'] -and $null -ne $w.documentIndex){ $docIdx=[int]$w.documentIndex }
+    $eligible = Test-MatrixEligible $w
+    $dims=@($w.dimensions | Where-Object {$_})
+    $isKpi=($dims.Count -eq 0)
+    $tr=$null
+    if($eligible){ $tr = Total-Row $w }
+    foreach($m in @($w.metrics)){
+      $prov = Get-MetricProviderId $m
+      if(-not $prov){ continue }
+      $rec=[ordered]@{
+        providerId=$prov; metricId=[string]$m.id; metric=$m; widgetId=[string]$w.id; documentIndex=$docIdx
+        eligible=[bool]$eligible; blended=[bool](Test-Blended $w); hidden=[bool]($w.sectionHidden -eq $true)
+        dimensioned=[bool](-not $isKpi); dims=$dims; hasTotalRow=[bool]($null -ne $tr)
+        rank=0; cell=$null; currencyCode=$w.currencyCode
+      }
+      if($eligible -and $tr){
+        $c = $tr.metrics.$($m.name)   # by display NAME, byte-identically to the headline (see D3)
+        if($c -and ($c.current -is [double] -or $c.current -is [int] -or $c.current -is [long] -or $c.current -is [decimal])){
+          $rec.cell=$c
+          $rec.rank=$(if($isKpi){1}else{2})
+        }
+      }
+      $out += ,$rec
+    }
+  }
+  return ,@($out)
+}
+# The ordered, exhaustive reason ladder. First matching rung wins; the last rung cannot fail.
+function Get-MatrixReason($group,$aggClass){
+  $g=@($group)
+  if(@($g | Where-Object { -not $_.blended }).Count -eq 0){ return 'blended-undecomposable' }
+  $nonBlended=@($g | Where-Object { -not $_.blended })
+  if(@($nonBlended | Where-Object { -not $_.hidden }).Count -eq 0){ return 'hidden-section' }
+  # A widget ranked structurally (eligible, had a total row) but supplied no usable cell.
+  if(@($g | Where-Object { $_.eligible -and $_.hasTotalRow }).Count -gt 0){ return 'no-usable-cell' }
+  if($aggClass -eq 'dedup-nonsummable' -or $aggClass -eq 'account-asis'){ return 'not-summable' }
+  if(@($g | Where-Object { $_.eligible -and $_.dimensioned -and -not $_.hasTotalRow }).Count -gt 0){ return 'incomplete-rows' }
+  if(@($g | Where-Object { $_.eligible }).Count -gt 0){ return 'no-total' }
+  return 'unclassified'   # total fallback: unreachable by construction, present so the reduce is provably total
+}
+# D3: reduce one (providerId, metricId) group to exactly one cell.
+function Reduce-MatrixCell($group,$periods,$coverageBasis){
+  $g=@($group)
+  if($g.Count -eq 0){ return $null }
+  $first=$g[0]; $m=$first.metric
+  $aggClass = Get-AggregationClass $m.id $m.unit
+  $observedOn=@(@($g | ForEach-Object { $_.widgetId }) | Select-Object -Unique)
+  $ranked=@($g | Where-Object { $_.rank -gt 0 } | Sort-Object @{Expression={[int]$_.rank}}, @{Expression={[int]$_.documentIndex}})
+  $out=[ordered]@{ id=[string]$m.id; metric=[string]$m.name }
+  if($ranked.Count -eq 0){
+    $basis = Get-CellBasis $m.id $m.unit $first.currencyCode
+    $out.type=(Metric-Type $m.id $m.unit $first.currencyCode); $out.direction=(Get-Direction $m.id)
+    $out.unit=$m.unit; $out.currency=$first.currencyCode
+    $out.aggClass=$aggClass; $out.basis=$basis
+    $out.contributingWidgetIds=@(); $out.observedOnWidgetIds=$observedOn
+    $out.coverageBasis=$coverageBasis; $out.period=$periods.current
+    $out.reason=(Get-MatrixReason $g $aggClass)
+    return $out
+  }
+  $win=$ranked[0]; $c=$win.cell; $cc=$win.currencyCode
+  $delta = Get-DeltaPct $c.current $c.compare
+  $dispCur = Format-Metric $m.id $m.unit $c.current $cc
+  $out.current=$c.current; $out.previous=$c.compare; $out.deltaPct=$delta
+  $out.displayCurrent=$dispCur
+  $out.displayPrevious=(Format-Metric $m.id $m.unit $c.compare $cc)
+  $out.displayDelta=(Format-Delta $delta)
+  $out.type=(Metric-Type $m.id $m.unit $cc); $out.direction=(Get-Direction $m.id)
+  $out.unit=$m.unit; $out.currency=$cc
+  $out.hasComparison=[bool]($null -ne $c.compare)
+  $out.scope=$(if($win.dimensioned){ "table-total:$($win.dims[0])" }else{ 'account' })
+  $out.method=$(if($win.dimensioned){ 'total-row' }else{ 'kpi-widget' })
+  $out.aggClass=$aggClass
+  $out.basis=(Get-CellBasis $m.id $m.unit $cc)
+  $out.contributingWidgetIds=@(@($ranked | ForEach-Object { $_.widgetId }) | Select-Object -Unique)
+  $out.observedOnWidgetIds=$observedOn
+  $out.coverageBasis=$coverageBasis; $out.period=$periods.current
+  # A disagreement keeps the winner's VALUE and records the losers by id only -- never a losing display
+  # string (U9 D4/FP-3). Basis mismatch is reported ahead of same-rank because it is the stronger claim.
+  $losers=@($ranked | Select-Object -Skip 1)
+  if($losers.Count -gt 0){
+    $offBasis=@($losers | Where-Object { (Get-BasisVersion $m.id $m.unit $_.currencyCode) -ne $out.basis.basisVersion })
+    $why = $(if($offBasis.Count -gt 0){ 'basis-mismatch' } else { 'same-rank-disagreement' })
+    $pool = $(if($offBasis.Count -gt 0){ $offBasis } else { @($losers | Where-Object { [int]$_.rank -eq [int]$win.rank }) })
+    if(@($pool).Count -gt 0){
+      $out.conflict=[ordered]@{ losingWidgetIds=@(@($pool | ForEach-Object { $_.widgetId }) | Select-Object -Unique); reason=$why }
+    }
+  }
+  return $out
+}
 if($DefineOnly){ return }   # dot-source stops here
 
 # ============================ run ============================
@@ -772,14 +892,14 @@ foreach($w in $dataWidgets){
   foreach($pe in @($w.providers)){
     if($pe.id -and -not $platforms.ContainsKey($pe.id)){
       $pn = if($pe.name){ $pe.name } else { $pe.id }
-      $platforms[$pe.id]=[ordered]@{ id=$pe.id; name=$pn; category=(Get-Category $pe.id); headline=[ordered]@{}; hasComparison=$false }
+      $platforms[$pe.id]=[ordered]@{ id=$pe.id; name=$pn; category=(Get-Category $pe.id); headline=[ordered]@{}; hasComparison=$false; metrics=[ordered]@{} }
     }
   }
   $prov = Get-WidgetProvider $w
   if(-not $prov){ continue }
   if(-not $platforms.ContainsKey($prov)){   # metric-prefix-only widget (no providers[]) discovered here
     $pname = if($w.providers -and @($w.providers).Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $prov }
-    $platforms[$prov]=[ordered]@{ id=$prov; name=$pname; category=(Get-Category $prov); headline=[ordered]@{}; hasComparison=$false }
+    $platforms[$prov]=[ordered]@{ id=$prov; name=$pname; category=(Get-Category $prov); headline=[ordered]@{}; hasComparison=$false; metrics=[ordered]@{} }
   }
   if(Test-Blended $w){ continue }             # D6: never a headline source (discovery above still counted it)
   $tr = Total-Row $w
@@ -869,6 +989,36 @@ foreach($w in $dataWidgets){
     [void]$observed[$mp].Add($m.id)
   }
 }
+# ANLZ-aUniformLattice-4 (P3): populate the uniform matrix from the SAME key space $observed just built.
+# One cell per observed (platform, metricId) -- a value with provenance, or one reason token. Nothing
+# reads it yet; P5 is the first consumer. headline{} above is untouched.
+$matrixContribs = Get-MatrixContributions $dataWidgets
+$contribByKey=@{}
+foreach($rc in @($matrixContribs)){
+  $ck = ([string]$rc.providerId) + '|' + ([string]$rc.metricId)
+  if(-not $contribByKey.ContainsKey($ck)){ $contribByKey[$ck]=[System.Collections.ArrayList]@() }
+  [void]$contribByKey[$ck].Add($rc)
+}
+$anyHidden = [bool](@($doc.widgets | Where-Object { $_.sectionHidden -eq $true }).Count -gt 0)
+$provFiltered = [bool](@(@($doc.meta.providerFilter) | Where-Object { ($_ -is [string]) -and $_ }).Count -gt 0)
+$covBasis = [ordered]@{ providerFiltered=$provFiltered; hiddenSectionExcluded=$anyHidden }
+foreach($prov in @($observed.Keys)){
+  if(-not $platforms.ContainsKey($prov)){ continue }
+  # $observed is a case-SENSITIVE HashSet while the emitted map is a case-INsensitive ordered dict, so two
+  # ids differing only in case would be two entries and one key. Dedupe on the dict's own comparer first.
+  $seenCi=@{}
+  foreach($mid in @($observed[$prov] | Sort-Object)){
+    if($seenCi.ContainsKey([string]$mid)){ continue }
+    $seenCi[[string]$mid]=$true
+    $grp=$null
+    $gk=([string]$prov)+'|'+([string]$mid)
+    if($contribByKey.ContainsKey($gk)){ $grp=@($contribByKey[$gk]) }
+    if(-not $grp -or @($grp).Count -eq 0){ continue }
+    $cellOut = Reduce-MatrixCell $grp $periods $covBasis
+    if($cellOut){ $platforms[$prov].metrics[[string]$mid] = $cellOut }
+  }
+}
+
 foreach($prov in @($observed.Keys)){
   if(-not $platforms.ContainsKey($prov)){ continue }   # only discovered platforms
   $pf=$platforms[$prov]

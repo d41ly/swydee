@@ -17,7 +17,7 @@ One unit per phase, per F1. Each sub-spec is adversarially reviewed before its c
 |---|---|---|---|
 | P1 | [-2](spec/2026-08-04-spec-aUniformLattice-2.md) | extractor schema v3: identity and completeness keys | no, dark |
 | P2 | [-3](spec/2026-08-04-spec-aUniformLattice-3.md) | declared aggregation semantics and the basis hash | no, dark |
-| P3 | not written yet | the matrix and its reduce function, ranks 1 and 2 | no, dark |
+| P3 | [-4](spec/2026-08-04-spec-aUniformLattice-4.md) | the matrix and its reduce function, ranks 1 and 2 | no, dark |
 | P4 | not written yet | the addressable second layer | no, dark |
 | P5 | not written yet | rewire, closer split index, forced disclosure | YES |
 | P6 | WONTDO | rank-3 summing | refused |

@@ -756,7 +756,21 @@ $t5 = RunAnalyze (MkDoc @(
 ))
 A ((Hl $t5.facts 'google-adwords' 'google-adwords:cost_micros').canonical.sourceWidgetId -eq 'w5-tab') "U9-T5: blended zero-dim widget never displaces (table stays)"
 A (-not (HasFind $t5.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T5: blended non-displacement => no finding"
-A ($t5.text -notmatch 'w5-blend') "U9-T5: blended widget absent from any canonical.sourceWidgetId"
+# ANLZ-aUniformLattice-4 (P3) narrowed this from a whole-document regex to its STATED intent. P3 adds
+# platforms[].metrics[].observedOnWidgetIds, which names a blended widget deliberately: it is the CAUSE
+# of a blended-undecomposable cell. The U9 guarantee is about SOURCING, so assert sourcing directly --
+# no canonical source, no superseded source, and no matrix contribution may ever be a blended widget.
+$t5srcIds = @()
+foreach($pl5 in @($t5.facts.platforms)){
+  foreach($hk5 in @($pl5.headline.PSObject.Properties.Name)){
+    if($hk5 -eq 'hasComparison'){ continue }
+    $hc5 = $pl5.headline.$hk5
+    if($hc5.canonical){ $t5srcIds += [string]$hc5.canonical.sourceWidgetId; $t5srcIds += [string]$hc5.canonical.supersededWidgetId }
+  }
+  foreach($mk5 in @($pl5.metrics.PSObject.Properties.Name)){ $t5srcIds += @($pl5.metrics.$mk5.contributingWidgetIds) }
+}
+A (@($t5srcIds | Where-Object { $_ -eq 'w5-blend' }).Count -eq 0) "U9-T5: blended widget is never a canonical source, a superseded source, or a matrix contributor"
+A (($t5.facts.platforms | Where-Object { $_.id -eq 'google-adwords' }).metrics.'google-adwords:cost_micros'.observedOnWidgetIds -contains 'w5-blend') "P3 AC6: the blended widget IS recorded as an observer, so a valueless cell still points at its cause"
 
 # U9-T6 (D9): #5 independence - the u5a layout (table 120 > KPI 100) flips headline to the KPI, #5 still fires,
 # and the headline winner + #5's ceiling now cite the same figure.
@@ -1106,6 +1120,113 @@ A (@($rBad.facts.meta.incompleteWidgets) -contains 'w-lost') "facts carry the in
 A (@($rBad.facts.meta.incompleteWidgets).Count -eq 1) "ids only, one entry, no raw payload"
 # The pre-existing warnings path must be untouched by the new one.
 A (-not (HasFind $rBad.facts 'GAP_WARNINGS')) "GAP_WARNINGS is independent (no warnings here => none emitted)"
+
+Write-Host "== ANLZ-aUniformLattice-4 (P3): the uniform matrix =="
+function Mx($facts,$prov,$mid){ $pl=@($facts.platforms | Where-Object { $_.id -eq $prov }); if(@($pl).Count -eq 0){ return $null }; return $pl[0].metrics.$mid }
+function MxKeys($facts,$prov){ $pl=@($facts.platforms | Where-Object { $_.id -eq $prov }); if(@($pl).Count -eq 0){ return @() }; return @($pl[0].metrics.PSObject.Properties.Name) }
+
+# AC3/AC4: a zero-dim KPI is scope=account/kpi-widget; a dimensioned total row is table-total.
+$p3a = RunAnalyze (MkDoc @(
+  (DW 'p3-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100 80)}))),
+  (DW 'p3-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 5000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 5000000)})))
+))
+$c1 = Mx $p3a.facts 'google-adwords' 'google-adwords:clicks'
+A ($c1.method -eq 'kpi-widget' -and $c1.scope -eq 'account') "P3 AC3 zero-dim KPI => kpi-widget/account"
+A ($c1.current -eq 100 -and $c1.previous -eq 80) "P3 AC3 cell carries the raw numerics the repointed rules read"
+A ($c1.hasComparison -eq $true -and $c1.displayDelta) "P3 AC3 per-cell hasComparison and delta"
+A ($c1.aggClass -eq 'sum' -and $c1.basis.basisVersion) "P3 cell carries the P2 class and basis"
+$hl1 = Hl $p3a.facts 'google-adwords' 'google-adwords:clicks'
+A ($c1.displayCurrent -eq $hl1.displayCurrent) "P3 AC3 matrix and headline agree cell-for-cell"
+$c2 = Mx $p3a.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($c2.method -eq 'total-row' -and $c2.scope -eq 'table-total:Campaign') "P3 AC4 dimensioned total row => total-row/table-total"
+
+# AC1: headline is byte-identical to what it would be without the matrix (the key set is unchanged).
+$plA = @($p3a.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0]
+A (@($plA.PSObject.Properties.Name) -join ',' -eq 'id,name,category,headline,hasComparison,metrics,breakdowns') "P3 AC12 platform key order incl. hasComparison between headline and metrics"
+
+# AC5: a dimensioned SUMMABLE widget with no total row => the permanent rank-3 stub.
+$p3b = RunAnalyze (MkDoc @(
+  (DW 'p3-kpi2' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 10)}))),
+  (DW 'p3-nototal' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Impr' 'google-adwords:impressions' $null)) @((DRow 'data' 'A' 'Campaign' @{Impr=(Cell 7)}),(DRow 'data' 'B' 'Campaign' @{Impr=(Cell 9)})))
+))
+$c3 = Mx $p3b.facts 'google-adwords' 'google-adwords:impressions'
+A ($c3.reason -eq 'incomplete-rows') "P3 AC5 dimensioned no-total summable => incomplete-rows (the permanent rank-3 stub)"
+A ($null -eq $c3.current -and $null -eq $c3.displayCurrent -and $null -eq $c3.method) "P3 AC5 a reason cell carries no value and no method"
+A (@($c3.contributingWidgetIds).Count -eq 0 -and (@($c3.observedOnWidgetIds) -contains 'p3-nototal')) "P3 AC5 a valueless cell still points at its cause"
+A ($null -eq (Mx $p3b.facts 'google-adwords' 'google-adwords:impressions').value) "P3 AC5b no cell carries both a value and a reason"
+
+# AC5c: declared metric whose total-row cell is a non-numeric echo object => no-usable-cell.
+$echo = [pscustomobject]@{ campaign_name='Alpha' }
+$p3c = RunAnalyze (MkDoc @(
+  (DW 'p3-echo' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Camp' 'google-adwords:campaign' $null)) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 100);Camp=(Cell $echo)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 100);Camp=(Cell $echo)})))
+))
+$c4 = Mx $p3c.facts 'google-adwords' 'google-adwords:campaign'
+A ($c4.reason -eq 'no-usable-cell') "P3 AC5c a declared metric with a non-numeric total-row cell => no-usable-cell"
+A ($null -ne (Mx $p3c.facts 'google-adwords' 'google-adwords:cost_micros').current) "P3 AC5c its sibling metric on the same widget still gets a value"
+
+# AC6: blended-only observation.
+$p3d = RunAnalyze (MkDoc @(
+  (DW 'p3-solo' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 5)}))),
+  (DW 'p3-blend' $null $null @() @((Met 'BLeads' 'provb:leads' $null)) @((KRow @{BLeads=(Cell 42)})) @([pscustomobject]@{id='google-adwords';name='Google Ads'},[pscustomobject]@{id='provb';name='Provider B'}))
+))
+$c5 = Mx $p3d.facts 'provb' 'provb:leads'
+A ($c5.reason -eq 'blended-undecomposable') "P3 AC6 a metric seen only on a blended widget => blended-undecomposable"
+A (@($c5.contributingWidgetIds).Count -eq 0) "P3 AC6 a blended widget never contributes a value"
+A (@($c5.observedOnWidgetIds) -contains 'p3-blend') "P3 AC6 but it IS recorded as an observer"
+
+# AC7: two zero-dim widgets, same metric => one cell, document-order winner, conflict names the loser.
+$p3e = RunAnalyze (MkDoc @(
+  (DW 'p3-k1' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100)}))),
+  (DW 'p3-k2' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 250)})))
+))
+$c6 = Mx $p3e.facts 'google-adwords' 'google-adwords:clicks'
+A (@(MxKeys $p3e.facts 'google-adwords' | Where-Object { $_ -eq 'google-adwords:clicks' }).Count -eq 1) "P3 AC7 two offerers => exactly ONE cell"
+A ($c6.current -eq 100) "P3 AC7 the document-order winner supplies the value"
+A ($c6.conflict.reason -eq 'same-rank-disagreement' -and (@($c6.conflict.losingWidgetIds) -contains 'p3-k2')) "P3 AC7 the loser is named by id"
+A (($c6 | ConvertTo-Json -Depth 10) -notmatch '250') "P3 AC7 no losing VALUE is echoed anywhere in the cell (U9 D4/FP-3)"
+
+# AC8: a basis disagreement keeps the winner's VALUE and records conflict; it is never a valueless cell.
+$p3f = RunAnalyze (MkDoc @(
+  (DW 'p3-usd' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 100000000)})) $null 'USD'),
+  (DW 'p3-eur' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 120000000)})) $null 'EUR')
+))
+$c7 = Mx $p3f.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($null -ne $c7.current) "P3 AC8 a basis disagreement is a VALUE cell, never a reason cell"
+A ($c7.conflict.reason -eq 'basis-mismatch') "P3 AC8 conflict.reason is basis-mismatch"
+A ($null -eq $c7.reason) "P3 AC8 and it carries no reason token"
+
+# AC9: a hidden-section widget contributes no value; sole offerer => hidden-section token.
+$hidW = (DW 'p3-hid' 'google-adwords' 'Google Ads' @() @((Met 'Impr' 'google-adwords:impressions' $null)) @((KRow @{Impr=(Cell 55)})))
+$hidW | Add-Member -NotePropertyName sectionHidden -NotePropertyValue $true -Force
+$p3g = RunAnalyze (MkDoc @(
+  (DW 'p3-vis' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 3)}))),
+  $hidW
+))
+$c8 = Mx $p3g.facts 'google-adwords' 'google-adwords:impressions'
+A ($c8.reason -eq 'hidden-section') "P3 AC9 a hidden-section sole offerer => hidden-section token"
+A ($c8.coverageBasis.hiddenSectionExcluded -eq $true) "P3 AC9 coverageBasis records that a hidden section was excluded"
+
+# AC2: totality - every observed pair has exactly one cell, and no cell has both a value and a reason.
+foreach($tf in @($p3a,$p3b,$p3c,$p3d,$p3e,$p3f,$p3g)){
+  foreach($pl in @($tf.facts.platforms)){
+    foreach($mk in @($pl.metrics.PSObject.Properties.Name)){
+      $cc3 = $pl.metrics.$mk
+      $hasVal = ($null -ne $cc3.current)
+      $hasRe  = ($null -ne $cc3.reason)
+      A ($hasVal -ne $hasRe) "P3 AC5b cell '$mk' has exactly one of value / reason"
+      A ($null -ne $cc3.aggClass -and $null -ne $cc3.basis -and $null -ne $cc3.period) "P3 AC2 cell '$mk' always carries class, basis and period"
+    }
+  }
+}
+
+# AC12: the facts-schema shape gate. Nothing in tools/gate-legs.json checks the contract, so this is it.
+$shape = $p3a.facts
+A (@($shape.PSObject.Properties.Name) -join ',' -eq 'meta,platforms,findings') "P3 AC12 facts top-level shape is meta,platforms,findings"
+A (@($shape.findings.PSObject.Properties.Name) -join ',' -eq 'wins,losses,anomalies,discrepancies,dataGaps') "P3 AC12 findings channel order is pinned"
+foreach($needKey in @('id','name','category','headline','hasComparison','metrics')){
+  A (@($plA.PSObject.Properties.Name) -contains $needKey) "P3 AC12 platform carries '$needKey'"
+}
+
 
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
