@@ -53,13 +53,13 @@ try {
   Assert ($LASTEXITCODE -eq 0) "trend analysis exit 0"
   $ff = Get-ChildItem (Join-Path $tmp '*.trendanalysis.facts.json') | Select-Object -First 1
   Assert ($null -ne $ff) "trend facts produced"
-  # NB: parse into $FA, NOT $F -- $f is used as a loop var below and $F/$f are the same variable (case-insensitive).
-  $FA = [IO.File]::ReadAllText($ff.FullName) | ConvertFrom-Json
+  # NB: parse into $factsR1, NOT $F/$factsR1 -- $f and $fa are used below, and PS names are case-insensitive.
+  $factsR1 = [IO.File]::ReadAllText($ff.FullName) | ConvertFrom-Json
   # structural: R1 finding present, sev major, has fid; a QoQ/YoY comparison present
-  $rest = @($FA.findings.anomalies | Where-Object { $_.ruleId -eq 'GAP_RESTATEMENT_SUPPRESSED' })
+  $rest = @($factsR1.findings.anomalies | Where-Object { $_.ruleId -eq 'GAP_RESTATEMENT_SUPPRESSED' })
   Assert ($rest.Count -eq 1) "GAP_RESTATEMENT_SUPPRESSED emitted"
   Assert ($rest.Count -gt 0 -and $rest[0].severity -eq 'major' -and $rest[0].fid) "restatement finding is sev major + has fid"
-  $comp = @($FA.findings.wins) + @($FA.findings.losses)
+  $comp = @($factsR1.findings.wins) + @($factsR1.findings.losses)
   Assert ($comp.Count -ge 1) "at least one QoQ/YoY win/loss emitted"
   $txt=[IO.File]::ReadAllText($ff.FullName); Assert ($txt -notmatch '(?i)swy\.do/shares/') "no credential in trend facts"
 
@@ -73,14 +73,14 @@ try {
   # report B: surface EVERY finding (statement + anchor) + caveats -> closer should PASS (numbers trace via byFid).
   # Guarded literal access: an empty JSON array can deserialize so @() yields a [null] element.
   $allF=@()
-  foreach($f in @($FA.findings.wins))          { if($f -and $f.fid){ $allF+=$f } }
-  foreach($f in @($FA.findings.losses))        { if($f -and $f.fid){ $allF+=$f } }
-  foreach($f in @($FA.findings.anomalies))     { if($f -and $f.fid){ $allF+=$f } }
-  foreach($f in @($FA.findings.discrepancies)) { if($f -and $f.fid){ $allF+=$f } }
-  foreach($f in @($FA.findings.dataGaps))      { if($f -and $f.fid){ $allF+=$f } }
+  foreach($f in @($factsR1.findings.wins))          { if($f -and $f.fid){ $allF+=$f } }
+  foreach($f in @($factsR1.findings.losses))        { if($f -and $f.fid){ $allF+=$f } }
+  foreach($f in @($factsR1.findings.anomalies))     { if($f -and $f.fid){ $allF+=$f } }
+  foreach($f in @($factsR1.findings.discrepancies)) { if($f -and $f.fid){ $allF+=$f } }
+  foreach($f in @($factsR1.findings.dataGaps))      { if($f -and $f.fid){ $allF+=$f } }
   $lines=@('## Trend','')
   foreach($f in $allF){ $lines += ("$($f.statement) <!-- finding:$($f.fid) -->") }
-  foreach($cav in @($FA.meta.comparisonCaveats)){ if($cav -and $cav.id){ $lines += ("$($cav.text) <!-- caveat:$($cav.id) -->") } }
+  foreach($cav in @($factsR1.meta.comparisonCaveats)){ if($cav -and $cav.id){ $lines += ("$($cav.text) <!-- caveat:$($cav.id) -->") } }
   $repB = Join-Path $tmp 'reportB.md'
   [IO.File]::WriteAllText($repB, ($lines -join "`n"), (New-Object Text.UTF8Encoding($false)))
   $outB = & powershell -NoProfile -ExecutionPolicy Bypass -File "$scripts\Test-ReportNumbers.ps1" -Report $repB -Facts $ff.FullName 2>&1 | Out-String

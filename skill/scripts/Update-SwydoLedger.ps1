@@ -174,8 +174,8 @@ if($myDefineOnly){ return }
 # ================================ run ================================
 if(-not $myInFile){ throw "InFile is required" }
 if(-not $myArchiveRoot){ $myArchiveRoot = if($PSScriptRoot){ Join-Path (Split-Path $PSScriptRoot -Parent) 'archive' } else { Join-Path $HOME 'swydee-archive' } }
-$nowIso = if($myNowIso){ $myNowIso } else { ([datetimeoffset](Get-Date)).ToString('o') }
-$stamp  = ([datetimeoffset]$nowIso).ToString('yyyy-MM-dd-HH-mm-ss')
+$stampIso = if($myNowIso){ $myNowIso } else { ([datetimeoffset](Get-Date)).ToString('o') }
+$stamp  = ([datetimeoffset]$stampIso).ToString('yyyy-MM-dd-HH-mm-ss')
 
 $txt = [IO.File]::ReadAllText($myInFile)
 Assert-NoCredential $txt                                    # input must be already-scrubbed trend facts (fail-closed)
@@ -197,11 +197,11 @@ $res = Resolve-ClientSlug $clientId $canonName $reg.clients
 $slug = $res.slug; $clientName = $res.name
 if($clientId){
   if($reg.clients.ContainsKey($clientId)){
-    $e = $reg.clients[$clientId]; $e.slug = $slug; $e.lastSeen = $nowIso
+    $e = $reg.clients[$clientId]; $e.slug = $slug; $e.lastSeen = $stampIso
     foreach($al in @($canonName,$myClient)){ if($al -and ($e.name -ne $al) -and (@($e.aliases) -notcontains $al)){ $e.aliases = @(@($e.aliases) + $al) } }
   } else {
     $al=@(); if($myClient -and ($myClient -ne $canonName)){ $al=@($myClient) }
-    $reg.clients[$clientId] = [ordered]@{ slug=$slug; name=$canonName; aliases=$al; firstSeen=$nowIso; lastSeen=$nowIso }
+    $reg.clients[$clientId] = [ordered]@{ slug=$slug; name=$canonName; aliases=$al; firstSeen=$stampIso; lastSeen=$stampIso }
   }
   Write-ClientRegistry $rootN $reg
 }
@@ -218,7 +218,7 @@ $newCells=@($tf.cells)
 $maxLabel=Get-MaxLabel $newCells $existing
 if(-not $maxLabel){ throw "no month labels in trend facts or ledger - nothing to merge" }
 
-$merged = Merge-LedgerCells $existing $newCells $maxLabel $myK $nowIso $stamp
+$merged = Merge-LedgerCells $existing $newCells $maxLabel $myK $stampIso $stamp
 
 # coverage recomputed from the merged cells (union), overlaid with the latest probe facts
 $covOut=[ordered]@{}
@@ -234,7 +234,7 @@ foreach($fc in @($tf.meta.coverage)){
   $covOut[$p].ceilingMonths=$fc.ceilingMonths; $covOut[$p].windowStatus=$fc.windowStatus
 }
 
-$ledger=[ordered]@{ ledgerVersion=1; client=$clientName; updatedAt=$nowIso; cells=$merged.cells; coverage=$covOut }
+$ledger=[ordered]@{ ledgerVersion=1; client=$clientName; updatedAt=$stampIso; cells=$merged.cells; coverage=$covOut }
 $json = ConvertTo-Json -InputObject $ledger -Depth 100 -Compress   # Depth 100: default depth 2 would truncate the cell map to its type name
 Assert-NoCredential $json
 if(Test-HasCredProps ($json | ConvertFrom-Json)){ throw "CREDENTIAL LEAK: credential-shaped property in ledger" }

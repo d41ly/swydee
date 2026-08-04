@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Offline unit tests for Get-SwydoReport.ps1 — dot-sources the real functions via -DefineOnly
+  Offline unit tests for Get-SwydoReport.ps1 - dot-sources the real functions via -DefineOnly
   (no network) and exercises the schema-v2 branches that a Google+Facebook report can't trigger:
   provider-scoped units, universal _micros$, collision-safe row keys, manual-KPI decoupling,
   unknown-kind classification, null-safety. Run: .\Test-Extractor.ps1

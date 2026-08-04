@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# swydee pre-commit — the fast legs only. The full bar is `bash tools/run-gates.sh`.
+#
+# Every leg is guarded on its script existing, so a checkout that predates a kit (or a branch that
+# lacks it) stays green instead of dying on a missing file.
+#
+# DELIBERATELY ABSENT: the branch guard that refuses a primary-tree commit off the default branch.
+# It was declined at adoption, so nothing here stops such a commit — see AGENTS.md §3, which says
+# so plainly rather than letting a reader assume a guard that is not installed.
+#
+# This file is pinned to eol=lf in .gitattributes: it is extensionless, so the *.sh rule misses it,
+# and a CRLF hook does not execute at all — it would sit here looking installed while every leg
+# below silently never ran.
+top=$(git rev-parse --show-toplevel 2>/dev/null) || exit 0
+
+# --- memory-tree hygiene, only when the commit actually touches the tree ----------------------
+# --staged is NOT a subset run: the set-checks (structure, TREE drift, tombstone) are tree-wide
+# regardless; only the per-file checks scope to staged paths.
+if [ -f "$top/memory-tree/check-memory-hygiene.sh" ] &&
+   git diff --cached --name-only --diff-filter=ACMR -- 'memory/**' '.memory-tree.conf' | grep -q .; then
+  bash "$top/memory-tree/check-memory-hygiene.sh" --staged || exit 1
+fi
+
+# --- kickoff-manifest ratchet ------------------------------------------------------------------
+# Narrows the drift remedy to "bundle the re-stamp into THIS commit", which is the intended
+# workflow: a manifest whose watched files moved is stale as of this commit, not later.
+if [ -f "$top/scripts/manifest-check.sh" ]; then
+  bash "$top/scripts/manifest-check.sh" --staged || exit 1
+fi

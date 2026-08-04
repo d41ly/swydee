@@ -1,0 +1,7 @@
+{
+  "name": "recall-opened",
+  "event": "PostToolUse",
+  "matcher": "Read",
+  "marker": "recall-opened.js",
+  "hook_path": ".claude/hooks/recall-opened.js"
+}

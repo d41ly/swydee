@@ -1,0 +1,33 @@
+[
+  { "name": "Test-Analyze (single-report facts)", "argv": ["bash", "tools/run-ps-suite.sh", "Test-Analyze.ps1"] },
+  { "name": "Test-Archive (client registry)", "argv": ["bash", "tools/run-ps-suite.sh", "Test-Archive.ps1"] },
+  { "name": "Test-Closer (number tracing)", "argv": ["bash", "tools/run-ps-suite.sh", "Test-Closer.ps1"] },
+  { "name": "Test-Extractor (Swydo pull)", "argv": ["bash", "tools/run-ps-suite.sh", "Test-Extractor.ps1"] },
+  { "name": "Test-Ledger (cumulative ledger)", "argv": ["bash", "tools/run-ps-suite.sh", "Test-Ledger.ps1"] },
+  { "name": "Test-Sync (trend wrapper)", "argv": ["bash", "tools/run-ps-suite.sh", "Test-Sync.ps1"] },
+  { "name": "Test-TrendAnalyze (trend facts)", "argv": ["bash", "tools/run-ps-suite.sh", "Test-TrendAnalyze.ps1"] },
+  { "name": "Test-TrendFacts (facts shaping)", "argv": ["bash", "tools/run-ps-suite.sh", "Test-TrendFacts.ps1"] },
+
+  { "name": "ps source hygiene (case collisions + BOM-less non-ASCII)", "argv": ["python", "tools/gate-lint/ps-hygiene.py", "."] },
+  { "name": "ps-hygiene self-test", "argv": ["python", "tools/gate-lint/ps-hygiene.py", "--selftest"],
+    "guard": ["tools/gate-lint/ps-hygiene.py"] },
+
+  { "name": "memory hygiene (12 checks)", "argv": ["bash", "memory-tree/check-memory-hygiene.sh"] },
+  { "name": "memory-hygiene self-test", "argv": ["bash", "memory-tree/check-memory-hygiene.test.sh"],
+    "guard": ["memory-tree/check-memory-hygiene.sh", "memory-tree/check-memory-hygiene.test.sh"] },
+
+  { "name": "kickoff-manifest ratchet", "argv": ["bash", "scripts/manifest-check.sh"] },
+  { "name": "manifest-check self-test", "argv": ["bash", "scripts/manifest-check.test.sh"],
+    "guard": ["scripts/manifest-check.sh", "scripts/manifest-check.test.sh"] },
+
+  { "name": "memory-recall kit selftest", "argv": ["python", "memory-recall/selftest.py"] },
+  { "name": "memory-recall skill wiring", "argv": ["bash", "memory-recall/adopt-memory-recall.sh", "--check"] },
+
+  { "name": "agent-instructions wiring", "argv": ["bash", "tools/agent-instructions/adopt-agent-instructions.sh", "--check", "--aliases", "claude"] },
+  { "name": "agent-instructions self-test", "argv": ["bash", "tools/agent-instructions/adopt-agent-instructions.test.sh"],
+    "guard": ["tools/agent-instructions/adopt-agent-instructions.sh"] },
+
+  { "name": "agent-cap self-test", "argv": ["bash", ".claude/hooks/agent-cap.test.sh"] },
+  { "name": "check-wiring self-test", "argv": ["bash", "tools/check-wiring.test.sh"] },
+  { "name": "run-gates canary", "argv": ["bash", "tools/run-gates.test.sh"] }
+]
