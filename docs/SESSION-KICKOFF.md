@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-04T13:25:56+03:00 @ b20d4e9357a806001dce521402ee66f3ebfe3d29
+last-audit: 2026-08-04T14:49:29+03:00 @ b20d4e9357a806001dce521402ee66f3ebfe3d29
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -144,11 +144,7 @@ reading <file>:<line>`.
 shape: `<date> · <what is stale where> · <the correction> · prune when <condition>`. This section
 starts empty and is prunable per-ENTRY — never delete the section itself.*
 
-- 2026-08-04 · `coding-governance` carries three fixes on branch
-  `fix/gate-lint-scope-and-recall-crlf` that are NOT yet on its `main` (ps-hygiene function-scope
-  model; the memory-recall CRLF protocol fix; the rendered-Skill LF pin). swydee's copied kits
-  already include them, so re-copying a kit from gov `main` would REGRESS them ·
-  prune when that branch is merged and pushed (cross-repo — verify at use).
+- *(none yet)*
 
 ### Environment traps worth front-loading
 
