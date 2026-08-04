@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-04T21:32:59+03:00 @ 3e5bd931291315cf1078a0f49c89ef8dd1e9a6e8
+last-audit: 2026-08-04T22:51:19+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -183,6 +183,9 @@ true. Keep each to one line; link out for detail.*
   PowerShell suites run through `tools/run-ps-suite.sh` rather than invoking `powershell.exe` direct.
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
+- Filing a new record costs two hygiene legs beyond writing it: a `DECISIONS.md` index line has a
+  **300-char cap** (check 7), and any new `builds/` folder makes `TREE.md` stale (check 9).
+  Regenerate with `memory-tree/gen-memory-tree.sh --write` before re-running the gate.
 - A fresh worktree can check out `.claude/skills/memory-recall/SKILL.md` with **CRLF despite the
   `eol=lf` pin**, which reds the recall skill-drift leg on an otherwise-clean tree. The committed
   blob is LF and `git check-attr` is correct, so this is a checkout artifact, not drift: fix with

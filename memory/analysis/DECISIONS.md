@@ -6,3 +6,4 @@
 - ANLZ-aGovernedCanon-2 · the rest → [U7a+U7b reconciliation](builds/2026-07-07-ANLZ-aCrossWidget/spec/2026-07-07-spec-aCrossWidget-1.md)
 - ANLZ-aGovernedCanon-4 · and the later pair → [U9 headline rank](builds/2026-07-13-ANLZ-aHeadlineRank/spec/2026-07-13-spec-aHeadlineRank-1.md) · [U10 data-gap rules](builds/2026-07-13-ANLZ-aGappedRanking/spec/2026-07-13-spec-aGappedRanking-1.md)
 - ANLZ-aGovernedCanon-3 · the default single-report output stays byte-for-byte unchanged and every change is additive-in-facts. Sole exception: the reviewed, disclosed U9 flip-set waiver, which bumps `meta.canonicalVersion` 1->2 and discloses each flipped cell in-facts.
+- ANLZ-aUniformLattice-1 · a uniform per-platform metric matrix is a five-phase program: it needs extractor identity and completeness keys that are fetched today then discarded → [layered uniform view](builds/2026-08-04-ANLZ-aUniformLattice/spec/2026-08-04-spec-aUniformLattice-1.md)
