@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-04T23:37:17+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
+last-audit: 2026-08-05T01:20:55+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -102,7 +102,8 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1064 assertions across the 8 suites (was 933 before EXTR-aPatientHarvest-1).
+1069 assertions across the 8 suites after ANLZ-aUniformLattice-2 (Extractor 283, Analyze 472,
+Closer 129, TrendAnalyze 68, TrendFacts 24, Archive 94, Ledger 47, Sync 4; was 1064).
 
 ### Tier rule
 
@@ -183,6 +184,11 @@ true. Keep each to one line; link out for detail.*
   pre-existing blobs are already LF in the index and a repo-wide rule risks renormalizing them.
 - The gate runner's canary rejects any leg whose `argv[0]` is not `bash`/`python`/`python3`, so the
   PowerShell suites run through `tools/run-ps-suite.sh` rather than invoking `powershell.exe` direct.
+- PowerShell collapses a **returned empty array to `$null`** and a **returned one-element array to a
+  scalar**. `ConvertTo-Json` then renders that `$null` as `{}` rather than `[]`, and a truthiness test
+  counts the deserialized empty object as one real entry. Return `,@(...)` from any function whose
+  result is a collection, and do NOT re-wrap such a result in `@()` at the call site - that nests it.
+  This shipped as a false PROVIDER_FILTERED major (ANLZ-aUniformLattice-7).
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
 - Filing a new record costs three hygiene legs beyond writing it: a `DECISIONS.md` index line has a

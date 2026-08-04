@@ -45,6 +45,8 @@ param(
   [string[]]$Platform,       # optional provider-id filter (repeatable or comma-list); pull ONLY these providers
   [int]$MaxWaitSec = 90,     # per-widget wall-clock budget for Swydo to answer (EXTR-aPatientHarvest-1 S9)
   [int]$MaxTotalWaitSec = 420, # whole-run waiting budget; the run stops fetching when it is spent
+  [switch]$ProbeFields,      # opt-in (ANLZ-aUniformLattice-2 D9): record meta.fieldProbe. OFF by default so
+                             # the default extraction path gains no network call and no wall clock.
   [switch]$DefineOnly
 )
 $ErrorActionPreference = "Stop"
@@ -354,6 +356,49 @@ function Unit-Of($id){
   }
   return $null
 }
+# ANLZ-aUniformLattice-2 S13/D5: the Uniq-Key SEQUENCE a metric or dimension list produces, derived once.
+# The per-row loops build the same sequence against a fresh map each row, so this reproduces it exactly
+# without touching them. Used ONLY to publish metrics[].cellKey, so a consumer can address rows[].metrics
+# by metric id instead of by display name (the duplicate-name wrong-value path). Pure; -DefineOnly testable.
+function Get-UniqKeySeq($items){
+  $probe=[ordered]@{}; $out=@()
+  $arr=@($items)
+  for($i=0;$i -lt $arr.Count;$i++){
+    $k = Uniq-Key $probe $arr[$i].name $arr[$i].id $i
+    $probe[$k]=1
+    $out += $k
+  }
+  # unary comma: `return @(x)` collapses a ONE-element array to a scalar, and the caller then
+  # indexes into a string. Same PowerShell trap as ANLZ-aUniformLattice-7.
+  return ,@($out)
+}
+# ANLZ-aUniformLattice-2 D1: pair every pulled widget with ITS OWN fetch outcome and its document
+# ordinal. $script:lastFetchOutcome is a single slot holding the LAST widget's record by the time the
+# normalize pass runs, and indexing $script:outcomes positionally aligns with $wids only by accident.
+# Pairing on the record's own id is the only form that survives a `continue` in the fetch loop.
+# A widget with no record gets $null rather than a guess. Pure; -DefineOnly testable.
+function Build-WidgetInputs($wids,$fetched,$outcomes){
+  $byId=@{}
+  foreach($o in @($outcomes)){ if($null -ne $o -and $o.id){ if(-not $byId.ContainsKey([string]$o.id)){ $byId[[string]$o.id]=$o } } }
+  $out=@(); $arr=@($wids)
+  for($i=0;$i -lt $arr.Count;$i++){
+    $w=$arr[$i]; $wid=[string]$w.id
+    $obj=$null; if($fetched -and $fetched.ContainsKey($wid)){ $obj=$fetched[$wid] }
+    $oc=$null;  if($byId.ContainsKey($wid)){ $oc=$byId[$wid] }
+    $out += ,([ordered]@{ wmeta=$w; obj=$obj; outcome=$oc; index=$i })
+  }
+  return ,@($out)
+}
+# ANLZ-aUniformLattice-2 D4: a row identity unique WITHIN a widget by construction. Ordinal first,
+# because Row-Label's fallback is the shared string '(group)' and a label-only key would collide.
+# The separator escape is a literal .Replace, NOT -replace: `-replace '|','/'` reads | as regex
+# alternation and injects / between every character (measured).
+function Get-RowKey($ordinal,$dimValues){
+  $vals=@($dimValues)
+  if($vals.Count -eq 0){ return [string]$ordinal }
+  $esc=@($vals | ForEach-Object { ([string]$_).Replace('|','/') })
+  return ([string]$ordinal + '|' + ($esc -join '|'))
+}
 # collision-proof, null-safe key for an OrderedDictionary map
 function Uniq-Key($map,$name,$id,$idx){
   $base = if([string]::IsNullOrEmpty($name)){ if([string]::IsNullOrEmpty($id)){ "col$idx" } else { [string]$id } } else { [string]$name }
@@ -375,7 +420,7 @@ function Flatten-Text($node){
 }
 
 # --- data fetch: cache-warm retry on page 1, then paginate ---
-$script:baseQ='query($sid:ID!,$dr:DateRange!,$cp:ComparePeriod!,$after:String){widget(id:"__ID__"){id content comparisonFormat visual{id} displayOptions{title} widgetTemplate{id linked} target{value} manualKpiOptions{value compareValue} source{id name parts{id provider{id name} dataSource{id}}} metrics:fields(socketId:$sid,type:METRIC){edges{node{id name}}} dims:fields(socketId:$sid,type:DIMENSION){edges{node{id name}}} data(first:__N__,after:$after,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){edges{node}pageInfo{hasNextPage endCursor}}}}'
+$script:baseQ='query($sid:ID!,$dr:DateRange!,$cp:ComparePeriod!,$after:String){widget(id:"__ID__"){id content comparisonFormat visual{id} displayOptions{title} widgetTemplate{id linked} target{value} dateRange manualKpiOptions{value compareValue} source{id name parts{id provider{id name} dataSource{id}}} metrics:fields(socketId:$sid,type:METRIC){edges{node{id name}}} dims:fields(socketId:$sid,type:DIMENSION){edges{node{id name}}} data(first:__N__,after:$after,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){edges{node}pageInfo{hasNextPage endCursor}}}}'
 # Budgeted, verdict-driven fetch. Returns the GraphQL object exactly as before; the per-widget
 # outcome record is left in $script:lastFetchOutcome for the caller to collect (probe and discovery
 # callers deliberately do NOT collect it - a REJECTED probe is the answer they wanted).
@@ -396,7 +441,8 @@ function Fetch-Widget($w, $dr, $cp, $opt){
   $q = $script:baseQ -replace '__ID__',$w.id -replace '__N__',"$PageSize"
   $needData = $w.visual -notin @('TEXT','PAGE_BREAK')
   $st = [ordered]@{ id=$w.id; visual=$w.visual; outcome='filled'; reason=$null
-                    waitedMs=0; lastVerdict=$null; queries=0; pagesFetched=0; endCursor=$null }
+                    waitedMs=0; lastVerdict=$null; queries=0; pagesFetched=0; endCursor=$null
+                    truncated=$false; hasNextPage=$false }
 
   $runLeft = Get-RunBudgetLeftMs
   if($needData -and $runLeft -le 0){
@@ -470,6 +516,10 @@ function Fetch-Widget($w, $dr, $cp, $opt){
       $pg.edges | ForEach-Object {[void]$all.Add($_)}
       $pi=$pg.pageInfo; $st.pagesFetched = $st.pagesFetched + 1
     }
+    # ANLZ-aUniformLattice-2 D6: record what the loop OBSERVED, not only what it concluded. `truncated`
+    # and the final `hasNextPage` had no carrier before, so widget.pageInfo had to be reconstructed from
+    # `reason` -- which cannot distinguish "drained cleanly" from "never paginated".
+    $st.truncated=[bool]$truncated; $st.hasNextPage=[bool]$pi.hasNextPage
     if($truncated -or $pi.hasNextPage){
       $st.outcome='incomplete'; $st.reason='partial-pages'; $st.endCursor=[string]$pi.endCursor
     }
@@ -489,19 +539,158 @@ function New-RelDateRange($count,$measure){
   return [pscustomobject]@{ parent=$null; primary=[pscustomobject]@{ count=$count; measure=$measure; type='RELATIVE' }; comparison=$null; baseDate=$null; timeZone=$null }
 }
 
-# --- normalize one widget into schema v2 ---
-function Normalize-Widget($wmeta,$obj){
+# ===================== field probe (ANLZ-aUniformLattice-2 S14/D9) =====================
+# GraphQL introspection is disabled on this endpoint, so the only way to learn whether a field exists
+# is to name it and read the error. Each candidate declares EXACTLY the variables its selection uses:
+# GraphQL's "all variables used" rule rejects a document that declares an unused one, so a single
+# template would fail every probe for the wrong reason.
+function Get-FieldProbeCandidates(){
+  return @(
+    [ordered]@{ field='metrics[].aggregation';   leaf='aggregation';       vars='sid';       sel='metrics:fields(socketId:$sid,type:METRIC){edges{node{aggregation}}}' }
+    [ordered]@{ field='widget.dateRange';        leaf='dateRange';         vars='none';      sel='dateRange' }
+    [ordered]@{ field='widget.filters';          leaf='filters';           vars='none';      sel='filters' }
+    [ordered]@{ field='widget.segments';         leaf='segments';          vars='none';      sel='segments' }
+    [ordered]@{ field='dims[].isPartition';      leaf='isPartition';       vars='sid';       sel='dims:fields(socketId:$sid,type:DIMENSION){edges{node{isPartition}}}' }
+    [ordered]@{ field='widget.serverRowTotal';   leaf='serverRowTotal';    vars='none';      sel='serverRowTotal' }
+    [ordered]@{ field='data.totalCount';         leaf='totalCount';        vars='sid-dr-cp'; sel='data(first:1,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){totalCount}' }
+  )
+}
+# Trim a backend string to something safe to persist: the extraction document has no scrubber of its
+# own, and the probe records a server message verbatim.
+function Limit-ProbeDetail($text){
+  $t = [string]$text
+  if(-not $t){ return $null }
+  $t = $t -replace '(?i)swy\.do/shares/[A-Za-z0-9_-]+','[redacted-share-link]'
+  $t = $t -replace '(?i)/g/[A-Za-z0-9_-]+/reports/','/g/[redacted]/reports/'
+  $t = $t -replace '\s+',' '
+  if($t.Length -gt 300){ $t = $t.Substring(0,300) }
+  return $t
+}
+# The probe issues its OWN request rather than going through Invoke-GQL, because Invoke-GQL surfaces no
+# status code and its error-body read at the WebException path comes back EMPTY (the stream is already
+# drained by the time it is read). Verified live 2026-08-05: every absent field answers 400 with
+# GRAPHQL_VALIDATION_FAILED, every present field answers 200 -- so status is the reliable signal and the
+# body is the corroborating detail.
+function Invoke-ProbeRequest($q,$vars){
+  $payload = @{query=$q; variables=$vars} | ConvertTo-Json -Compress -Depth 40
+  $out=[ordered]@{ status=0; body='' }
+  try {
+    $r = Invoke-WebRequest "https://graphql.swydo.com" -Method Post -UseBasicParsing -TimeoutSec $script:httpTimeoutSec `
+           -Headers @{authorization="Bearer $script:jwt"; "content-type"="application/json"} -Body $payload
+    $out.status=[int]$r.StatusCode; $out.body=[string]$r.Content
+  } catch {
+    $resp=$null; try { $resp=$_.Exception.Response } catch {}
+    if($resp){
+      try { $out.status=[int]$resp.StatusCode } catch { $out.status=-1 }
+      try {
+        $st=$resp.GetResponseStream()
+        try { if($st.CanSeek){ $st.Position=0 } } catch {}
+        $out.body=(New-Object IO.StreamReader($st)).ReadToEnd()
+      } catch { $out.body='' }
+    } else { $out.status=-1; $out.body=[string]$_.Exception.Message }
+  }
+  return $out
+}
+# Three-state, positive-evidence classification. Inferring "field exists" from the absence of a match
+# would record present=$true for every 401, 5xx and rate limit, so both verdicts need their own evidence
+# and everything else stays unknown -- the discipline Probe-WidgetMonths applies to an unsettled probe.
+function Get-FieldProbeVerdict($status,$body,$leaf){
+  $out=[ordered]@{ present='unknown'; detail=$null }
+  $st=0; try { $st=[int]$status } catch { $st=0 }
+  $o=$null
+  try { $o = $body | ConvertFrom-Json } catch { $o=$null }
+  $errs=@(); if($o){ try { if($o.errors){ $errs=@($o.errors) } } catch { $errs=@() } }
+  if($errs.Count -gt 0){
+    $msgs=@($errs | ForEach-Object { [string]$_.message })
+    $out.detail=(Limit-ProbeDetail ($msgs -join ' | '))
+    $validation=$false
+    foreach($e in $errs){ try { if([string]$e.extensions.code -eq 'GRAPHQL_VALIDATION_FAILED'){ $validation=$true } } catch {} }
+    $names=$false
+    foreach($m in $msgs){ if($m -and $m -match [regex]::Escape([string]$leaf)){ $names=$true; break } }
+    # Both signals required: a validation failure that names some OTHER field is not evidence about this one.
+    if($validation -and $names){ $out.present=$false }
+    return $out
+  }
+  if($st -eq 200){
+    $hasData=$false; try { $hasData = ($null -ne $o -and $null -ne $o.data) } catch { $hasData=$false }
+    if($hasData){ $out.present=$true; return $out }
+  }
+  $out.detail=(Limit-ProbeDetail ('http ' + $st + ' ' + $body))
+  return $out
+}
+# `node` is a LEAF in $script:baseQ (data(...){edges{node}} has no sub-selection), so a row-level field
+# can never be probed by GraphQL here -- the error would name `node`, not the candidate. Enumerate the
+# deserialized blob's own keys instead. Pure.
+function Get-BlobKeyProbe($obj){
+  $node=$null
+  try {
+    $edges=@($obj.data.widget.data.edges)
+    foreach($e in $edges){ if($e -and $e.node){ if($e.node.isTotals){ $node=$e.node; break } } }
+    if($null -eq $node -and $edges.Count -gt 0){ $node=$edges[0].node }
+  } catch { $node=$null }
+  if($null -eq $node){ return $null }
+  $keys=@(); try { $keys=@($node.PSObject.Properties.Name | Sort-Object) } catch { $keys=@() }
+  return [ordered]@{ field='rows[].isTotalOfShownRows'; kind='blob-keys'
+                     present=$(if($keys -contains 'isTotalOfShownRows'){$true}else{$false}); observedKeys=@($keys) }
+}
+# Runs only under -ProbeFields. Each candidate is wrapped individually so one failure cannot void the
+# whole probe, and no candidate is retried.
+function Invoke-FieldProbe($widgetId,$dr,$cp){
+  $out=@()
+  foreach($c in @(Get-FieldProbeCandidates)){
+    $decl=''; $vars=@{}
+    if($c.vars -eq 'sid'){ $decl='($sid:ID!)'; $vars=@{sid=$script:socketId} }
+    elseif($c.vars -eq 'sid-dr-cp'){ $decl='($sid:ID!,$dr:DateRange!,$cp:ComparePeriod!)'; $vars=@{sid=$script:socketId;dr=$dr;cp=$cp} }
+    $q = 'query' + $decl + '{widget(id:"' + $widgetId + '"){' + $c.sel + '}}'
+    $r=$null
+    try { $r = Invoke-ProbeRequest $q $vars } catch { $r=[ordered]@{ status=-1; body=[string]$_.Exception.Message } }
+    $v = Get-FieldProbeVerdict $r.status $r.body $c.leaf
+    $out += ,([ordered]@{ field=[string]$c.field; kind='gql'; present=$v.present; detail=$v.detail })
+  }
+  return ,@($out)
+}
+
+# --- normalize one widget into schema v3 ---
+function Normalize-Widget($wmeta,$obj,$outcome,$index){
   $w = $obj.data.widget
   $kind = if($wmeta.visual -eq 'TEXT'){'text'}
           elseif($wmeta.visual -eq 'PAGE_BREAK'){'pageBreak'}
           elseif($w.source){'data'}
           elseif($w.manualKpiOptions){'manualKpi'}
           else{'unknown'}
-  $providers=@(); if($w.source -and $w.source.parts){ $providers=@($w.source.parts | ForEach-Object { [ordered]@{ id=$_.provider.id; name=$_.provider.name } }) }
+  # S4: dataSourceId/partId are already fetched at the source.parts selection and were dropped here.
+  $providers=@(); if($w.source -and $w.source.parts){ $providers=@($w.source.parts | ForEach-Object { [ordered]@{ id=$_.provider.id; name=$_.provider.name; partId=$_.id; dataSourceId=$(if($_.dataSource){$_.dataSource.id}else{$null}) } }) }
   $out = [ordered]@{
     id=$wmeta.id; visual=$wmeta.visual; kind=$kind
     section=$script:secMap[$wmeta.section]; title=$w.displayOptions.title
     provider=$(if($providers.Count -gt 0){$providers[0].name}else{$null}); providers=$providers
+  }
+  # S6/D2: defensive -- Test-Extractor seeds $script:secMap by hand, so an unseeded parallel map must
+  # not throw under $ErrorActionPreference='Stop'.
+  $out.sectionHidden = [bool]$(if($script:secHidden){ $script:secHidden[$wmeta.section] } else { $false })
+  # S10/D1: 0 is a valid ordinal, so this is a null test and never a truthiness test.
+  if($null -ne $index){ $out.documentIndex = [int]$index }
+  # S7: template identity, for detecting the same widget cloned across sections.
+  if($w.widgetTemplate){ $out.widgetTemplateId=$w.widgetTemplate.id; $out.widgetTemplateLinked=[bool]$w.widgetTemplate.linked }
+  # S15: the per-widget date range. The field probe proved this EXISTS (verified live 2026-08-05), which
+  # settles the residual U6:243 / U7 R17 / U9 FP-1 all cite as undetectable-from-schema-v2. `inherited`
+  # is the common case: primary.type=='PARENT' means the widget uses the report's own range, so any other
+  # value is a genuine per-widget override and a cell built from that widget is NOT period-homogeneous.
+  if($w -and $w.PSObject -and $w.PSObject.Properties['dateRange']){
+    $wdr=$w.dateRange
+    $ptype=$null; try { if($wdr -and $wdr.primary){ $ptype=[string]$wdr.primary.type } } catch { $ptype=$null }
+    $out.dateRangeRef=$wdr
+    $out.dateRangeInherited=[bool]($ptype -eq 'PARENT')
+  }
+  # S5/D6: completeness is keyed off FETCH INTENT, not the normalized kind -- a data widget whose fetch
+  # returned $null degrades to kind='unknown', and that is exactly the widget whose completeness matters.
+  if(($wmeta.visual -ne 'TEXT') -and ($wmeta.visual -ne 'PAGE_BREAK') -and ($null -ne $outcome)){
+    $oc=[string]$outcome.outcome
+    $out.fetchOutcome=$oc
+    $out.fetchReason=$(if($outcome.reason){[string]$outcome.reason}else{$null})
+    $out.pagesComplete=[bool](($oc -eq 'filled' -or $oc -eq 'empty-resolved') -and ([string]$outcome.reason -ne 'partial-pages'))
+    $out.pageInfo=[ordered]@{ pagesFetched=[int]$outcome.pagesFetched; endCursor=$(if($outcome.endCursor){[string]$outcome.endCursor}else{$null})
+                              truncated=[bool]$outcome.truncated; hasNextPage=[bool]$outcome.hasNextPage }
   }
   if($w.manualKpiOptions){ $out.manualKpi=[ordered]@{ value=$w.manualKpiOptions.value; compareValue=$w.manualKpiOptions.compareValue } }
   if($kind -eq 'text'){ $out.text=(Flatten-Text $w.content).Trim() }
@@ -512,10 +701,25 @@ function Normalize-Widget($wmeta,$obj){
     if($w.target -and $null -ne $w.target.value){ $out.target=[ordered]@{ value=$w.target.value } }
     $dims=@(); if($w.dims -and $w.dims.edges){ $dims=@($w.dims.edges|ForEach-Object{ [ordered]@{name=$_.node.name; id=$_.node.id} }) }
     $mets=@(); if($w.metrics -and $w.metrics.edges){ $mets=@($w.metrics.edges|ForEach-Object{ $_.node }) }
+    # S1: dimensions[] stays the STRING array, byte-for-byte. Re-keying it to objects would break the
+    # anchored day/week/month guard in Get-TimeSeries, the DISC_CROSS_WIDGET dimension signature and the
+    # headline's table-total scope string -- none of which the suites would catch.
     $out.dimensions=@($dims|ForEach-Object{ $_.name })
-    $out.metrics=@($mets|ForEach-Object{ $m=[ordered]@{name=$_.name; id=$_.id}; $u=Unit-Of $_.id; if($u){$m.unit=$u}; $m })
+    $out.dimensionRefs=@($dims|ForEach-Object{ [ordered]@{ name=$_.name; id=$_.id } })
+    # S2/S3: cellKey is the key the UNTOUCHED row loop below actually writes; providerId is the prefix
+    # three analyzer passes re-derive today.
+    $mKeys=Get-UniqKeySeq $mets   # already array-wrapped by the callee; re-wrapping would NEST it
+    $out.metrics=@(for($mi=0;$mi -lt @($mets).Count;$mi++){
+      $src=@($mets)[$mi]
+      $m=[ordered]@{name=$src.name; id=$src.id}
+      $u=Unit-Of $src.id; if($u){$m.unit=$u}
+      $m.cellKey=$mKeys[$mi]
+      $m.providerId=(($src.id -split ':')[0])
+      $m
+    })
     $nd=$dims.Count
     $rows=[System.Collections.ArrayList]@()
+    $rowOrd=0
     foreach($e in $w.data.edges){
       $node=$e.node
       $rk=if($node.isTotals){'total'}elseif($node.isSubtotals){'subtotal'}else{'data'}
@@ -523,9 +727,23 @@ function Normalize-Widget($wmeta,$obj){
       for($i=0;$i -lt $nd;$i++){ $k=Uniq-Key $dmap $dims[$i].name $dims[$i].id $i; $dmap[$k]=(DimName $node.cells[$i]) }
       $mmap=[ordered]@{}
       for($j=0;$j -lt $mets.Count;$j++){ $k=Uniq-Key $mmap $mets[$j].name $mets[$j].id $j; $cur=$node.cells[$nd+$j]; $cmp=if($node.compareCells){$node.compareCells[$nd+$j]}else{$null}; $mmap[$k]=[ordered]@{current=$cur;compare=$cmp} }
-      [void]$rows.Add([ordered]@{ kind=$rk; dimensions=$dmap; metrics=$mmap })
+      # S11: rowKey is APPENDED; kind/dimensions/metrics keep their construction and their order.
+      [void]$rows.Add([ordered]@{ kind=$rk; dimensions=$dmap; metrics=$mmap; rowKey=(Get-RowKey $rowOrd @($dmap.Values)) })
+      $rowOrd=$rowOrd+1
     }
     $out.rows=$rows
+    # S8: what an aggregation may legally take from this widget, declared instead of re-derived.
+    $kc=[ordered]@{ data=0; subtotal=0; total=0 }
+    foreach($r in $rows){ $kk=[string]$r.kind; if($kc.Contains($kk)){ $kc[$kk]=[int]$kc[$kk]+1 } }
+    $out.hasTotalRow=[bool]([int]$kc['total'] -gt 0)
+    $out.rowKindCounts=$kc
+    # S9/D7: the first-wins $cc loop above is untouched. This is a SEPARATE encounter-order pass, with a
+    # -notcontains dedupe rather than Sort-Object -Unique, so the array cannot reorder into something
+    # that looks like a different first-wins answer.
+    $ccAll=@()
+    foreach($e in $w.data.edges){ if($e.node.meta -and $e.node.meta.currencyCode){ $c1=[string]$e.node.meta.currencyCode; if($ccAll -notcontains $c1){ $ccAll += $c1 } } }
+    $out.currencyCodes=@($ccAll)
+    $out.currencyBasis=$(if(@($ccAll).Count -gt 0){'row-meta'}else{'absent'})
   }
   $out.raw = $w    # null-safe: $w may be null on an error response
   return $out
@@ -535,7 +753,12 @@ function Normalize-Widget($wmeta,$obj){
 # Normalize a -Platform value (repeated and/or comma-lists) to a lowercased provider-id set.
 function Parse-PlatformFilter($platform){
   $out=@(); foreach($x in @($platform)){ foreach($t in ([string]$x -split ',')){ $t=$t.Trim().ToLower(); if($t){ $out += $t } } }
-  return @($out | Sort-Object -Unique)
+  # ANLZ-aUniformLattice-7: the unary comma is load-bearing. `return @()` collapses to $null at the call
+  # site, ConvertTo-Json then renders that $null as `{}` rather than `[]`, ConvertFrom-Json turns it back
+  # into an empty PSCustomObject, and a truthiness test counts that object as ONE filter entry -- which
+  # made every UNFILTERED report emit a false, force-surfaced PROVIDER_FILTERED major claiming the report
+  # excluded every platform. Verified live 2026-08-05.
+  return ,@(@($out) | Sort-Object -Unique)
 }
 # Keep-if-ANY: a widget is kept when any of its provider ids is wanted (whole widget; never split a blended widget).
 function Test-ProviderMatch($widgetProviderIds,$wanted){
@@ -761,6 +984,9 @@ $script:dr=$s.dateRange; $script:cp=$s.compareDateRange
 $script:drResolved = Resolve-ReportPeriod $s.dateRange (Get-Date)   # U8: anchor = structure-fetch moment
 if($script:drResolved.primary){ Write-Host ("period resolved: {0}..{1}" -f $script:drResolved.primary.startYm, $script:drResolved.primary.endYm) }
 $script:secMap=@{}; if($s.sections){ $s.sections | ForEach-Object { $script:secMap[$_.id]=$_.name } }
+# S6: isHidden was already requested by the structure query and discarded here. Parallel map rather than
+# a richer secMap value, because secMap's value is read as a NAME at the normalize site.
+$script:secHidden=@{}; if($s.sections){ $s.sections | ForEach-Object { $script:secHidden[$_.id]=[bool]$_.isHidden } }
 # full provider inventory (from the UNFILTERED structure) so downstream always knows what exists,
 # even when --platform pulls a subset (additive-in-facts; a filtered report can't look complete).
 $providerInventory = @($s.widgets.edges | ForEach-Object { @($_.node.source.parts | ForEach-Object { $_.provider.id }) } | Where-Object { $_ } | Sort-Object -Unique)
@@ -864,7 +1090,7 @@ if($Trend){
                      @{ maxTotalWaitSec=$MaxTotalWaitSec; totalWaitedMs=$script:totalWaitedMs; budgetExhausted=$script:budgetExhausted }
   $tdoc=[ordered]@{
     meta=[ordered]@{
-      tool='Get-SwydoReport.ps1'; schemaVersion=2; trend=$true; extractedAt=(Get-Date).ToString('o')
+      tool='Get-SwydoReport.ps1'; schemaVersion=3; trend=$true; extractedAt=(Get-Date).ToString('o')
       shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
       trendWidgets=$trendW.Count; cellCount=$cells.Count; coverage=@($cov.Values); warnings=$twarn
       providerInventory=$providerInventory; providerFilter=$platFilter
@@ -908,7 +1134,27 @@ $completeness = Get-ExtractionCompleteness $script:outcomes $script:fetchPlan `
                   @{ maxTotalWaitSec=$MaxTotalWaitSec; totalWaitedMs=$script:totalWaitedMs; budgetExhausted=$script:budgetExhausted }
 
 # 6. normalize + assemble
-$widgetsOut = @(foreach($w in $wids){ Normalize-Widget $w $fetched[$w.id] })
+# D1: pair each widget with ITS OWN outcome by id. Reading $script:lastFetchOutcome here would stamp
+# every widget with the LAST widget's completeness -- a fabricated completeness proof.
+$widgetInputs = Build-WidgetInputs $wids $fetched $script:outcomes
+$widgetsOut = @(foreach($wi in $widgetInputs){ Normalize-Widget $wi.wmeta $wi.obj $wi.outcome $wi.index })
+
+# S14/D9: opt-in only. Runs after the fetch loop, so a probe error cannot disturb a live data socket.
+$fieldProbe = $null
+if($ProbeFields){
+  try {
+    $probeW = @($widgetsOut | Where-Object { $_.kind -eq 'data' })
+    if(@($probeW).Count -gt 0){
+      $pid0 = [string]@($probeW)[0].id
+      Write-Host ("field probe: {0} candidate(s) against widget {1}" -f @(Get-FieldProbeCandidates).Count, $pid0)
+      $fp = Invoke-FieldProbe $pid0 $script:dr $script:cp
+      $bk = Get-BlobKeyProbe $fetched[$pid0]
+      if($bk){ $fp += ,$bk }
+      $fieldProbe = @($fp)
+      foreach($r in $fieldProbe){ Write-Host ("  {0,-28} present={1}" -f $r.field, $r.present) }
+    }
+  } catch { Write-Host ("field probe skipped: " + $_.Exception.Message) }
+}
 $warnings=@(); if($empty.Count -gt 0){ $warnings += ("no rows returned for: " + (($empty|ForEach-Object{$_.id}) -join ', ')) }
 $unitBasis = @('google-adwords','facebook-ads')
 $provIds = @(); foreach($wd in $widgetsOut){ if($wd.kind -eq 'data' -and $wd.metrics){ foreach($m in $wd.metrics){ $provIds += (($m.id -split ':')[0]) } } }
@@ -918,7 +1164,7 @@ if($unverified.Count -gt 0){ $warnings += ("units not inferred for unverified pr
 
 $doc = [ordered]@{
   meta = [ordered]@{
-    tool='Get-SwydoReport.ps1'; schemaVersion=2; extractedAt=(Get-Date).ToString('o')
+    tool='Get-SwydoReport.ps1'; schemaVersion=3; extractedAt=(Get-Date).ToString('o')
     shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
     widgetCount=$wids.Count; dataWidgets=@($widgetsOut|Where-Object{$_.kind -eq 'data'}).Count
     unitBasis=$unitBasis; warnings=$warnings; providerInventory=$providerInventory; providerFilter=$platFilter
@@ -933,6 +1179,8 @@ $doc = [ordered]@{
   }
   widgets = $widgetsOut
 }
+# S14: additive and last, so meta's existing key order is byte-stable when the probe is off.
+if($null -ne $fieldProbe){ $doc.meta.fieldProbe=@($fieldProbe) }
 
 $stamp = (Get-Date).ToString('yyyy-MM-dd-HH-mm-ss')
 $slug  = ($s.name -replace '[^A-Za-z0-9]+','-').Trim('-').ToLower(); if(-not $slug){ $slug='report' }

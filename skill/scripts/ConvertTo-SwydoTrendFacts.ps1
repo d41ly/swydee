@@ -72,7 +72,7 @@ if(-not $myOutDir){ $myOutDir = Split-Path -Parent $myInFile }
 New-Item -ItemType Directory -Force -Path $myOutDir | Out-Null
 
 $doc = [IO.File]::ReadAllText($myInFile) | ConvertFrom-Json    # .NET UTF-8 (BOM-safe in PS 5.1)
-if($doc.meta.schemaVersion -ne 2 -or -not $doc.meta.trend){ throw "not a trend extraction (need meta.schemaVersion=2 + meta.trend=true) - run Get-SwydoReport.ps1 -Trend" }
+if($doc.meta.schemaVersion -notin @(2,3) -or -not $doc.meta.trend){ throw "not a trend extraction (need meta.schemaVersion 2 or 3 + meta.trend=true) - run Get-SwydoReport.ps1 -Trend" }
 $doc = Scrub-Credential $doc                                 # remove meta.shareKey/shareUrl in place
 
 $cells = @(ConvertTo-TrendFactCells $doc)

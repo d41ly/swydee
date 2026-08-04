@@ -112,6 +112,16 @@ $pff = Get-ProviderFilterFinding @('google-adwords') @('google-adwords','faceboo
 A ($null -ne $pff -and $pff.ruleId -eq 'PROVIDER_FILTERED' -and $pff.severity -eq 'major') "filter with exclusion => major PROVIDER_FILTERED finding"
 A ($pff.statement -match 'facebook-ads') "finding names the excluded platform"
 A ($null -eq (Get-ProviderFilterFinding @('google-adwords','facebook-ads') @('google-adwords','facebook-ads'))) "filter covers all => no finding"
+# ANLZ-aUniformLattice-7: an UNFILTERED extraction round-trips providerFilter through JSON as `{}`
+# (PowerShell renders a returned-empty-array $null that way), which a truthiness test counted as ONE
+# filter entry -- firing a force-surfaced major that told the client every platform was excluded.
+$pfObj = ('{"providerFilter":{}}' | ConvertFrom-Json).providerFilter
+A ($null -eq (Get-ProviderFilterFinding $pfObj @('google-adwords','facebook-ads'))) "ANLZ-7 an empty PSCustomObject filter is NOT a filter"
+A ($null -eq (Get-ProviderFilterFinding @($pfObj) @('google-adwords','facebook-ads'))) "ANLZ-7 same, array-wrapped"
+A ($null -eq (Get-ProviderFilterFinding @('') @('google-adwords','facebook-ads'))) "ANLZ-7 an empty string is NOT a filter"
+A ($null -eq (Get-ProviderFilterFinding @(@{}) @('google-adwords','facebook-ads'))) "ANLZ-7 an empty hashtable is NOT a filter"
+$pfStill = Get-ProviderFilterFinding @('google-adwords') @('google-adwords','facebook-ads')
+A ($null -ne $pfStill -and $pfStill.severity -eq 'major') "ANLZ-7 a REAL filter still fires the major finding"
 
 Write-Host "== Test-IsAnnotation (U3) =="
 A (Test-IsAnnotation 'Account notes: - Creatives were updated both on Google Ads and Facebook on June 8th, 2026.' @('Google Ads','Facebook Ads')) "real note kept"

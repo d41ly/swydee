@@ -1,6 +1,6 @@
 # ANLZ-aUniformLattice-1 — layered uniform per-platform metric view
 
-**Status:** SPECCED · rev-3 · 2026-08-04 · node a · Tier-2 · base 8e1e5294 · review wf_0925fd2f-2cd · ratified 2026-08-04
+**Status:** INPROGRESS · rev-4 · 2026-08-05 · node a · Tier-2 · base 8e1e5294 · review wf_0925fd2f-2cd · ratified 2026-08-04
 
 ## 1. Goal
 
@@ -12,9 +12,9 @@ extractor emits identity and completeness keys it currently fetches and discards
 
 ## 2. Scope (IN)
 
-Six phases, one unit each per F1 — its own branch, spec, adversarial review and merge. Phase order is
+Five buildable phases, one unit each per F1 (a sixth was specified and is now WONTDO) — its own branch, spec, adversarial review and merge. Phase order is
 a dependency order, not a priority order: P2 cannot be verified without P1, and P4 is unsound
-without P3. P6 is gated on an external prereq and may never be built; see F2.
+without P3. P6 was gated on an external prereq that has now been measured and refused; see F2.
 
 **P1 — extractor schema v3: identity and completeness keys (S1-S14).**
 
@@ -135,16 +135,14 @@ an honest gap statement without publishing a number whose row set cannot be prov
 - S33. Bump `meta.canonicalVersion` 2 to 3, disclose the enumerated flip set in facts, and produce
   the measured flip set of §4 "Rollout" before the waiver is approved.
 
-**P6 — rank-3 summing (S34-S36). CONDITIONAL: does not start until S14's probe reports.**
+**P6 — rank-3 summing. WONTDO, closed 2026-08-05 by S14's probe.**
 
-- S34. Only if S14 establishes an affirmative row-set signal, implement rank 3 against the
-  preconditions already specified in §4 "Data model", replacing the `incomplete-rows` stub from S19.
-  If the probe finds no such field, P6 is closed WONTDO and the stub is the permanent answer.
-- S35. Wire the S30 forcing class and the S31 prose check to the rank-3 disclosure finding. Both
-  mechanisms ship in P5 unused by any rule; P6 is what gives them a producer.
-- S36. Bump `meta.canonicalVersion` again and produce a second measured flip set covering only the
-  cells that move from `reason='incomplete-rows'` to a value. That set is small and exactly
-  enumerable by construction, which is what U9 D3 asks of a waiver.
+The probe proved `widget.serverRowTotal` does not exist, and neither does `data.totalCount` nor any
+other row-count field. Rank-3 precondition 2 therefore has no signal that could ever satisfy it, and
+U6 D5's bar — completeness affirmatively proven, never merely un-warned — cannot be met for a summed
+cell. Rank 3 is not deferred; it is refused. `reason='incomplete-rows'` on a would-be summed cell is
+the permanent, honest answer, and S30's forcing class plus S31's prose check ship in P5 with no
+producer, ready if Swydo ever adds the field.
 
 ## 3. Non-goals (OUT)
 
@@ -319,21 +317,30 @@ new data field is requested.
 
 **(c2) analyzer cell fields.** The cell table above.
 
-**(c3) UNKNOWN — cannot be classified until S14 probes them.** GraphQL introspection is disabled, so
-field existence must be probed one field at a time. Each is currently assumed rather than known:
+**(c3) MEASURED — S14's probe ran against a live report on 2026-08-05 and settled every candidate.**
+GraphQL introspection is disabled, so each field was probed by name; an absent field answers HTTP 400
+`GRAPHQL_VALIDATION_FAILED` naming it, a present field answers 200.
 
-| Candidate key | What it would settle |
-|---|---|
-| `metrics[].aggregation` | whether collapsing rows into an account cell is arithmetic or fiction |
-| `widget.dateRange` override | whether two widgets can be proven to describe the same period |
-| `widget.filters` / `segments` | whether a KPI card is an account ceiling or a filtered subset |
-| `dimensions[].isPartition` | whether rows are disjoint buckets, replacing a regex allowlist |
-| `rows[].isTotalOfShownRows` | whether a total row totals the account or the shown slice |
-| `widget.serverRowTotal` | whether a row set is the whole set or a top-N prefix |
+| Candidate key | Verdict | Consequence |
+|---|---|---|
+| `widget.dateRange` | **EXISTS** | period homogeneity becomes provable; extracted by P1 S15 |
+| `metrics[].aggregation` | absent | `Get-AggregationClass` stays a derivation, permanently |
+| `widget.filters` | absent | the filtered-KPI ambiguity is PERMANENT, not a gap to close |
+| `widget.segments` | absent | same |
+| `dims[].isPartition` | absent | `Test-PartitionDim`'s English word list stays the authority |
+| `widget.serverRowTotal` | absent | **no row-set completeness signal exists; P6 is WONTDO** |
+| `data.totalCount` | absent | the Relay connection exposes no count either |
+| `rows[].isTotalOfShownRows` | absent | node keys are `cells, compareCells, id, isTotals, meta, rows` |
 
-`serverRowTotal` is the one that gates rank 3 shipping at full strength, per precondition 2. The
-filtered-KPI-card ambiguity is the shared root cause of three ratified residuals: U6:243, U7 R17 and
-U9 FP-1, and it grows as more rules read the account layer.
+Two results are load-bearing. `serverRowTotal` does not exist and neither does any equivalent, so
+rank-3 precondition 2 can never be satisfied and F2's WONTDO branch is the one that fires: the
+`incomplete-rows` stub is the permanent answer, not a temporary one.
+
+`widget.dateRange` DOES exist, which partially closes the residual U6:243, U7 R17 and U9 FP-1 all
+cite. The period half is now provable. The filter half is not: `filters` and `segments` are both
+absent, so a filtered KPI card stays indistinguishable from an account-wide one for good. That
+residual should stop being described as undetectable-from-schema-v2 and start being described as
+undetectable, full stop.
 
 ### Migration
 
@@ -512,6 +519,9 @@ block, because such a block would be invisible to the analyst that owns a platfo
   closes WONTDO and the stub is the permanent answer. This keeps U6 D5's bar rather than working
   around it. Prereq on the owner: one live share link, since `skill/archive` is gitignored and absent
   from this checkout.
+  **OUTCOME (2026-08-05):** the owner supplied a live share link and the probe ran. `serverRowTotal`
+  does not exist, so the WONTDO branch fired and P6 is closed. The probe also proved
+  `widget.dateRange` DOES exist, which P1 S15 now extracts.
 - **F3. Do the two `major` rules stay `major` once they fire on more metrics?** RECOMMENDATION: keep
   the severity, add a per-provider rollup with U6 D11's 20-item cap, so the report discloses once
   rather than twenty times.
@@ -540,6 +550,11 @@ block, because such a block would be invisible to the analyst that owns a platfo
   numerics its repointed rules read; ratio recomposition had no guards; the closer's per-platform bag
   made the anchor requirement unenforceable; the force-surfacing mechanism did not exist; and the JWT
   scope claim cannot enumerate GraphQL fields.
+- rev-4 · 2026-08-05 · S14's field probe ran against a live report. Seven of eight candidates do not
+  exist. P6 (rank-3 summing) is closed WONTDO because no row-set completeness signal exists at all,
+  which makes the `incomplete-rows` stub permanent rather than temporary. `widget.dateRange` DOES
+  exist and P1 extracts it, partially closing a residual three ratified specs cite. The filtered-KPI
+  ambiguity is now known to be permanent. Status moved to INPROGRESS as P1 landed.
 - rev-3 · 2026-08-04 · owner resolved F1 and F2 in place; header tail carries `ratified 2026-08-04`.
   F2 splits rank-3 summing out of P3 into a conditional P6 (S34-S36) gated on S14's field probe, so
   P3 now ships ranks 1 and 2 with rank 3 stubbed to `incomplete-rows`. AC5 and AC6 are re-scoped to

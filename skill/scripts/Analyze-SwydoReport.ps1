@@ -346,7 +346,11 @@ function Assert-NoCredential($text){ if($text -match $script:KeyPattern){ throw 
 # --platform (U2): a major dataGap forcing the report to disclose which platforms were excluded. $null if no
 # filter or nothing excluded. Pure so it is unit-testable via -DefineOnly.
 function Get-ProviderFilterFinding($providerFilter,$providerInventory){
-  $pf=@(@($providerFilter) | Where-Object { $_ }); if($pf.Count -eq 0){ return $null }   # null/[]/[null] => no filter
+  # ANLZ-aUniformLattice-7: only non-empty STRINGS count as a filter entry. A bare truthiness test also
+  # accepted the empty PSCustomObject that `"providerFilter": {}` deserializes to, so an UNFILTERED report
+  # fired this major finding and told the client every platform had been excluded. Verified live
+  # 2026-08-05; the extractor now emits `[]`, and this guard also repairs already-archived extractions.
+  $pf=@(@($providerFilter) | Where-Object { ($_ -is [string]) -and $_ }); if($pf.Count -eq 0){ return $null }
   $excluded=@(@($providerInventory) | Where-Object { $_ -and ($_ -notin $pf) })
   if($excluded.Count -eq 0){ return $null }
   return [ordered]@{ ruleId='PROVIDER_FILTERED'; severity='major'; statement=("Report limited to platform(s) " + ($pf -join ', ') + "; excluded (not pulled): " + ($excluded -join ', ') + " - this is a partial view of the account.") }
@@ -675,7 +679,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $doc = [IO.File]::ReadAllText($InFile) | ConvertFrom-Json   # .NET UTF-8 (Get-Content -Raw mis-reads BOM-less UTF-8 as ANSI in PS 5.1)
 # schema gate
-if($doc.meta.schemaVersion -ne 2){ throw "unsupported schemaVersion (need 2, got '$($doc.meta.schemaVersion)') - re-extract with the current tool" }
+if($doc.meta.schemaVersion -notin @(2,3)){ throw "unsupported schemaVersion (need 2 or 3, got '$($doc.meta.schemaVersion)') - re-extract with the current tool" }
 if(-not $doc.report -or -not $doc.report.name -or -not $doc.widgets){ throw "not a valid v2 extraction (missing report/widgets)" }
 $doc = Scrub-Credential $doc
 
