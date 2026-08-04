@@ -1052,13 +1052,34 @@ foreach($prov in @($observed.Keys)){
 foreach($prov in @($observed.Keys)){
   if(-not $platforms.ContainsKey($prov)){ continue }   # only discovered platforms
   $pf=$platforms[$prov]
+  # ANLZ-aUniformLattice-6 (P5). MEMBERSHIP IS UNCHANGED: still observed-minus-HEADLINE. Review
+  # disproved the premise that matrix coverage equals headline coverage, in BOTH directions, with
+  # reproduced fixtures. The matrix refuses hidden-section widgets and the headline does not, so
+  # repointing membership would list a metric the headline still publishes; and the headline attributes
+  # by Get-WidgetProvider while the matrix attributes by metric prefix, so on a mixed-prefix widget
+  # repointing would silently DELETE a correct warning. Only the REASON comes from the matrix.
   $missing=@($observed[$prov] | Where-Object { -not $pf.headline.Contains($_) } | Sort-Object)
   if($missing.Count -eq 0){ continue }
   $shown = if($missing.Count -gt 20){ (@($missing[0..19]) + @("+$($missing.Count-20) more")) } else { $missing }
+  # Per-metric cause, from the matrix cell. Today the statement guesses one undifferentiated cause for
+  # every metric; the matrix knows the real one. A metric the matrix DID value is one the headline filed
+  # under a different platform, which is its own honest answer rather than a missing total.
+  $reasonCount=[ordered]@{}
+  foreach($mm in $missing){
+    $rk='no-matrix-cell'
+    $mc=$null
+    if($pf.metrics -and $pf.metrics.Contains([string]$mm)){ $mc=$pf.metrics[[string]$mm] }
+    if($mc){
+      if($mc.Contains('reason')){ $rk=[string]$mc['reason'] } else { $rk='attributed-to-other-platform' }
+    }
+    if($reasonCount.Contains($rk)){ $reasonCount[$rk]=[int]$reasonCount[$rk]+1 } else { $reasonCount[$rk]=1 }
+  }
+  # FLAT STRING per U10 D5: the closer stringifies every evidence value, so an object renders as garbage.
+  $byReason=(@($reasonCount.Keys | ForEach-Object { $_ + '=' + [string]$reasonCount[$_] }) -join ', ')
   [void]$gaps.Add([ordered]@{
     ruleId='GAP_NO_ACCOUNT_TOTAL'; severity='info'; platform=$pf.name
-    statement="no account-level total available for $($missing.Count) metric(s) of $($pf.name): only dimensioned rows with no total row (or blended widgets); metrics: $($shown -join ', ')"
-    evidence=[ordered]@{ metrics=@($shown); count="$($missing.Count)" }
+    statement="no account-level total available for $($missing.Count) metric(s) of $($pf.name): $byReason; metrics: $($shown -join ', ')"
+    evidence=[ordered]@{ metrics=@($shown); count="$($missing.Count)"; byReason=$byReason }
   })
 }
 # U9/D4: GAP_HEADLINE_SOURCE_CHANGED - one info finding per provider with >= 1 rank displacement (a later zero-dim
@@ -1228,7 +1249,7 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 }
 $facts=[ordered]@{
   meta=[ordered]@{
-    tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=2; computedFrom=$doc.meta.tool
+    tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=3; matrixVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence; period=$periodMeta

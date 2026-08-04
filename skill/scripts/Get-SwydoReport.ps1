@@ -9,9 +9,9 @@
   and writes it as  <OutDir>\YYYY-MM-DD-HH-MM-SS-<report-slug>.json.
   Handles password-protected shares. Windows PowerShell 5.1+ / .NET only.
 
-  OUTPUT SCHEMA (schemaVersion 2):
+  OUTPUT SCHEMA (schemaVersion 3; v2 differs only by the absence of the additive keys below):
     {
-      "meta":   { tool, schemaVersion:2, extractedAt, shareUrl, shareKey, reportId,
+      "meta":   { tool, schemaVersion:3, extractedAt, shareUrl, shareKey, reportId,
                   widgetCount, dataWidgets, unitBasis:[providers units were inferred for], warnings[] },
       "report": { name, subtitle, orientation, client, author{name,email}, team,
                   dateRange, compareDateRange, sections[{id,name}], custom },

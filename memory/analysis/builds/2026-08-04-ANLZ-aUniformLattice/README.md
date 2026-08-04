@@ -19,7 +19,7 @@ One unit per phase, per F1. Each sub-spec is adversarially reviewed before its c
 | P2 | [-3](spec/2026-08-04-spec-aUniformLattice-3.md) | declared aggregation semantics and the basis hash | no, dark |
 | P3 | [-4](spec/2026-08-04-spec-aUniformLattice-4.md) | the matrix and its reduce function, ranks 1 and 2 | no, dark |
 | P4 | [-5](spec/2026-08-04-spec-aUniformLattice-5.md) | the addressable second layer | no, dark |
-| P5 | not written yet | rewire, closer split index, forced disclosure | YES |
+| P5 | [-6](spec/2026-08-04-spec-aUniformLattice-6.md) | rewire, closer split index, forced disclosure | YES |
 | P6 | WONTDO | rank-3 summing | refused |
 
 P6 is CLOSED. The S14 field probe ran against a live report on 2026-08-05 and proved Swydo exposes no

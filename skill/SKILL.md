@@ -28,12 +28,19 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 
 ### 2. Produce the facts
 - **Mode A:** run `${CLAUDE_SKILL_DIR}/scripts/Get-SwydoReport.ps1 -ShareUrl <link> [-Secret <pw>] -OutDir <tmp>` → note the extraction path (DO NOT open it). Then `${CLAUDE_SKILL_DIR}/scripts/Analyze-SwydoReport.ps1 -InFile <extraction> -OutDir <out>`.
-- **Mode B:** validate the file has `meta.schemaVersion == 2` (else stop: "re-extract with the current Get-SwydoReport.ps1"). Then `${CLAUDE_SKILL_DIR}/scripts/Analyze-SwydoReport.ps1 -InFile <file> -OutDir <out>`.
+- **Mode B:** validate the file has `meta.schemaVersion` of 2 or 3 (else stop: "re-extract with the current Get-SwydoReport.ps1"). Then `${CLAUDE_SKILL_DIR}/scripts/Analyze-SwydoReport.ps1 -InFile <file> -OutDir <out>`.
 - Read the resulting `*.facts.json` (BOM-less UTF-8) — **this is your only data source.**
 
 ### 3. Decide single-pass vs fan-out
 - Count distinct `meta.providers[].category`. **Single-pass** if 1 category (and not `--thorough`). **Fan-out** if ≥ 2 distinct categories (or `--thorough`); `--fast` forces single-pass.
 - Fan-out: write one facts-slice file per category (the facts subset for that category's platforms) to the out dir, spawn one analyst subagent per category **passing only the slice file path** (never the extraction), plus one cross-cutting agent for portfolio/cross-platform notes; then synthesize. Completeness gate: every `meta.providers` platform appears exactly once in the report.
+- **Coverage (ANLZ-aUniformLattice-6):** each platform carries `platforms[].metrics`, one entry per metric the
+  dashboard declares for it. An entry with a `reason` is a metric the tool could NOT give an account-level
+  value, and the reason says why (`no-usable-cell`, `incomplete-rows`, `blended-undecomposable`,
+  `hidden-section`, `not-summable`, `no-total`). Read this to know what a platform can and cannot be said to
+  have measured, and to avoid recommending action on a metric the report has no account figure for. It is a
+  COVERAGE record only: never quote a number from it. Every quotable number still comes from the sources
+  `report-template.md` whitelists.
 
 ### 4. Write the report DRAFT — follow `${CLAUDE_SKILL_DIR}/report-template.md` exactly
 Write the **draft** (with anchors) to a working path `<out>\<stamp>-<slug>-report.draft.md`. Fill the template from the facts in the selected voice profile (default `causal`). Obey every hard rule in it: verbatim numbers; ALL comparisons narrated as prose (no tables/charts); mandatory caveats; the `<!-- platform:id -->` / `<!-- finding:fid -->` / `<!-- caveat:id -->` anchors (these are the verifier's scaffold and get stripped from the delivered file). The voice changes only tone and attribution confidence — never the numbers or caveats.

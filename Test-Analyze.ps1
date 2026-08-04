@@ -451,7 +451,11 @@ A ($h9.canonical.display -eq $h9.displayCurrent) "e2e12: canonical.display == di
 foreach($kk in 'display','sourceWidgetId','scope','period','source'){ A ($h9.canonical.PSObject.Properties.Name -contains $kk) "e2e12: canonical carries '$kk'" }
 foreach($bad in 'value','basisVersion','synthesizedFrom'){ A (-not ($h9.canonical.PSObject.Properties.Name -contains $bad)) "e2e13: canonical has NO '$bad'" }
 # 14. meta versions
-A ($r9.facts.meta.canonicalVersion -eq 2 -and $r9.facts.meta.factsVersion -eq 1) "e2e14/U9: meta.canonicalVersion=2 (D6 global bump), factsVersion=1"
+# ANLZ-aUniformLattice-6 (P5) bumped this 2 -> 3 under its disclosed waiver. U9 D6's rule is that the
+# marker names WHICH canonical algorithm produced the facts and moves on ANY algorithm change, global
+# and non-flip-conditional -- so the pin follows the bump rather than the bump breaking the pin.
+A ($r9.facts.meta.canonicalVersion -eq 3 -and $r9.facts.meta.factsVersion -eq 1) "e2e14/U9: meta.canonicalVersion=3 after the P5 waiver (D6 global bump), factsVersion=1"
+A ($r9.facts.meta.matrixVersion -eq 1) "e2e14: meta.matrixVersion=1 names the matrix algorithm separately"
 # 15. GAP_NO_ACCOUNT_TOTAL shape: info + fid + evidence.metrics
 $g15 = GetFind $r8.facts 'GAP_NO_ACCOUNT_TOTAL'
 A ($g15.severity -eq 'info' -and $g15.fid -and @($g15.evidence.metrics).Count -ge 1) "e2e15: GAP_NO_ACCOUNT_TOTAL severity=info, has fid, evidence.metrics listed"
@@ -719,7 +723,7 @@ $h2 = Hl $t2.facts 'google-adwords' 'google-adwords:cost_micros'
 A ($h2.canonical.sourceWidgetId -eq 'w2-kpi' -and $h2.canonical.source -eq 'kpi-widget') "U9-T2: KPI-first wins at first encounter (no displacement)"
 A ($t2.text -notmatch 'supersededWidgetId') "U9-T2: no supersededWidgetId anywhere in non-flip facts"
 A (-not (HasFind $t2.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T2: no precedence finding on non-flip"
-A ($t2.facts.meta.canonicalVersion -eq 2) "U9-T2: canonicalVersion=2 even on non-flip (D6 global)"
+A ($t2.facts.meta.canonicalVersion -eq 3) "U9-T2: canonicalVersion=3 even on non-flip (D6 global)"
 A ($t2.text -match '"current":9999000000,') "U9-T2: legacy current field byte-pinned unchanged"
 A ($t2.text -match [regex]::Escape('"displayCurrent":"$9,999.00"')) "U9-T2: legacy displayCurrent string byte-pinned unchanged"
 
@@ -1279,6 +1283,52 @@ $rd3 = @($bd3.rows | Where-Object { $_.label -eq 'A' })[0]
 A (@($rd3.valuesById.PSObject.Properties.Name | Where-Object { $_ }).Count -eq 0) "P4 AC4 v2 + collided name => the metric is OMITTED from valuesById, never guessed"
 A ($null -eq $rd3.valuesById.'google-adwords:clicks' -and $null -eq $rd3.valuesById.'facebook-ads:clicks') "P4 AC4 v2 neither colliding id is addressable, so no wrong number is published"
 A (@($rd3.values.PSObject.Properties.Name).Count -eq 1) "P4 AC4 v2 values still carries the collapsed single entry"
+Write-Host "== ANLZ-aUniformLattice-6 (P5): coverage reasons, membership invariant =="
+# AC5: the waiver markers.
+$p5a = RunAnalyze (MkDoc @(
+  (DW 'p5-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 10)}))),
+  (DW 'p5-nototal' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Impr' 'google-adwords:impressions' $null)) @((DRow 'data' 'A' 'Campaign' @{Impr=(Cell 7)})))
+))
+A ($p5a.facts.meta.canonicalVersion -eq 3) "P5 AC5 canonicalVersion is 3"
+A ($p5a.facts.meta.matrixVersion -eq 1) "P5 AC5 matrixVersion is 1"
+$g5 = GetFind $p5a.facts 'GAP_NO_ACCOUNT_TOTAL'
+A ($null -ne $g5) "P5 AC1 the gap still fires for a metric with no headline cell"
+A ($g5.severity -eq 'info') "P5 AC4 severity is still info"
+A ($g5.evidence.byReason -is [string]) "P5 AC3 byReason is a FLAT STRING (U10 D5)"
+A ($g5.evidence.byReason -match 'incomplete-rows') "P5 AC2 the reason is the matrix's, not a guess"
+A ($g5.statement -notmatch 'only dimensioned rows with no total row') "P5 AC2 the old undifferentiated guess is gone"
+
+# F1 COUNTEREXAMPLE (review-reproduced): the matrix refuses a hidden-section widget, the headline does
+# NOT. Membership must stay keyed on the HEADLINE, or the gap would list a metric the report still
+# publishes -- a self-contradicting facts document.
+$hid5 = (DW 'p5-hid' 'google-adwords' 'Google Ads' @() @((Met 'Impr' 'google-adwords:impressions' $null)) @((KRow @{Impr=(Cell 55000)})))
+$hid5 | Add-Member -NotePropertyName sectionHidden -NotePropertyValue $true -Force
+$p5b = RunAnalyze (MkDoc @(
+  (DW 'p5-vis' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 3000)}))),
+  $hid5
+))
+$hlHid = Hl $p5b.facts 'google-adwords' 'google-adwords:impressions'
+A ($null -ne $hlHid) "P5 F1 the headline DOES carry a hidden-section metric (the matrix does not)"
+A (-not (HasFind $p5b.facts 'GAP_NO_ACCOUNT_TOTAL')) "P5 F1 membership is headline-keyed, so no gap is invented for a metric the report publishes"
+$mxHid = @($p5b.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].metrics.'google-adwords:impressions'
+A ($mxHid.reason -eq 'hidden-section') "P5 F1 the matrix still records the honest reason beside it"
+
+# F2 COUNTEREXAMPLE (review-reproduced): headline attributes by widget provider, the matrix by metric
+# prefix. Repointing membership to the matrix would DELETE this correct warning.
+$p5c = RunAnalyze (MkDoc @(
+  (DW 'p5-ga4' 'google-analytics-4' 'GA4' @() @((Met 'Users' 'google-analytics-4:users' $null)) @((KRow @{Users=(Cell 1200)}))),
+  (DW 'p5-mixed' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null),(Met 'Sessions' 'google-analytics-4:sessions' $null)) @((KRow @{Clicks=(Cell 500);Sessions=(Cell 9000)})))
+))
+$g5c = @($p5c.facts.findings.dataGaps | Where-Object { $_.ruleId -eq 'GAP_NO_ACCOUNT_TOTAL' -and $_.platform -eq 'GA4' })
+A (@($g5c).Count -eq 1) "P5 F2 a mixed-prefix widget still raises the gap for the metric's true platform"
+A ($g5c[0].evidence.byReason -match 'attributed-to-other-platform') "P5 F2 and names the real cause: the headline filed it under another platform"
+
+# AC6: the flip set is bounded. Nothing but the statement, byReason and the two version keys moves.
+$p5d = RunAnalyze (MkDoc @(
+  (DW 'p5-x' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 42 40)})))
+))
+A (-not (HasFind $p5d.facts 'GAP_NO_ACCOUNT_TOTAL')) "P5 AC6 a fully-covered platform emits no gap, exactly as before"
+A ((Hl $p5d.facts 'google-adwords' 'google-adwords:clicks').displayCurrent -eq '42') "P5 AC6 headline values are untouched by the waiver"
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
