@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-04T14:50:04+03:00 @ 851584b1c5d5d62fc4a257be841cd58b7865d271
+last-audit: 2026-08-04T15:28:41+03:00 @ ea721b4c1ea110d22cf0af238d6f56ea5e1ed35c
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -178,3 +178,12 @@ true. Keep each to one line; link out for detail.*
   PowerShell suites run through `tools/run-ps-suite.sh` rather than invoking `powershell.exe` direct.
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
+- A fresh worktree can check out `.claude/skills/memory-recall/SKILL.md` with **CRLF despite the
+  `eol=lf` pin**, which reds the recall skill-drift leg on an otherwise-clean tree. The committed
+  blob is LF and `git check-attr` is correct, so this is a checkout artifact, not drift: fix with
+  `git checkout -- .claude/skills/memory-recall/SKILL.md`. Do not "fix" it by re-scaffolding.
+  Prune when a new worktree is observed to produce LF unaided.
+- The agent harness's PowerShell tool is **PowerShell 7.x**, not the 5.1 this project targets. Ad-hoc
+  checks run through it will silently accept `&&`, ternaries and `??` that the real runtime rejects.
+  Always spell out `powershell.exe -NoProfile -File <script>` for anything whose 5.1 behaviour
+  matters; the gate legs already do this via `tools/run-ps-suite.sh`.
