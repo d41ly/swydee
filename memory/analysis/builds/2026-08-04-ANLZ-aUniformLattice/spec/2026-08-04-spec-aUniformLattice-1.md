@@ -1,6 +1,6 @@
 # ANLZ-aUniformLattice-1 — layered uniform per-platform metric view
 
-**Status:** OPEN · rev-1 · 2026-08-04 · node a · Tier-2 · base 8e1e5294
+**Status:** SPECCED · rev-2 · 2026-08-04 · node a · Tier-2 · base 8e1e5294 · review wf_0925fd2f-2cd
 
 ## 1. Goal
 
@@ -15,229 +15,285 @@ extractor emits identity and completeness keys it currently fetches and discards
 Five phases. Each is its own commit and review boundary. Phase order is a dependency order, not a
 priority order: P2 cannot be verified without P1, and P4 is unsound without P3.
 
-**P1 — extractor schema v3: identity and completeness keys (S1-S12).**
+**P1 — extractor schema v3: identity and completeness keys (S1-S14).**
 
-- S1. Emit `widget.dimensions[]` as `{name, id}` instead of names only. The ids are already
-  collected at `Get-SwydoReport.ps1:513` and flattened away at `:515`.
-- S2. Emit `widget.metrics[].cellKey`, the exact `Uniq-Key` string written into `rows[].metrics`
-  at `Get-SwydoReport.ps1:525`. See §4 "Data model" for why this is a correctness fix, not an
-  ergonomic one.
-- S3. Emit `widget.metrics[].providerId`, the metric id prefix. Four separate analyzer passes
-  re-derive it today at `Analyze-SwydoReport.ps1:187`, `:812` and `:852`.
-- S4. Emit `widget.providers[].dataSourceId` and `widget.providers[].partId`. Both are already
+Every P1 key is strictly additive. No existing key changes name, shape or value. This constraint is
+load-bearing and was violated by rev-1; see §4 "Migration".
+
+- S1. Add `widget.dimensionRefs[]`, an array of `{name, id}` in the same order as the existing
+  `widget.dimensions[]`. The ids are already collected at `Get-SwydoReport.ps1:513` and flattened
+  away at `:515`. `widget.dimensions[]` stays a string array, byte-for-byte.
+- S2. Add `widget.metrics[].cellKey`, the exact `Uniq-Key` string written into `rows[].metrics` at
+  `Get-SwydoReport.ps1:525`. See §4 "Data model" for why this is a correctness fix.
+- S3. Add `widget.metrics[].providerId`, the metric id prefix. Three analyzer passes re-derive it
+  today at `Analyze-SwydoReport.ps1:187`, `:812` and `:852`.
+- S4. Add `widget.providers[].dataSourceId` and `widget.providers[].partId`. Both are already
   requested at `Get-SwydoReport.ps1:378` and dropped by `Normalize-Widget` at `:500`.
-- S5. Emit `widget.rowsComplete` (bool) plus `widget.pageInfo{hasNextPage, endCursor,
-  pagesFetched}`. This is the positive completeness signal U6 D5 requires; see §4.
-- S6. Emit `widget.sectionHidden`. `sections{id name isHidden}` is already requested at
+- S5. Add `widget.pagesComplete` (bool) plus `widget.pageInfo{hasNextPage, endCursor, pagesFetched}`.
+  Named for what it proves: every page the API offered was fetched. It is NOT a row-set completeness
+  proof; see rank-3 precondition 1.
+- S6. Add `widget.sectionHidden`. `sections{id name isHidden}` is already requested at
   `Get-SwydoReport.ps1:756` and `isHidden` is discarded at `:932`.
-- S7. Emit `widget.widgetTemplateId` and `widget.widgetTemplateLinked`, already fetched at `:378`.
-- S8. Emit `widget.hasTotalRow` and `widget.rowKindCounts{data, subtotal, total}`.
-- S9. Emit `widget.currencyBasis` (`row-meta` or `absent`) and `widget.currencyCodes[]`, the
-  distinct set seen across rows, rather than only the first-row scavenge at `:510-511`.
-- S10. Emit `widget.documentIndex`, the widget's ordinal in `widgets[]`.
-- S11. Emit `rows[].rowKey`, a stable identity over ALL dimensions. `Get-SwydoReport.ps1:523`
-  already builds the full multi-dimension map that nothing downstream reads past position 0.
-- S12. Emit `meta.scopeTokens`, the decoded `scope` claim of the JWT minted at
-  `Get-SwydoReport.ps1:84-89`. Costs one base64url decode of a token already in hand. It is the
-  only way to enumerate the API surface, because introspection is disabled.
+- S7. Add `widget.widgetTemplateId` and `widget.widgetTemplateLinked`, already fetched at `:378`.
+- S8. Add `widget.hasTotalRow` and `widget.rowKindCounts{data, subtotal, total}`.
+- S9. Add `widget.currencyBasis` (`row-meta` or `absent`) and `widget.currencyCodes[]`, the distinct
+  set seen across rows, rather than only the first-row scavenge at `:510-511`.
+- S10. Add `widget.documentIndex`, the widget's ordinal in `widgets[]`.
+- S11. Add `rows[].rowKey`, built as the row's document ordinal joined with its full dimension tuple.
+  The ordinal is free inside the edge loop at `Get-SwydoReport.ps1:519`, and including it guarantees
+  within-widget uniqueness by construction. A label-only key would collide, because `Row-Label`'s
+  fallback is shared across rows.
+- S12. Bump `schemaVersion` 2 to 3 AND widen every consumer that gates on the literal. Three exist:
+  `Analyze-SwydoReport.ps1:678` throws, `ConvertTo-SwydoTrendFacts.ps1:75` throws, and
+  `skill/SKILL.md:31` tells the model to stop. All three accept `2` or `3` after this item, with the
+  v2 degradation of §4 "Migration". Without S12, P1 dead-ends every analyze run while the suites stay
+  green, because `Test-Analyze.ps1:324` pins its fixture at 2.
+- S13. Extract the extraction-meta assembly into pure functions above the `-DefineOnly` return, and
+  give `Normalize-Widget` an explicit `($wmeta, $obj, $outcome, $index)` signature. S5, S10 and the
+  S14 probe otherwise land in top-level run-body code that no suite can execute, which would make
+  AC1 unobservable by any gate in this repo.
+- S14. Add `meta.fieldProbe`, the recorded result of one `Invoke-GQL -NoRetry` per c3 candidate field
+  against a known widget id, capturing the error text. This replaces rev-1's JWT scope decode, which
+  cannot answer the question: a scope claim enumerates authorization scopes, not GraphQL fields.
 
-**P2 — declared aggregation semantics (S13-S15).**
+**P2 — declared aggregation semantics (S15-S17).**
 
-- S13. Add `Get-AggregationClass($metricId, $unit)` returning exactly one of `sum`,
+- S15. Add `Get-AggregationClass($metricId, $unit)` returning exactly one of `sum`,
   `ratio-recompute`, `dedup-nonsummable`, `account-asis`, `unknown`. It composes the existing pure
   helpers and adds no new regex table.
-- S14. Add `Get-CellBasis($unit, $currencyCode)` returning a basis tuple plus a `basisVersion`
-  hash. The hash algorithm already ships at `Update-SwydoLedger.ps1:41-51`.
-- S15. Leave `Test-Additive` and `Test-Summable` untouched and still divergent. U7 R4 pins that
+- S16. Move `Get-BasisVersion` into `Analyze-SwydoReport.ps1` and delete the copy in
+  `Update-SwydoLedger.ps1`, which already dot-sources the analyzer at `:36`. Keep its shipped
+  three-argument signature including the metric id. U6's deferred-work contract makes a single shared
+  define-only helper a named precondition for bringing `basisVersion` into report facts, so a second
+  copy is not acceptable.
+- S17. Leave `Test-Additive` and `Test-Summable` untouched and still divergent. U7 R4 pins that
   divergence with a regression test; `Get-AggregationClass` consumes them, it does not unify them.
 
-**P3 — the matrix and its reduce function (S16-S21).**
+**P3 — the matrix and its reduce function (S18-S23).**
 
-- S16. Add `platforms[].metrics{}` as a SIBLING of `platforms[].headline{}`. `headline{}` stays
+- S18. Add `platforms[].metrics{}` as a SIBLING of `platforms[].headline{}`. `headline{}` stays
   byte-identical, including its `hasComparison` scalar key.
-- S17. Implement the reduce function of §4 "Data model" as a total function over the contribution
-  set, ranked by structure only.
-- S18. Every observed `(platform, metricId)` gets a cell. A cell carries a value with its display
-  strings, or a reason token, never nothing.
-- S19. Every cell carries its `method`, `aggClass`, `scope`, `basis`, `contributingWidgetIds[]` and
+- S19. Implement the reduce function of §4 "Data model" as a total function over the contribution
+  set, ranked by structure only, grouped by `(providerId, metricId)`.
+- S20. Every observed `(platform, metricId)` gets exactly one cell. A cell carries a value with its
+  numerics and display strings, or a reason token, never nothing and never two cells.
+- S21. Every cell carries its `method`, `aggClass`, `scope`, `basis`, `contributingWidgetIds[]` and
   `coverageBasis`.
-- S20. A same-rank disagreement produces the document-order winner AND a `conflict` record on the
-  cell. The reduce never silently drops a disagreeing contribution.
-- S21. Compute the matrix from `$dataWidgets` only, never from the facts-level `breakdowns` block,
-  which is capped at 20 rows at `Analyze-SwydoReport.ps1:386`.
+- S22. A disagreement among surviving contributions produces the ranked winner AND a `conflict`
+  record naming the losing widget ids, their `basisVersion`, and no values. The reduce never silently
+  drops a contribution.
+- S23. Compute the matrix from `$dataWidgets` only, never from the facts-level `breakdowns` block,
+  which is capped at 20 rows at `Analyze-SwydoReport.ps1:386`. Add the facts-schema shape gate of §7.
 
-**P4 — the addressable second layer (S22-S24).**
+**P4 — the addressable second layer (S24-S26).**
 
-- S22. Key `breakdowns[].rows[].values` by metric id, and add `breakdowns[].metricIds[]` alongside
-  the existing `metricNames[]`.
-- S23. Emit `breakdowns[].rows[].rowKey` from S11, so a row in a two-dimension widget has a unique
-  identity.
-- S24. A matrix cell whose method is `summed-rows` records the `rowKey` set it summed, so the sum
-  is retraceable without the reader performing arithmetic.
+- S24. Add `breakdowns[].rows[].valuesById`, keyed by metric id, alongside the existing
+  display-name-keyed `values`, and add `breakdowns[].metricIds[]` alongside `metricNames[]`. Both are
+  additive; re-keying `values` in place would change default output and cost P4 its dark status.
+- S25. Emit `breakdowns[].rows[].rowKey` from S11.
+- S26. A matrix cell whose method is `summed-rows` records the `rowKey` set it summed, so the sum is
+  retraceable without the reader performing arithmetic.
 
-**P5 — rewire and disclose (S25-S30).**
+**P5 — rewire and disclose (S27-S33).**
 
-- S25. Repoint the finding rules of §4 "Inventory" from `headline` to `metrics`.
-- S26. Redefine `GAP_NO_ACCOUNT_TOTAL`'s input from observed-minus-headline to
-  observed-minus-matrix-coverage. Keep U6 D11's shape, severity and 20-item cap.
-- S27. Extend `Build-FactIndex` in `Test-ReportNumbers.ps1` to index `platforms[].metrics` and the
-  metric-id-keyed breakdown rows. A number the closer cannot index is not publishable, so P5
-  without this ships an unusable matrix.
-- S28. Amend `skill/report-template.md` hard rule 2 to admit a verbatim `uniformCell.display` whose
-  `scope` starts `summed-rows:` only when the forced disclosure fid is anchored on the same line.
-- S29. Bump `meta.canonicalVersion` 2 to 3 and disclose the enumerated flip set in facts.
-- S30. Produce the measured flip set on fixtures before the waiver is approved. See §4 "Rollout".
+- S27. Repoint the finding rules of §4 "Inventory" from `headline` to `metrics`, gated by method. The
+  four value-reading rules read cells whose `method` is `kpi-widget`, `total-row` or
+  `operator-entered`, and skip any cell carrying a `reason` token. They never republish a
+  `summed-rows` or `ratio-recompute` value inside their statements.
+- S28. Redefine `GAP_NO_ACCOUNT_TOTAL`'s input from observed-minus-headline to
+  observed-minus-matrix-coverage, where a `reason`-bearing cell does NOT count as coverage. Keep U6
+  D11's shape, severity and 20-item cap. Without the reason-cell exclusion the redefinition silently
+  retires the rule for blended-only providers.
+- S29. Extend `Build-FactIndex` in `Test-ReportNumbers.ps1` with a SPLIT index. Cells whose `method`
+  is `kpi-widget`, `total-row` or `operator-entered` join the per-platform candidate bag as measured
+  values. Cells whose `method` is `summed-rows` or `ratio-recompute` join `byFid` under their
+  disclosure finding's fid ONLY, never the platform bag and never global. The existing line-scope rule
+  then enforces AC11 for free.
+- S30. Add a third forcing class to the closer's surfacing gate, `requiresProvenanceAnchor -eq $true`,
+  with no clause obligation of its own. The closer today has exactly two levers and both are ruled
+  out: severity at or above `major` is barred by U7 R7's downgrade discipline, and
+  `requiresDownstreamData` is barred by U10 D8's ban on forcing a semantically wrong sentence.
+  Without S30 the phrase "every rank-3 cell is force-surfaced" names no mechanism.
+- S31. Add a disclosure-prose check alongside S30. The anchor S32 relies on is stripped from the
+  delivered file, so an anchor-only contract lets a tool-computed sum reach the client unmarked.
+- S32. Amend `skill/report-template.md` at every binding surface, not only hard rule 2: the opening
+  verbatim whitelist must name `platforms[].metrics[].displayCurrent/displayPrevious/displayDelta`,
+  hard rule 1's phrasing template must carry the scope-dependent wording, and hard rule 2 gains the
+  `summed-rows` exception conditional on the disclosure fid being anchored on the same line.
+- S33. Bump `meta.canonicalVersion` 2 to 3, disclose the enumerated flip set in facts, and produce
+  the measured flip set of §4 "Rollout" before the waiver is approved.
 
 ## 3. Non-goals (OUT)
 
 - Trend facts get no matrix. `Analyze-SwydoTrend.ps1` builds its own independent
-  `platforms[]`/`headline{}` of the same documented shape, and giving it a matrix is a second
-  waiver with its own suite. The resulting asymmetry must be named in the template so the model
-  does not look for a matrix that is not there. Follow-up: a TREND-family unit.
-- No cross-platform metric taxonomy. Mapping `google-adwords:cost` and `facebook-ads:spend` onto
-  one shared concept is a separate unit, and it inherits the direction inconsistency recorded in
-  §5. This spec keeps metric ids provider-namespaced.
+  `platforms[]`/`headline{}` of the same documented shape, and giving it a matrix is a second waiver
+  with its own suite. The resulting asymmetry must be named in the template so the model does not
+  look for a matrix that is not there. Follow-up: a TREND-family unit.
+- No cross-platform metric taxonomy. Mapping `google-adwords:cost` and `facebook-ads:spend` onto one
+  shared concept is a separate unit, and it inherits the direction inconsistency recorded in §5.
 - No cross-scope reconciliation. U6's WONTFIX residual stands: a legitimate account KPI and a
   filtered table total are both surfaced with honest scope, and the matrix does not adjudicate
   between them by value.
-- No remainder arithmetic anywhere, on either layer. U6's ban is absolute and P4 makes violating it
-  easier, not harder.
-- No migration or backfill of archived facts. U9 D10/D11 stands: archived artifacts stay truthful
-  and self-describe via `canonicalVersion`.
+- No remainder arithmetic anywhere, on either layer.
+- No migration or backfill of archived facts. U9 D10/D11 stands.
 - No renumbering of the frozen `U<seq>` id era. Cite verbatim.
-- No new GraphQL round trip. Every P1 key is already fetched, already derivable from the retained
-  `raw` blob, or is a local decode. Keys that would need a new query field are listed as UNKNOWN in
-  §4 "Inventory" and are explicitly out until S12 resolves them.
+- No new GraphQL round trip for a DATA field. S14 is a deliberate probe whose purpose is to record
+  which fields exist; it fetches no report data.
+- No repointing of `DISC_CROSS_WIDGET`. See §4 "Inventory".
 
 ## 4. Design
 
 ### Data model
 
 The matrix is `platforms[<providerId>].metrics[<metricId>]`, a sibling of `headline`. The sibling
-placement is the load-bearing choice. It keeps `headline` byte-identical, which means
-`Analyze-SwydoTrend.ps1:276-282` gate 2c never sees a computed cell, the existing closer index
-keeps working unchanged, and the U9 waiver surface shrinks to the rewired finding rules plus
-additive keys. Nesting the matrix inside `headline` would put a computed value where U7b MF-3
-requires a measured account value, and would silently corrupt the trend path.
-
-A cell has this shape. Fields marked NEW have no precedent; the rest extend the shipped
-`canonical{}` block at `Analyze-SwydoReport.ps1:765` from one source widget to N.
+placement keeps `headline` byte-identical, which means `Analyze-SwydoTrend.ps1:276-282` gate 2c never
+sees a computed cell, the existing closer index keeps working, and the U9 waiver surface shrinks to
+the rewired finding rules plus additive keys. Nesting the matrix inside `headline` would put a
+computed value where U7b MF-3 requires a measured account value.
 
 | Field | Meaning |
 |---|---|
-| `id` | the metric id; the matrix key |
-| `metric` | display name |
-| `display`, `displayPrevious`, `displayDelta` | pre-formatted by `Format-Metric` / `Format-Delta`; the only thing the closer can match |
-| `type` | `currency`, `percent`, `count`, `ratio` or `number`, from `Metric-Type` |
-| `direction`, `unit`, `currency` | as on a headline cell |
+| `id`, `metric` | metric id (the matrix key) and display name |
+| `current`, `previous`, `deltaPct` | raw numerics; present only when the cell has a value |
+| `displayCurrent`, `displayPrevious`, `displayDelta` | pre-formatted; named to match the shipped headline cell so a repointed rule reads the same field |
+| `type`, `direction`, `unit`, `currency` | as on a headline cell |
 | `hasComparison` | per cell, feeding the closer's comparison guard |
-| `scope` | `account`, `table-total:<dimId>`, `summed-rows:<dimId>`, or `manual-entry` |
-| `method` NEW | `kpi-widget`, `total-row`, `summed-rows`, `ratio-recompute`, `operator-entered` |
-| `aggClass` NEW | the S13 class, so the template can key its wording on it |
-| `basis` NEW | `{unit, currencyCode, basisVersion}` |
-| `contributingWidgetIds[]` NEW | every widget that fed the cell, not just the winner |
-| `contributingRowKeys[]` NEW | present only when `method` is `summed-rows` |
-| `coverageBasis` NEW | what "included" meant for THIS cell: provider filter state and section visibility |
-| `conflict` NEW | present when a same-rank disagreement was reduced away; carries the losing widget ids and no values |
-| `reason` NEW | present instead of a value; one of the reason tokens below |
-| `period` | stamped from `meta.currentPeriod` |
+| `scope` | `account`, `table-total:<dim>`, `summed-rows:<dim>`, or `manual-entry` |
+| `method` | `kpi-widget`, `total-row`, `summed-rows`, `ratio-recompute`, `operator-entered` |
+| `aggClass` | the S15 class, so the template can key its wording on it |
+| `basis` | `{unit, currencyCode, basisVersion}` |
+| `contributingWidgetIds[]` | every widget that fed the cell, not only the winner |
+| `contributingRowKeys[]` | present only when `method` is `summed-rows` |
+| `coverageBasis` | what "included" meant for THIS cell: provider filter state and section visibility |
+| `conflict` | losing widget ids and their `basisVersion`; never a losing display string |
+| `reason` | present INSTEAD of every value and display field |
 
-Reason tokens, for a cell that exists but has no value: `no-total`, `not-summable`,
-`basis-conflict`, `incomplete-rows`, `blended-undecomposable`, `unit-unconfirmed`, `manual-entry`.
-These replace `GAP_NO_ACCOUNT_TOTAL`'s metric list rather than duplicating it.
+Reason tokens: `no-total`, `not-summable`, `basis-conflict`, `incomplete-rows`, `no-summable-rows`,
+`blended-undecomposable`, `unit-unconfirmed`, `manual-entry`.
 
-`conflict` carries ids and counts only, never a losing display string. U9 D4/FP-3 ratified that
-echoing a superseded value mints a traceable-number surface for a figure the tool deliberately
-demoted.
+The raw numerics are required, not optional. The rules S27 repoints read `current`, `previous` and
+`deltaPct`; a cell exposing only display strings would resolve those to `$null` silently under
+PowerShell and kill two force-surfaced `major` rules without any error. U6 D8's ban on a raw `value`
+key applied to the `canonical{}` PROVENANCE record, not to a headline-equivalent cell, and the
+shipped headline carries all three at `Analyze-SwydoReport.ps1:760`.
 
-**The reduce function.** Group contributions by `(providerId, metricId, basisVersion)`. Rank by
-structure only, never by value. U9 FP-1 rejected value adjudication because it would have the tool
-decide which number is right by arithmetic and would make the winner depend on data that changes
-between periods.
+**The reduce function.** Group contributions by `(providerId, metricId)` — the cell key exactly, so
+no two groups can compete for one slot. Rank by structure only, never by value; U9 FP-1 rejected
+value adjudication because it would make the winner depend on data that changes between periods.
 
-- Rank 1: a zero-dimension KPI card. The predicate is byte-for-byte the `$isKpi` test at
-  `Analyze-SwydoReport.ps1:734`, per U9 D1.
+- Rank 1: a zero-dimension KPI card, using U9 D1's FULL gate set. The gate set is not the bare
+  `$isKpi` expression at `Analyze-SwydoReport.ps1:734`: the blended guard sits five lines above it at
+  `:729`, so copying the predicate does not copy the guard.
 - Rank 2: an explicit total row on a dimensioned widget.
-- Rank 3: a sum over detail rows, permitted only under the preconditions below.
-- Within a rank, document order wins, using the S10 `documentIndex` so the winner is recordable
-  rather than an implicit array position.
+- Rank 3: a sum over detail rows, under the preconditions below.
+- Within a rank, document order wins, using S10's `documentIndex` so the winner is recordable rather
+  than an implicit array position.
 
-**Rank-3 preconditions.** U6 D5 deferred synthesis in full and set a hard bar: synthesis may
-proceed only when completeness is affirmatively proven, never merely because no warning said
-otherwise. All of the following must hold, and a failure emits a reason token instead of a value:
+The ranked winner supplies the value and its basis becomes the cell's `basis`. Every surviving
+contribution on a different `basisVersion` becomes a `conflict` entry. This case is live in the
+shipped suite, not hypothetical: fixture `u5c` at `Test-Analyze.ps1:538-541` carries a EUR
+dimensioned table total and a USD zero-dimension KPI for one metric in one report, and U6:242 records
+same-metric-two-currencies as a standing WONTFIX.
 
-1. `widget.rowsComplete` is `$true` (S5). Absence is not proof.
-2. `Test-Summable` on the metric id.
-3. `aggClass` is `sum`. A `ratio-recompute` cell is derived from its component cells instead; a
-   `dedup-nonsummable` or `account-asis` cell is never summed.
-4. The widget has exactly one dimension, and that dimension is a partition. S1's dimension id
-   replaces today's regex over an English display label at `Analyze-SwydoReport.ps1:484-488`.
-5. The widget is not blended.
-6. Basis is homogeneous across the summed rows.
-7. The summed row set is `kind -eq 'data'` AND NOT `Test-GroupRow`, with `kind -eq 'subtotal'`
-   excluded EXPLICITLY. Subtotal rows are extracted at `Get-SwydoReport.ps1:521` and read by
-   nothing today; every analyzer filter happens to be `data` or `total`. A row-summing matrix
-   depends on that exclusion to avoid double counting, so it must become a stated rule with its own
-   test rather than an accident of five filter shapes.
+**Rank-3 preconditions.** U6 D5 deferred synthesis in full and set a hard bar: synthesis may proceed
+only when completeness is affirmatively proven, never merely because no warning said otherwise. All
+of the following must hold; a failure emits the named reason token and no value.
 
-Every rank-3 cell is force-surfaced. U6's deferred-work contract states that a tool-computed total
-must never be presentable as if the platform reported it. The mechanism is the template contract of
-S28 plus a finding the closer honours, not a severity escalation.
+1. `widget.pagesComplete` is `$true`. This proves pagination was exhausted, nothing more.
+2. An affirmative ROW-SET signal: `serverRowTotal` equal to the returned row count, or an equivalent
+   no-row-limit flag recovered from the retained `raw` blob. A widget configured to show its top N
+   rows returns N edges with `hasNextPage` false and reports pages-complete, so precondition 1 alone
+   would publish an under-counted total. `serverRowTotal` is UNKNOWN until S14 answers; until then
+   rank 3 either does not ship, or ships with `scope='summed-rows:<dim>'` explicitly documented as a
+   sum of SHOWN rows and excluded from S28's coverage. Failure token: `incomplete-rows`.
+3. `Test-Summable` on the metric id, and `aggClass` is `sum`.
+4. Exactly one dimension AND its NAME satisfies `Test-PartitionDim` at
+   `Analyze-SwydoReport.ps1:484-488`. The dimension id from S1 is provenance only. An id changes
+   which string is matched, not what the match proves, and no id vocabulary has ever been observed
+   because `:515` has always discarded ids. Failure token: `not-summable`.
+5. Basis is homogeneous across the summed rows. Failure token: `basis-conflict`.
+6. The row set is `kind -eq 'data'` AND NOT `Test-GroupRow`, with `kind -eq 'subtotal'` excluded
+   EXPLICITLY. Subtotal rows are extracted at `Get-SwydoReport.ps1:521` and read by nothing today, so
+   the exclusion is currently an accident of five filter shapes rather than a reviewable rule.
+7. The FILTERED row set is non-empty, evaluated after precondition 6. A widget whose data rows are
+   all group rows or all subtotals would otherwise sum to a fabricated zero. Failure token:
+   `no-summable-rows`.
+8. Every summed row carries a numeric compare cell, or the cell is emitted with `hasComparison` false
+   and no `displayPrevious`/`displayDelta`. Without this a 10-row current sum divides against a 7-row
+   previous sum and publishes a fabricated delta.
 
-**"Included" is defined once.** A widget is included when `kind -eq 'data'`, AND its section is not
-hidden (S6), AND either no `-Platform` filter was applied or its provider is in the filter. A
-`manualKpi` widget is admitted as a cell with `method='operator-entered'` and is never a measured
-contribution, which closes the residual U7's critic override left open when it dropped the
-goal-card exclusion for want of a concrete flag. `coverageBasis` stamps the answer on every cell,
-because a matrix computed under a `-Platform` filtered pull is not account-level for the report's
-own claim, and `SKILL.md:81` already forces a `PROVIDER_FILTERED` gap for exactly that reason.
+A `ratio-recompute` cell is NOT a rank-3 sum and carries its own preconditions: both components must
+resolve to cells sharing the winner's `basisVersion`, `scope` and `method`; component selection uses
+`Get-RatioSpec`'s numerator and denominator patterns with the role-qualifier rule; a zero or absent
+denominator skips to `not-summable`. Rev-1 authorized ratio recomposition with no guards at all,
+which would have permitted a numerator and denominator from different widgets, periods and scopes.
+
+**Every rank-3 cell is force-surfaced** through S30's new forcing class plus S31's prose check. U6's
+deferred-work contract states that a tool-computed total must never be presentable as if the platform
+reported it, and an anchor alone does not achieve that because the closer strips anchors from the
+delivered file.
+
+**"Included" is defined once.** A widget contributes a VALUE at any rank when `kind -eq 'data'`, AND
+`Test-Blended` is false, AND its section is not hidden (S6), AND either no `-Platform` filter was
+applied or its provider is in the filter. The blended exclusion binds at every rank, per U6 D6, U7 R6
+and U9 D1; rev-1 excluded blended widgets only from rank 3, which would have let a joined widget's
+total become a platform's account cell. A blended widget still walks the `$observed` key space at
+`Analyze-SwydoReport.ps1:809-828`, so it registers platforms and metric ids, and a `(platform,
+metricId)` observed only on blended widgets gets a cell with `reason='blended-undecomposable'`.
+
+A `manualKpi` widget does NOT contribute, because S23 computes from `$dataWidgets` and `manualKpi`
+widgets are excluded before analysis at `Analyze-SwydoReport.ps1:684`. The affected `(platform,
+metricId)` gets a cell with `reason='manual-entry'` and no value. This keeps operator-typed numbers
+out of the closer's candidate bag, which they have never entered. F4 in §8 asks whether the owner
+wants the stronger version.
+
+`coverageBasis` stamps the filter and visibility answer on every cell, because a matrix computed
+under a `-Platform` filtered pull is not account-level for the report's own claim, and `SKILL.md:81`
+already forces a `PROVIDER_FILTERED` gap for exactly that reason.
 
 **Why S2 is a correctness fix.** The analyzer fetches a total-row cell by metric DISPLAY NAME at
 `Analyze-SwydoReport.ps1:738`, while the extractor uniquifies colliding names into `name [id]` at
 `Get-SwydoReport.ps1:358-364`. When one widget carries two metrics with the same display name, the
 second metric's lookup returns the FIRST metric's cell. This was verified by execution under
-PowerShell 5.1 during the review pass: both lookups returned `current=100`. The result is a
-headline cell keyed by metric 2's id, carrying metric 1's value, formatted with metric 2's unit and
-type. It passes the scalar guard. It is a wrong-number path, not a dropped-metric path, and it
-exists in shipped code today. `Uniq-Key` also falls back to `col<idx>` when a metric name is empty,
-producing a second silent path where the analyzer evaluates a lookup on the empty string.
+PowerShell 5.1 during review: both lookups returned `current=100`. The result is a headline cell
+keyed by metric 2's id, carrying metric 1's value, formatted with metric 2's unit and type. It passes
+the scalar guard. It is a wrong-number path in shipped code, not a dropped-metric path. `Uniq-Key`
+also falls back to `col<idx>` on an empty metric name, giving a second silent path. Repairing the
+lookups changes headline VALUES, so the repair is named in S27's phase and enters S33's flip set; it
+is not free under S18's byte-identity claim.
 
 ### Inventory
 
-Finding rules that read `platforms[].headline` and must be repointed in P5. Two are `major` and
-therefore force-surfaced by the closer, so their verdicts changing is user-visible.
+Finding rules that read `platforms[].headline` and their disposition in P5.
 
-| Rule | Site | Severity | Effect of the rewire |
+| Rule | Site | Severity | Disposition |
 |---|---|---|---|
-| `GAP_UNIT_UNCONFIRMED` | `Analyze-SwydoReport.ps1:895-910` | major | fires on more metrics; forced into the report |
-| `ANOM_BUDGET_CONSTRAINED` | `:912-930` | major | fires on more metrics; forced into the report |
-| WIN / LOSS | `:904-907` | none | verdict set grows; this is the point of the change |
-| `GAP_NO_ACCOUNT_TOTAL` | `:806-828` | info | input redefined per S26 |
-| `GAP_HEADLINE_SOURCE_CHANGED` | `:829-844` | info | unchanged; keyed on `headline`, which is frozen |
-| `DISC_CROSS_WIDGET` | `:923-950` | major | NOT repointed; see below |
+| `GAP_UNIT_UNCONFIRMED` | `Analyze-SwydoReport.ps1:895-910` | major | repointed, method-gated, skips reason cells |
+| `ANOM_BUDGET_CONSTRAINED` | `:912-930` | major | repointed, method-gated, skips reason cells |
+| WIN / LOSS | `:904-907` | none | repointed, method-gated; the verdict set grows |
+| `GAP_NO_ACCOUNT_TOTAL` | `:806-828` | info | input redefined per S28 |
+| `GAP_HEADLINE_SOURCE_CHANGED` | `:829-844` | info | unchanged; keyed on the frozen `headline` |
+| `DISC_CROSS_WIDGET` | `:923-950` | major | NOT repointed |
 
 `DISC_CROSS_WIDGET` keeps reading widgets directly. Its correctness argument is its dimension
 signature key: it compares only widgets with identical sorted dimension sets. Repointing it at a
 matrix that has already reduced those widgets to one cell would destroy the comparison it exists to
 make.
 
-Recommendations are NOT rules in code. They are model-authored from the facts document, per
-`skill/SKILL.md`. Rewiring recommendations therefore means changing what the model reads, which is
-the matrix plus S28's template amendment, not a PowerShell change. The spec's deliverable (b) is
-half PowerShell and half prompt contract, and the two halves land in the same phase.
+Recommendations are NOT rules in code. They are model-authored from the facts document per
+`skill/SKILL.md`. Rewiring recommendations means changing what the model reads, which is the matrix
+plus S32's template amendment, so the deliverable is half PowerShell and half prompt contract.
 
 Widget data keys, answering the owner's second question. It splits in two, because an extractor key
-bumps `schemaVersion` and touches a second script while an analyzer key rides the waiver.
+bumps `schemaVersion` and touches three consumers while an analyzer key rides the waiver.
 
-**(c1) extractor keys — all already fetched, derivable from `raw`, or a local decode.** S1-S12
-above. Nothing here needs a new GraphQL field.
+**(c1) extractor keys — all already fetched or derivable from the retained `raw` blob.** S1-S14. No
+new data field is requested.
 
-**(c2) analyzer cell fields.** The cell table above. Prefer c2 wherever the data is already in the
-extraction, because the retained `raw` blob makes most of it derivable locally.
+**(c2) analyzer cell fields.** The cell table above.
 
-**(c3) UNKNOWN — cannot be classified until S12 lands.** GraphQL introspection is disabled, so the
-JWT scope claim is the effective schema. Each of these is rated blocking-for-soundness by at least
-one research lens, and each is currently assumed rather than known:
+**(c3) UNKNOWN — cannot be classified until S14 probes them.** GraphQL introspection is disabled, so
+field existence must be probed one field at a time. Each is currently assumed rather than known:
 
 | Candidate key | What it would settle |
 |---|---|
@@ -248,202 +304,221 @@ one research lens, and each is currently assumed rather than known:
 | `rows[].isTotalOfShownRows` | whether a total row totals the account or the shown slice |
 | `widget.serverRowTotal` | whether a row set is the whole set or a top-N prefix |
 
-The filtered-KPI-card ambiguity is the shared root cause of three ratified residuals: U6:243,
-U7 R17 and U9 FP-1. It gets structurally larger as more rules read the account layer, which is
-exactly what this program does. S12 is the cheapest probe that could close it.
+`serverRowTotal` is the one that gates rank 3 shipping at full strength, per precondition 2. The
+filtered-KPI-card ambiguity is the shared root cause of three ratified residuals: U6:243, U7 R17 and
+U9 FP-1, and it grows as more rules read the account layer.
 
 ### Migration
 
-`schemaVersion` 2 to 3 at P1, and `meta.canonicalVersion` 2 to 3 at P5. Both are markers naming
-which algorithm produced the artifact; nothing gates on a literal value, and the single writer is
-`Analyze-SwydoReport.ps1:996`. Per U6 D10 and U9 D6, a silent algorithm change under an unchanged
-marker would be worse than the change itself.
+`schemaVersion` 2 to 3 at P1, and `meta.canonicalVersion` 2 to 3 at P5.
+
+`canonicalVersion` is a marker that nothing gates on; its single writer is
+`Analyze-SwydoReport.ps1:996`. `schemaVersion` is NOT such a marker. It has two writers,
+`Get-SwydoReport.ps1:921` for the report path and `:867` for the trend path, and three readers that
+gate on the literal `2`, two of which throw. S12 widens all three; rev-1 asserted the opposite and
+would have dead-ended every analyze run at the phase it called dark.
 
 The analyzer must keep reading schemaVersion-2 extractions. Every P1 key is additive and every
-consumer treats absence as "unknown", not as a default value. A v2 extraction therefore yields a
-matrix whose rank-3 cells are all `reason='incomplete-rows'`, because S5's positive completeness
-signal is absent and absence is not proof. That degradation is correct and is the visible reason to
-re-extract.
+consumer treats absence as unknown rather than as a default. A v2 extraction therefore yields a
+matrix whose rank-3 candidates all carry `reason='incomplete-rows'`, because preconditions 1 and 2
+have no affirmative signal. That degradation is correct and is the visible reason to re-extract.
 
 ### Rollout
 
-P1 through P4 are additive and land dark. P5 is the only phase that changes default output, and it
-is the only one that needs the waiver.
+P1 through P4 are additive and land dark, which is true only because S1 and S24 were made additive.
+P5 is the only phase that changes default output and the only one that needs the waiver.
 
 The waiver cannot be approved on a promise. U9 D3 ratified that a waiver's blast surface must be
-enumerable and provable, and no research lens could measure one because `skill/archive` is
-gitignored and absent from this checkout. S30 therefore requires a measured before-and-after on
-synthetic fixtures covering each drop class — dimensioned-no-total, blended, duplicate-display-name,
-unit-unconfirmed, partial-pages — enumerating cells added, findings added, findings removed and
-severities crossed. If no real extraction can be obtained, the fixture set IS the enumeration and
-the spec says so rather than implying broader proof.
+enumerable and provable, and no research or review agent could measure one because `skill/archive` is
+gitignored and absent from this checkout. S33 therefore requires a measured before-and-after on
+synthetic fixtures covering each drop class: dimensioned-no-total, blended, duplicate-display-name,
+unit-unconfirmed, partial-pages, and multi-basis. It enumerates cells added, findings added, findings
+removed and severities crossed.
 
-Two measurements gate P5 alongside it. First, the closer's candidate-bag size per platform before
-and after, because every candidate added makes a hallucinated number likelier to trace by type and
-magnitude, and "the guard gets weaker" is not a reviewable claim while "the bag goes from N to M"
-is. Second, the facts document's serialized size and nesting depth against `ConvertTo-Json -Depth
-40`, because the facts document is the model's entire context and a silent depth truncation would
-be invisible.
+Three measurements gate P5 alongside it. First, the closer's candidate-bag size per platform before
+and after. Second, per platform, the count of distinct `(value, type)` pairs whose hit set mixes
+`hasComparison` true and false — the comparison guard is satisfied by ANY hit carrying
+`hasComparison`, regardless of which metric it belongs to, so bag growth weakens it independently of
+the tracer. Third, the facts document's serialized size and nesting depth against `ConvertTo-Json
+-Depth 40`, because a silent depth truncation would be invisible.
 
 `skill/SKILL.md:36` has the model write one facts-slice file per CATEGORY and spawn one analyst
 subagent per slice, with a completeness gate that every `meta.providers` platform appears exactly
-once. The matrix is per-platform and therefore slices cleanly. Any document-level block would not,
-and would be invisible to the analyst that owns a platform — silently reproducing the
-insights-from-a-subset problem this program exists to fix. This spec adds no document-level block
-for that reason.
+once. The matrix is per-platform and therefore slices cleanly. This spec adds no document-level
+block, because such a block would be invisible to the analyst that owns a platform.
 
 ### Files touched (estimate)
 
 | File | Phases | Nature |
 |---|---|---|
-| `skill/scripts/Get-SwydoReport.ps1` | P1 | additive keys in `Normalize-Widget` and the report block |
-| `skill/scripts/Analyze-SwydoReport.ps1` | P2-P5 | two new pure helpers, the matrix pass, rule repointing |
-| `skill/scripts/Test-ReportNumbers.ps1` | P5 | `Build-FactIndex` extension |
-| `skill/report-template.md` | P5 | hard rule 2 amendment |
-| `skill/SKILL.md` | P5 | matrix in the analyst brief; trend asymmetry note |
+| `skill/scripts/Get-SwydoReport.ps1` | P1 | additive keys, pure-function extraction, the field probe |
+| `skill/scripts/ConvertTo-SwydoTrendFacts.ps1` | P1 | schemaVersion gate widening |
+| `skill/scripts/Analyze-SwydoReport.ps1` | P1-P5 | gate widening, two new helpers, the matrix pass, rule repointing |
+| `skill/scripts/Update-SwydoLedger.ps1` | P2 | delete the duplicated basis hash |
+| `skill/scripts/Test-ReportNumbers.ps1` | P5 | split fact index, the new forcing class, the prose check |
+| `skill/report-template.md` | P5 | whitelist, hard rule 1 and hard rule 2 |
+| `skill/SKILL.md` | P1, P5 | schemaVersion 3 in Mode B; matrix in the analyst brief; trend asymmetry |
 | `Test-Extractor.ps1` | P1 | additive |
-| `Test-Analyze.ps1` | P2-P5 | additive, plus the enumerated flip set rewrites |
+| `Test-Analyze.ps1` | P1-P5 | additive, plus the enumerated flip set rewrites |
 | `Test-Closer.ps1` | P5 | additive |
 | `SWYDO_REPORT_EXTRACTION_SPEC.md` | P1 | schemaVersion 3 contract |
 
 ### Alternatives rejected
 
 - **Nesting the matrix inside `headline`.** Breaks `Analyze-SwydoTrend.ps1` gate 2c, which requires
-  `canonical.scope -eq 'account'` on a MEASURED value, and widens the waiver to the trend path.
-- **Analysis-only, never persisted.** The closer cannot trace what it cannot see, so nothing derived
-  from the matrix would be publishable. It fails the product's load-bearing invariant.
-- **Unifying `Test-Additive` and `Test-Summable`.** U7 R4 pins their divergence with a regression
-  test precisely so a future tidy-up cannot silently flip calibration.
-- **Deriving the matrix from the facts-level `breakdowns` block.** It is capped at 20 rows plus
-  force-included anomaly labels, so a sum over it is a certifiable wrong number.
-- **Retiring `GAP_NO_ACCOUNT_TOTAL`.** It is simultaneously the disclosure of today's loss and the
-  natural regression detector for the new feature. Keep the rule, redefine its input.
+  `canonical.scope -eq 'account'` on a MEASURED value.
+- **Analysis-only, never persisted.** The closer cannot trace what it cannot see.
+- **Unifying `Test-Additive` and `Test-Summable`.** U7 R4 pins their divergence with a regression test.
+- **Deriving the matrix from the facts-level `breakdowns` block.** Capped at 20 rows.
+- **Retiring `GAP_NO_ACCOUNT_TOTAL`.** It is the natural regression detector for the new feature.
 - **A value-comparison tiebreak in the reduce.** Rejected verbatim by U9 FP-1.
+- **Re-keying `dimensions[]` or `breakdowns[].rows[].values` in place** (rev-1's S1 and S22). Both are
+  breaking shape changes that silently corrupt shipped consumers while the suites stay green, because
+  the fixture builders construct those structures directly instead of running `Normalize-Widget`.
+- **Decoding the JWT scope claim to enumerate fields** (rev-1's S12). A scope claim enumerates
+  authorization scopes, not GraphQL fields.
+- **Indexing summed cells into the per-platform candidate bag.** That bag is section-scoped, so a
+  tool-computed value would trace on any line of the platform's section and the anchor requirement
+  would be unenforceable.
 
 ## 5. Production-readiness checklist
 
-- **security** — no new egress, no new credential path, no new write path. `Scrub-Credential` and
-  `Assert-NoCredential` already run over the emitted document and the matrix adds no free text. The
-  only new surface is S12's decoded JWT scope claim, which must record the `scope` claim ONLY and
-  never the token, the signature or any other claim.
-- **perf / scale** — the matrix is O(widgets x metrics); the reduce is one pass over contributions.
-  The real cost is facts size, sized in §4 "Rollout".
+- **security** — no new egress on the data path and no new credential path. S14's field probe issues
+  requests against an already-authenticated session and must record error text only, never a token or
+  a signature. `Scrub-Credential` and `Assert-NoCredential` run over the emitted document; note that
+  they cover the ANALYZER output, so any new extractor-side string must be checked at its own seam.
+- **perf / scale** — the matrix is O(widgets x metrics) with a single reduce pass. The real cost is
+  facts size, sized in §4 "Rollout".
 - **a11y** — N/A — swydee has no UI.
-- **i18n** — the program REMOVES a language dependency: S1's dimension id replaces `Test-PartitionDim`'s
-  English word list as the authority for whether rows may be summed.
+- **i18n** — no improvement is claimed. Precondition 4 still matches an English word list.
+  `dimensionRefs[]` records ids that ENABLE a future language-independent partition test once S14
+  establishes an id vocabulary; until then the id proves nothing.
 - **error / empty / loading states** — the reason-token vocabulary IS the empty state, and it is
   total: every observed `(platform, metric)` gets a cell, so a missing value is always explained.
 - **observability** — `contributingWidgetIds[]`, `contributingRowKeys[]`, `conflict` and
-  `coverageBasis` make every cell retraceable to its inputs without arithmetic by the reader.
-- **risks** — the dominant risk is closer dilution: a larger candidate bag makes a fabricated number
-  likelier to trace. Gated by the P5 measurement. Second risk is a rank-3 cell presented as reported
-  data, gated by S28 and the forced disclosure. Third is double counting from subtotal rows, gated
-  by precondition 7 and its own test. No concurrency risk: single-writer, one-shot scripts.
-- **testing + left-shift gates** — see §7. Precondition 7 and the S2 duplicate-name path each get a
-  named regression test, because both are currently correct only by accident.
+  `coverageBasis` make every cell retraceable without arithmetic by the reader.
+- **risks** — the dominant risk is closer dilution, gated by the P5 measurements and bounded by S29's
+  split index. Second is a rank-3 cell presented as reported data, gated by S30 and S31. Third is
+  double counting from subtotal rows or a non-partition dimension; precondition 4 inherits U7 R16's
+  accepted allowlist risk at a higher blast radius, because U7 spent that assumption on a finding
+  while rank 3 spends it on a published number. Fourth is a top-N widget summing to an under-count,
+  gated by precondition 2. No concurrency risk: single-writer, one-shot scripts.
+- **testing + left-shift gates** — see §7. Precondition 6, precondition 7 and the S2 duplicate-name
+  path each get a named regression test. Fixture builders must exercise `Normalize-Widget` rather
+  than constructing widget objects directly, or a breaking extractor change stays invisible.
 - **migration / rollback** — additive through P4, so rollback is a revert. P5 is revertable as one
   `--no-ff` merge; `canonicalVersion` makes any artifact produced under it self-describing.
-- **user docs** — `skill/SKILL.md` gains the matrix in the analyst brief and the trend asymmetry
-  note. `SWYDO_REPORT_EXTRACTION_SPEC.md` gains the schemaVersion-3 contract. A user-facing change
-  without its page updated is not done.
+- **user docs** — `skill/SKILL.md` gains schemaVersion 3, the matrix in the analyst brief, and the
+  trend asymmetry note. `SWYDO_REPORT_EXTRACTION_SPEC.md` gains the schemaVersion-3 contract.
 
 ## 6. Acceptance criteria
 
-- AC1. When an extraction runs against a report with a hidden section, a multi-account provider and
-  a paginated table, the emitted widget objects carry all of S1-S11 and `meta.scopeTokens` is a
-  string array containing no token, signature or other claim.
-- AC2. When the analyzer runs on a schemaVersion-2 extraction, it still produces valid facts, and
-  every rank-3 candidate cell carries `reason='incomplete-rows'` rather than a synthesized value.
-- AC3. When a widget carries two metrics with the same display name, each metric's cell carries its
-  OWN value. A regression test pins this against the executed repro in §4 "Data model".
-- AC4. When a dimensioned widget has no total row, is single-dimension on a partition dimension, is
-  non-blended, has `rowsComplete=$true` and a summable metric, its cell carries a value with
-  `method='summed-rows'`, `scope='summed-rows:<dimId>'`, a populated `contributingRowKeys[]`, and a
-  force-surfaced disclosure finding.
-- AC5. When any one rank-3 precondition fails, the cell carries the matching reason token and NO
-  value, and no finding claims a computed total.
-- AC6. When a widget's rows include a `subtotal` row, that row is excluded from the sum, proven by a
-  test whose fixture would double-count without the exclusion.
-- AC7. When two zero-dimension KPI cards for one `(platform, metric)` disagree, the matrix carries
-  the document-order winner plus a `conflict` record naming the losing widget ids and no values, and
-  `DISC_CROSS_WIDGET` still fires unchanged.
-- AC8. When a `-Platform` filtered extraction is analyzed, every matrix cell's `coverageBasis`
-  records the filter, and `PROVIDER_FILTERED` still fires.
-- AC9. When the report cites a number that exists only in `platforms[].metrics`, the closer traces
-  it. Before S27 the same citation must FAIL, proven by a test that pins the fail-closed direction.
-- AC10. When the report cites a `summed-rows` number without the disclosure fid anchored on the same
-  line, the closer blocks publish.
-- AC11. `bash tools/run-gates.sh` is green, with each of the eight suites additive on its own count
-  and unchanged on the others, except for the flip-set assertions enumerated by S30.
-- AC12. S30's measured flip set exists as an in-repo artifact enumerating cells added, findings
-  added, findings removed and severities crossed, plus the closer candidate-bag delta and the facts
-  size and depth measurements. The P5 waiver is not approvable without it.
+- AC1. When an extraction runs against a report with a hidden section, a multi-account provider and a
+  paginated table, the emitted widget objects carry S1-S11, and `meta.fieldProbe` records one result
+  per c3 candidate with no token or signature in it. Observable because S13 makes the assembly
+  callable under `-DefineOnly`.
+- AC2. When `widget.dimensions[]` is compared before and after P1 on the same extraction, it is
+  byte-identical, and `Get-TimeSeries` still returns a non-null block for a Day-dimensioned widget.
+- AC3. When the analyzer or the trend converter is handed a schemaVersion-2 document, it does not
+  throw, and every rank-3 candidate cell carries `reason='incomplete-rows'`.
+- AC4. When a widget carries two metrics with the same display name, each metric's cell carries its
+  OWN value, and the resulting headline value change appears in S33's flip set.
+- AC5. When a dimensioned widget satisfies every rank-3 precondition, its cell carries a value with
+  `method='summed-rows'`, a populated `contributingRowKeys[]` whose count equals the filtered row
+  count, and a force-surfaced disclosure finding.
+- AC6. When any one rank-3 precondition fails, the cell carries the matching reason token and NO
+  value, and no finding claims a computed total. Covered per token, including `no-summable-rows` on
+  an all-group-row widget and `incomplete-rows` on a top-N widget.
+- AC7. When a widget's rows include a `subtotal` row, that row is excluded from the sum, proven by a
+  fixture that would double-count without the exclusion.
+- AC8. When the `u5c` fixture shape is analyzed (one metric, EUR table total and USD KPI card),
+  exactly one cell exists, its winner is deterministic across two runs, and its `conflict` names both
+  widgets and carries no display string.
+- AC9. When a blended zero-dimension widget is present, it appears in no cell's
+  `contributingWidgetIds[]` at any rank, and a provider observed only on blended widgets has a cell
+  with `reason='blended-undecomposable'` and still triggers `GAP_NO_ACCOUNT_TOTAL`.
+- AC10. When every cell of a platform carries a reason token, no WIN, LOSS, `GAP_UNIT_UNCONFIRMED` or
+  `ANOM_BUDGET_CONSTRAINED` is emitted for that platform.
+- AC11. When the report cites a `summed-rows` number without the disclosure fid anchored on the same
+  line, the closer blocks publish. When it cites a measured matrix number, the closer traces it.
+  Before S29 the same measured citation must FAIL, proven by a test pinning the fail-closed direction.
+- AC12. When a rank-3 disclosure finding is surfaced but the report body contains no disclosure prose,
+  the closer blocks publish.
+- AC13. `bash tools/run-gates.sh` is green, with each of the eight suites additive on its own count
+  and unchanged on the others, except for the flip-set assertions enumerated by S33.
+- AC14. S33's measured flip set exists as an in-repo artifact enumerating cells added, findings added,
+  findings removed and severities crossed, plus the three P5 measurements of §4 "Rollout". The waiver
+  is not approvable without it.
 
 ## 7. Gates
 
 - `bash tools/run-gates.sh` — the whole standing bar, and the merge bar for every phase.
 - The eight PowerShell suites, all re-run on every phase. Baseline at spec time: 1064 assertions.
-  Measured during research on 2026-08-04: `Test-Analyze` 467 passed, `Test-Closer` 129 passed,
-  `Test-TrendAnalyze` 68 passed.
+  Measured 2026-08-04: `Test-Analyze` 467, `Test-Closer` 129, `Test-TrendAnalyze` 68.
 - `memory-tree/check-memory-hygiene.sh` — 12 checks, including check 12 on this file.
 - `bash scripts/manifest-check.sh` — the kickoff-manifest ratchet.
 - ps source hygiene, memory-recall selftest and skill-drift, agent-instructions wiring, agent-cap
   selftest, check-wiring selftest, the run-gates canary.
-- NEW gate proposed by this spec: a facts-schema shape assertion. `tools/gate-legs.json:2-9` lists
-  the eight suites and contains no facts-schema or contract-drift leg, so today nothing mechanically
-  stops a facts key from being renamed out from under the closer and the template. P3 adds one.
+- NEW gate added by S23: a facts-schema shape assertion. `tools/gate-legs.json:2-9` lists the eight
+  suites and contains no facts-schema or contract-drift leg, so nothing today stops a facts key from
+  being renamed out from under the closer and the template.
 
 ## 8. Open questions
 
 - **F1. Phase split.** Land as five sequenced units, or fewer? RECOMMENDATION: five. P1 alone is a
-  schemaVersion bump touching the extractor, which the tier rule already makes a design-pass unit;
-  bundling it with the rewire would put a two-script change under a one-script waiver.
-- **F2. Can S12 actually run before P1 is built?** The scope-token decode needs a live share link,
-  and `skill/archive` is gitignored and absent here. If the owner can supply one report pull, the
-  six UNKNOWN keys in §4 "Inventory" become measured facts and several rank-3 preconditions may
-  become gateable rather than disclose-only. RECOMMENDATION: run the probe before P3 is designed in
-  detail. This is the single highest-value unblocking action in the program.
-- **F3. Do the two `major` rules stay `major` once they fire on more metrics?**
-  `GAP_UNIT_UNCONFIRMED` and `ANOM_BUDGET_CONSTRAINED` are force-surfaced. A matrix that covers
-  every metric will fire them on many more, and U7 R7's discipline is that uncertainty downgrades to
-  info. RECOMMENDATION: keep the severity, add a per-provider rollup with U6 D11's 20-item cap, so
-  the report is forced to disclose once rather than twenty times.
-- **F4. Does `manualKpi` enter the matrix at all?** Admitting it makes "every included widget" true;
-  excluding it keeps operator-entered numbers out of a computed set. RECOMMENDATION: admit with
-  `method='operator-entered'` and a distinct scope, because silent exclusion is the failure U10
-  already flags at its line 29.
-- **F5. Is the second layer a reference into `breakdowns`, or its own copy?** A copy triples the row
-  payload on a breakdown-heavy report; a reference needs S22 and S23 first. RECOMMENDATION: a
+  schemaVersion bump touching three consumers, which the tier rule already makes a design-pass unit.
+- **F2. Does rank 3 ship before `serverRowTotal` is settled?** Precondition 2 has no affirmative
+  signal until S14 probes it. Option A: defer rank 3 to a sixth phase, so P3 ships ranks 1 and 2 only
+  and the matrix is uniform in KEYS but not yet in values. Option B: ship rank 3 with
+  `scope='summed-rows:<dim>'` documented as a sum of SHOWN rows, excluded from S28 coverage.
+  RECOMMENDATION: Option A. U6 D5 deferred synthesis in full for this exact reason, and Option B
+  publishes a number whose disclosure says "tool-computed" while the real defect is "incomplete".
+- **F3. Do the two `major` rules stay `major` once they fire on more metrics?** RECOMMENDATION: keep
+  the severity, add a per-provider rollup with U6 D11's 20-item cap, so the report discloses once
+  rather than twenty times.
+- **F4. Does `manualKpi` ever become a value-bearing cell?** The body currently says no, and gives it
+  `reason='manual-entry'`. Admitting it would make "every included widget" literally true but would
+  put operator-typed numbers into the closer's candidate bag for the first time. RECOMMENDATION: keep
+  the body's answer; revisit only if a client report is found to depend on a manual KPI.
+- **F5. Is the second layer a reference into `breakdowns`, or its own copy?** RECOMMENDATION: a
   reference, decided after the P5 size measurement.
-- **F6. Does the closer gain a scope check?** Once cells carry `period` and `scope`, the closer
-  could refuse a number whose scope contradicts the sentence. It does no period or scope
-  discrimination today. RECOMMENDATION: out of scope here, tracked as a follow-up, because it would
-  change publish outcomes on reports this program does not otherwise touch.
+- **F6. Does the closer gain a scope or period check?** RECOMMENDATION: out of scope here, tracked as
+  a follow-up, because it would change publish outcomes on reports this program does not touch.
 
 ## 9. Revision log
 
 - rev-1 · 2026-08-04 · initial draft from workflow wf_34e0982e-f78 (six research lenses plus a
-  completeness critic, 222 tool calls). Two premises stated at kickoff were falsified during
-  research and are corrected in this draft: a blended widget is NOT skipped entirely, and a
-  duplicate metric display name is a wrong-value path rather than a dropped-metric path.
+  completeness critic, 222 tool calls). Two kickoff premises were falsified during research and
+  corrected in the draft: a blended widget is NOT skipped entirely, and a duplicate metric display
+  name is a wrong-value path rather than a dropped-metric path.
+- rev-2 · 2026-08-04 · folded the Tier-2 adversarial review wf_0925fd2f-2cd (five finder lenses,
+  eleven batched skeptics, 17 agents, 324 tool calls; 54 raw findings, 50 survived refutation,
+  deduplicating to 13 must-fix and 9 should-fix). Full artifact under `../reviews/`. Load-bearing
+  corrections: S1 and S24 were breaking shape changes and are now additive; `schemaVersion` has three
+  literal-gating consumers and rev-1 claimed it had none; the reduce grouped on a key finer than the
+  cell key with no collapse rule; the blended exclusion bound only rank 3; pagination completeness is
+  not row-set completeness; a dimension id does not prove partition-hood; the cell lacked the raw
+  numerics its repointed rules read; ratio recomposition had no guards; the closer's per-platform bag
+  made the anchor requirement unenforceable; the force-surfacing mechanism did not exist; and the JWT
+  scope claim cannot enumerate GraphQL fields.
 
 ## 10. Reuse audit
 
 None — the codebase-map kit is not adopted in swydee, so `tools/codebase-map/reuse_lookup.py` does
-not exist here and the audit was done by reading source. The seams this program wires through were
-identified by reading:
+not exist here and the audit was done by reading source. The seams this program wires through:
 
 - `Analyze-SwydoReport.ps1:711-782`, the headline loop, which the matrix parallels rather than
   replaces.
 - `Analyze-SwydoReport.ps1:765`, the shipped `canonical{}` provenance block, which the cell's
   provenance fields extend from one source widget to N.
 - `Analyze-SwydoReport.ps1:809-828`, the `$observed` inventory pass. The matrix's key space already
-  exists and is already computed here, by metric-id prefix across ALL data widgets including
-  blended ones. `GAP_NO_ACCOUNT_TOTAL` is already exactly observed-minus-coverage. The matrix reuses
-  this pass rather than adding a second discovery walk.
+  exists and is already computed here, by metric-id prefix across ALL data widgets including blended
+  ones, and `GAP_NO_ACCOUNT_TOTAL` is already exactly observed-minus-coverage. The matrix reuses this
+  pass rather than adding a second discovery walk.
 - `Analyze-SwydoReport.ps1:473-479` and `:491-511`, `Test-Summable` and `Get-RatioSpec`, which
   `Get-AggregationClass` composes rather than replaces.
-- `Update-SwydoLedger.ps1:41-51`, the shipped basis-hash algorithm, reused verbatim for
-  `basisVersion` instead of writing a second one.
+- `Update-SwydoLedger.ps1:41-51`, the shipped basis hash. S16 MOVES it into the analyzer rather than
+  copying it, because `Update-SwydoLedger.ps1:36` already dot-sources the analyzer and U6's
+  deferred-work contract names a single shared helper as a precondition.
 - `Get-SwydoReport.ps1:492-531`, `Normalize-Widget`, where every P1 key is a retention rather than a
   new fetch.

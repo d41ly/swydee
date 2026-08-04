@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-04T22:51:19+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
+last-audit: 2026-08-04T23:37:17+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -66,8 +66,9 @@ completes.
   `main`. **Nothing mechanically enforces this** — the branch-guard hook was declined at adoption.
 - **Governing docs:** `AGENTS.md` is the ruleset. The **units index** (inside
   `memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md`)
-  is authoritative for what is shipped/deferred. Inside each spec, the v2 AMENDMENTS/review-override
-  block at the top OVERRIDES the unit bodies below it. `SKILL_BUILD_SPEC.md` §13 (hardened design)
+  is authoritative for what is shipped/deferred. Inside a GRANDFATHERED 2026-07 spec, the v2
+  AMENDMENTS/review-override block at the top OVERRIDES the unit bodies below it; a post-cutoff spec
+  has no such block and its body is already the folded text. `SKILL_BUILD_SPEC.md` §13 (hardened design)
   supersedes its §1–12 on any conflict. `data_gaps.md` = candidate analyzer rules, not ratified spec.
 - **Governance playbook:** `AGENTS.md` (template v2.3), with its activity-scoped companion
   `parallel-coding-governance.domain-rules.md`. `CLAUDE.md` is a `@AGENTS.md` import.
@@ -108,7 +109,8 @@ additive on its suite's count; other suites' counts stay unchanged). Baseline at
 Any change touching the extractor, a credential path, the closer contract, the facts schema, or
 the default report surface is **design-pass**: a written spec (goal · scope · non-goals ·
 acceptance) under `memory/<discipline>/builds/<YYYY-MM-DD>-<FAMILY>-<slug>/spec/`, adversarially
-reviewed, with the review verdict folded in as an AMENDMENTS block BEFORE building — one
+reviewed, with the review verdict folded in BEFORE building — into the BODY with a `rev-N` bump for a
+post-cutoff spec, as a top AMENDMENTS block only for the grandfathered 2026-07 ones — one
 commit/review boundary per unit. Docs, additive tests, and template wording are **direct**.
 
 Specs dated on/after **2026-08-04** must follow `memory/TEMPLATE-SPEC.md` (hygiene check 12); the
@@ -183,9 +185,14 @@ true. Keep each to one line; link out for detail.*
   PowerShell suites run through `tools/run-ps-suite.sh` rather than invoking `powershell.exe` direct.
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
-- Filing a new record costs two hygiene legs beyond writing it: a `DECISIONS.md` index line has a
-  **300-char cap** (check 7), and any new `builds/` folder makes `TREE.md` stale (check 9).
-  Regenerate with `memory-tree/gen-memory-tree.sh --write` before re-running the gate.
+- Filing a new record costs three hygiene legs beyond writing it: a `DECISIONS.md` index line has a
+  **300-char cap** (check 7), any new `builds/` folder makes `TREE.md` stale (check 9), and inside a
+  build folder only `README.md STATUS.md prompts/ spec/ build/ reviews/` are allowed - `reviews/` is
+  PLURAL and its files must be `<date>-review-<slug>-<seq>.md` (checks 4 and 5). Regenerate the tree
+  with `memory-tree/gen-memory-tree.sh --write` before re-running the gate.
+- A spec dated on/after the `SPEC_FORMAT_CUTOFF` may NOT carry a top-level `## AMENDMENTS` block:
+  check 12 demands exactly the ten canonical `##` sections, so a review folds into the body with a
+  `rev-N` bump logged in §9. The grandfathered 2026-07 specs use the older top-block convention.
 - A fresh worktree can check out `.claude/skills/memory-recall/SKILL.md` with **CRLF despite the
   `eol=lf` pin**, which reds the recall skill-drift leg on an otherwise-clean tree. The committed
   blob is LF and `git check-attr` is correct, so this is a checkout artifact, not drift: fix with
