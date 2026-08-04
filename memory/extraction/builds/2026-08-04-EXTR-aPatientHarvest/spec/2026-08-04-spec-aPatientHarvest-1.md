@@ -1,6 +1,6 @@
 # EXTR-aPatientHarvest-1 — extractor completeness under a slow Swydo backend
 
-**Status:** INPROGRESS · rev-5 · 2026-08-04 · node a · Tier-2 · base ea721b4c · review 2026-08-04-review-aPatientHarvest-1 · ratified 2026-08-04
+**Status:** CLOSED · rev-6 · 2026-08-04 · node a · Tier-2 · base ea721b4c · review 2026-08-04-review-aPatientHarvest-1 · ratified 2026-08-04 · landed 3e5bd93
 
 ## 1. Goal
 
@@ -422,6 +422,9 @@ into `$doc.meta` and `$tdoc.meta` are covered only by the live run.
 
 ## 8. Open questions
 
+none - all five forks below were resolved by the owner, three of them before the build started and
+two at the scope-approval gate. They are kept in place as the record of what was decided and why.
+
 - **Fork 1, behaviour when a widget is still empty at the end of the budget.** RESOLVED (owner,
   2026-08-04): write the document, flag it in facts, and let the closer refuse to publish.
 - **Fork 2, how much wall clock an extraction may spend.** RESOLVED (owner, 2026-08-04): configurable
@@ -467,6 +470,8 @@ into `$doc.meta` and `$tdoc.meta` are covered only by the live run.
   resolved-but-empty result is believed only after one further quiet window yields no new verdict.
   Also added `probeMaxWaitSec` (10 s) after a live trend run spent 349 s of its 420 s budget waiting
   out the unsettled band at full per-widget budget; probes are cheap and expected to be refused.
+- rev-6 · 2026-08-04 · landed on `main` as merge 3e5bd93; full bar green post-merge (17 of 17
+  legs, 1064 assertions across the 8 suites). Status to CLOSED.
 
 ## 10. Reuse audit
 
