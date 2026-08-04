@@ -105,6 +105,77 @@ $redacted = 'Latest view: https://swy.do/shares/ABCdef123 weekly' -replace $scri
 A ($redacted -notmatch 'swy\.do/shares/ABCdef') "note redaction strips the share link (KeyPattern)"
 $rthrew=$false; try{ Assert-NoCredential $redacted }catch{ $rthrew=$true }; A (-not $rthrew) "redacted note passes Assert-NoCredential (no pipeline abort)"
 
+Write-Host "== ANLZ-aUniformLattice-3 (P2): declared aggregation semantics =="
+# AC1: plain summable counts and money.
+A ((Get-AggregationClass 'google-adwords:clicks' $null) -eq 'sum') "P2 AC1 clicks => sum"
+A ((Get-AggregationClass 'google-adwords:cost_micros' 'micros') -eq 'sum') "P2 AC1 cost_micros => sum"
+A ((Get-AggregationClass 'google-adwords:impressions' $null) -eq 'sum') "P2 AC1 impressions => sum"
+A ((Get-AggregationClass 'facebook-ads:spend' 'micros') -eq 'sum') "P2 AC1 spend => sum"
+
+# AC2: anything Get-RatioSpec claims is recomputable.
+A ((Get-AggregationClass 'google-adwords:ctr' 'fraction') -eq 'ratio-recompute') "P2 AC2 ctr => ratio-recompute"
+A ((Get-AggregationClass 'google-adwords:average_cpc' 'micros') -eq 'ratio-recompute') "P2 AC2 average_cpc => ratio-recompute"
+A ((Get-AggregationClass 'google-adwords:cost_per_conversion' 'micros') -eq 'ratio-recompute') "P2 AC2 cost_per_conversion => ratio-recompute"
+
+# AC3: deduplicated counts are their own class, not 'unknown'.
+A ((Get-AggregationClass 'facebook-ads:reach' $null) -eq 'dedup-nonsummable') "P2 AC3 reach => dedup-nonsummable"
+A ((Get-AggregationClass 'ga4:activeUsers' $null) -eq 'dedup-nonsummable') "P2 AC3 activeUsers => dedup-nonsummable"
+
+# AC4: reported rate/share families delegate to Metric-Type; unmatched ids stay unknown.
+A ((Get-AggregationClass 'google-adwords:search_impression_share' 'fraction') -eq 'account-asis') "P2 AC4 impression_share => account-asis"
+A ((Get-AggregationClass 'google-adwords:search_lost_is_budget' 'fraction') -eq 'account-asis') "P2 AC4 search_lost_is_budget => account-asis"
+A ((Get-AggregationClass 'x:some_unknown_metric' $null) -eq 'unknown') "P2 AC4 unmatched id => unknown"
+A ((Get-AggregationClass $null $null) -eq 'unknown') "P2 AC4 null id => unknown, no throw"
+A ((Get-AggregationClass '' $null) -eq 'unknown') "P2 AC4 empty id => unknown, no throw"
+
+# AC4b: THE VETOES. Each pins a misclassification measured during review of the naive ladder.
+A ((Get-AggregationClass 'google-adwords:target_roas' $null) -eq 'account-asis') "P2 AC4b V1 target_roas is a bid SETTING => account-asis, NOT ratio-recompute"
+A ((Get-AggregationClass 'google-adwords:target_cpa' $null) -eq 'account-asis') "P2 AC4b V1 target_cpa => account-asis, NOT ratio-recompute"
+A ((Get-AggregationClass 'bing-ads:return_on_ad_spend' $null) -eq 'account-asis') "P2 AC4b V3 return_on_ad_spend => account-asis, NOT sum (Test-Summable matches the 'spend' substring)"
+A ((Get-AggregationClass 'x:value_per_conversion' $null) -eq 'account-asis') "P2 AC4b V2 value_per_conversion => account-asis, NOT dedup and NOT sum"
+A ((Get-AggregationClass 'ga4:screenPageViewsPerSession' $null) -eq 'account-asis') "P2 AC4b V2 screenPageViewsPerSession => account-asis"
+# The vetoes must not swallow the real ratio family they sit above.
+A ((Get-AggregationClass 'x:websitePurchaseRoas' $null) -eq 'ratio-recompute') "P2 AC4b a real roas still reaches R1"
+
+# AC4c: the ladder is TOTAL over both shipped corpora, and R2's terms stay a subset of the denylist.
+$corpus = @('google-adwords:cost_micros','google-adwords:average_cpc','google-adwords:average_cpm',
+  'google-adwords:cost_per_conversion','facebook-ads:spend','facebook-ads:cpc',
+  'facebook-ads:costPerActionType::link_click','facebook-ads:ctrLink','facebook-ads:ctr',
+  'google-adwords:ctr','google-adwords:conversion_rate','google-adwords:interaction_rate',
+  'google-adwords:video_view_rate','google-adwords:search_impression_share','google-adwords:search_lost_is_budget',
+  'google-adwords:impressions','google-adwords:clicks','facebook-ads:reach','bing-ads:spend',
+  'linkedin-ads:cpc','tiktok-ads:spend','google-analytics-4:cpc','pinterest:cpm','x:exchange_rate',
+  'ga4:events_per_session_rate','google-analytics-4:engagement_time_micros',
+  'google-adwords:conversions_value_micros','shopify:total_sales_micros','google-analytics-4:sessions',
+  'google-adwords:conversions','x:value','google-adwords:ad_group')
+$valid = @('sum','ratio-recompute','dedup-nonsummable','account-asis','unknown')
+$bad = @()
+foreach($cid in $corpus){ $cl = Get-AggregationClass $cid $null; if($cl -notin $valid){ $bad += ($cid + '=>' + $cl) } }
+A ($bad.Count -eq 0) ("P2 AC4c every corpus id resolves to a valid class (bad: " + ($bad -join ', ') + ")")
+# R2's four terms must remain a strict subset of Test-Summable's own denylist, or the copy has desynced.
+$sumSrc = (Get-Command Test-Summable).ScriptBlock.ToString()
+foreach($term in @('reach','frequency','unique','users?$')){
+  A ($sumSrc -match [regex]::Escape($term)) "P2 AC4c R2 term '$term' is still present in Test-Summable's denylist"
+}
+# Divergence pin: P2 must not have unified the two predicates it composes.
+A ((Test-Additive 'x:value') -ne (Test-Summable 'x:value')) "P2 S4 Test-Additive / Test-Summable divergence is untouched"
+
+# AC5: the moved hash returns literals captured from the PRE-MOVE definition, so the test cannot
+# compare the function against itself.
+A ((Get-BasisVersion 'g:cost' 'micros' 'USD') -eq '840fe173e2ff') "P2 AC5 basis hash pinned (micros/USD)"
+A ((Get-BasisVersion 'g:clicks' $null $null) -eq '38651fdc0b49') "P2 AC5 basis hash pinned (null/null)"
+A ((Get-BasisVersion 'g:cost' 'micros' 'EUR') -eq 'd26f76203c7f') "P2 AC5 basis hash pinned (micros/EUR)"
+A ((Get-BasisVersion 'x:y' $null 'USD') -eq '9aa1c4d052bd') "P2 AC5 basis hash pinned (null/USD)"
+A ((Get-BasisVersion 'g:cost' 'micros' 'USD') -ne (Get-BasisVersion 'g:cost' 'micros' 'EUR')) "P2 AC8 currency alone forks the basis"
+A ((Get-BasisVersion 'g:cost' 'micros' 'USD') -ne (Get-BasisVersion 'g:cost' $null 'USD')) "P2 AC8 unit alone forks the basis"
+
+# AC7: Get-CellBasis is the cell-shaped tuple and delegates the hash.
+$cb = Get-CellBasis 'google-adwords:cost_micros' 'micros' 'USD'
+A ($cb.unit -eq 'micros' -and $cb.currencyCode -eq 'USD') "P2 AC7 Get-CellBasis carries unit and currency"
+A ($cb.basisVersion -eq (Get-BasisVersion 'google-adwords:cost_micros' 'micros' 'USD')) "P2 AC7 Get-CellBasis delegates the hash"
+$cbn = Get-CellBasis 'x:y' $null $null
+A ($cbn.basisVersion.Length -eq 12) "P2 AC7 a null basis still hashes to 12 chars"
+
 Write-Host "== Get-ProviderFilterFinding (--platform, U2) =="
 A ($null -eq (Get-ProviderFilterFinding @() @('google-adwords','facebook-ads'))) "no filter => no finding"
 A ($null -eq (Get-ProviderFilterFinding $null @('google-adwords','facebook-ads'))) "null filter (absent/[] deserialized) => no finding (no @(null) trap)"

@@ -177,6 +177,16 @@ try {
 
 } finally { $ErrorActionPreference=$savedEAP; Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 
+
+# ANLZ-aUniformLattice-3 (P2) AC5b: the basis hash must have exactly ONE definition in the tree.
+# Test-Ledger is the suite that loads BOTH files, so it is where the single-definition rule can be
+# asserted mechanically. This also fails loudly if the definition is placed below the -DefineOnly
+# return, because then nothing would resolve it at all.
+Assert ($null -ne (Get-Command Get-BasisVersion -ErrorAction SilentlyContinue)) "P2 AC5b Get-BasisVersion resolves through the analyzer dot-source"
+Assert ((Get-Command Get-BasisVersion).ScriptBlock.File -like "*Analyze-SwydoReport.ps1") "P2 AC5b the basis hash is defined ONLY by Analyze-SwydoReport.ps1"
+Assert ((Get-BasisVersion "g:cost" "micros" "USD") -eq "840fe173e2ff") "P2 AC5 the ledger sees the same pinned hash after the move"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
+

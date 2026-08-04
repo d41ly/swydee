@@ -483,6 +483,57 @@ function Test-Summable($id){
 }
 # R5: two figures share a basis iff identical unit AND identical currency (null-safe equality).
 function Test-SameBasis($ua,$ca,$ub,$cb){ return (($ua -eq $ub) -and ($ca -eq $cb)) }
+# ===================== ANLZ-aUniformLattice-3 (P2): declared aggregation semantics =====================
+# ONE declared class per metric, so the reduce reads a single answer instead of re-deriving it from
+# three predicates that deliberately disagree. Composition only: every branch delegates to a shipped
+# predicate, or applies a veto term copied verbatim from one. The vetoes exist because review MEASURED
+# the naive ladder getting four real ids wrong -- see the sub-spec's D1 for each id and its evidence.
+function Get-AggregationClass($metricId,$unit){
+  if($null -eq $metricId -or [string]::IsNullOrEmpty([string]$metricId)){ return 'unknown' }
+  $p = Get-MetricPart $metricId
+  # V1: a target_* metric is a bid SETTING, not a measurement. Get-RatioSpec claims target_roas and
+  # target_cpa, so without this veto a bid setting would be classed as a derivable measurement.
+  # Same guard shape Test-ValueMetricId already applies first, and for the same reason.
+  if($p -match '(^|_)target'){ return 'account-asis' }
+  # R1 runs BEFORE the per-X veto, not after: `cost_per_conversion` and `cost_per_lead` both contain
+  # `per_` while being exactly the ratios Get-RatioSpec can recompute. Vetoing first would demote a
+  # derivable ratio to as-reported. Measured: the veto-first order misclassified cost_per_conversion.
+  if(Get-RatioSpec $metricId){ return 'ratio-recompute' }
+  # V2: Test-Summable's OWN first guard, applied to whatever R1 could NOT name. R2 copies terms from
+  # the middle of the same denylist, so the per-X guard has to run here or value_per_conversion reads
+  # as a deduplicated count.
+  if($p -match 'per[_a-z]'){ return 'account-asis' }
+  # V3: Test-Summable's allowlist matches SUBSTRINGS -- return_on_ad_spend contains 'spend' and so
+  # returns true, while its denylist and Get-RatioSpec both test only the bare token 'roas'.
+  if($p -match 'return_on_ad_spend'){ return 'account-asis' }
+  # R2: lifted verbatim from Test-Summable's denylist. A deduplicated count is not merely unsummable;
+  # the reduce must tell "no derivation exists" apart from "a recompute exists".
+  if($p -match 'reach|frequency|unique|users?$'){ return 'dedup-nonsummable' }
+  # R3: delegate the rate/share/ratio family to the shipped unit-aware classifier rather than inventing
+  # one. This is the only reader of $unit: a 'fraction' unit resolves to 'percent'.
+  $mt = Metric-Type $metricId $unit $null
+  if($mt -eq 'percent' -or $mt -eq 'ratio'){ return 'account-asis' }
+  if(Test-Summable $metricId){ return 'sum' }
+  return 'unknown'   # metadata only -- RANK decides whether a cell carries a value, never the class
+}
+# Per-metric basis version. MOVED here from Update-SwydoLedger.ps1 (which dot-sources this file) so
+# exactly one definition exists: the hash keys every ledger cell, and a second copy could drift and
+# silently re-key the whole ledger. U6's deferred-work contract makes a single shared define-only
+# helper a precondition for bringing basisVersion into report facts.
+function Get-BasisVersion($metricId,$unit,$currency){
+  $u = if($null -eq $unit){ '~' } else { [string]$unit }
+  $c = if($null -eq $currency){ '~' } else { [string]$currency }
+  $s = ([string]$metricId) + ([char]0x1F) + $u + ([char]0x1F) + $c
+  $sha=[Security.Cryptography.SHA256]::Create()
+  try { $bytes=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($s)) } finally { $sha.Dispose() }
+  $sb=New-Object Text.StringBuilder
+  foreach($b in $bytes){ [void]$sb.Append($b.ToString('x2')) }   # 'x2' = culture-invariant lowercase hex
+  return $sb.ToString().Substring(0,12)
+}
+# The basis tuple a matrix cell carries: one place to build it, one place to compare two.
+function Get-CellBasis($metricId,$unit,$currencyCode){
+  return [ordered]@{ unit=$unit; currencyCode=$currencyCode; basisVersion=(Get-BasisVersion $metricId $unit $currencyCode) }
+}
 # R16: a known-disjoint (partition) dimension where each row is a distinct bucket, so detail sums are
 # legitimately additive. Only these authorize the #4 major; overlap dims (action_type, ...) stay info.
 function Test-PartitionDim($dim){
