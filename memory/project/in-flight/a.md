@@ -2,4 +2,4 @@
 
 | node | slug | branch/worktree | streams | seq high-water | status |
 |---|---|---|---|---|---|
-| `a` | `aGovernedCanon` | `branch/coding-governance-readopt-c250d3` · `.claude/worktrees/coding-governance-readopt-c250d3` | all (governance readopt) | EXTR:2 ANLZ:4 TREND:3 ORCH:2 | merged:851584b |
+| `a` | `aPatientHarvest` | `branch/swydee-widget-timeout-709781` · `.claude/worktrees/swydee-widget-timeout-709781` | extraction (widget fetch retry/timeout budget) | EXTR:0 | in-flight |
