@@ -1,6 +1,6 @@
 # ANLZ-aUniformLattice-1 — layered uniform per-platform metric view
 
-**Status:** SPECCED · rev-2 · 2026-08-04 · node a · Tier-2 · base 8e1e5294 · review wf_0925fd2f-2cd
+**Status:** SPECCED · rev-3 · 2026-08-04 · node a · Tier-2 · base 8e1e5294 · review wf_0925fd2f-2cd · ratified 2026-08-04
 
 ## 1. Goal
 
@@ -12,8 +12,9 @@ extractor emits identity and completeness keys it currently fetches and discards
 
 ## 2. Scope (IN)
 
-Five phases. Each is its own commit and review boundary. Phase order is a dependency order, not a
-priority order: P2 cannot be verified without P1, and P4 is unsound without P3.
+Six phases, one unit each per F1 — its own branch, spec, adversarial review and merge. Phase order is
+a dependency order, not a priority order: P2 cannot be verified without P1, and P4 is unsound
+without P3. P6 is gated on an external prereq and may never be built; see F2.
 
 **P1 — extractor schema v3: identity and completeness keys (S1-S14).**
 
@@ -55,6 +56,10 @@ load-bearing and was violated by rev-1; see §4 "Migration".
 - S14. Add `meta.fieldProbe`, the recorded result of one `Invoke-GQL -NoRetry` per c3 candidate field
   against a known widget id, capturing the error text. This replaces rev-1's JWT scope decode, which
   cannot answer the question: a scope claim enumerates authorization scopes, not GraphQL fields.
+  **S14 is the F2 gate for the whole program.** It requires a live share link, which this checkout
+  does not have because `skill/archive` is gitignored and absent, so it is an EXTERNAL prereq. Its
+  recorded output decides whether P6 is ever built. S1-S13 do not depend on it and are not blocked by
+  it; P1 may land with `meta.fieldProbe` absent and the probe run later against the same report.
 
 **P2 — declared aggregation semantics (S15-S17).**
 
@@ -69,12 +74,19 @@ load-bearing and was violated by rev-1; see §4 "Migration".
 - S17. Leave `Test-Additive` and `Test-Summable` untouched and still divergent. U7 R4 pins that
   divergence with a regression test; `Get-AggregationClass` consumes them, it does not unify them.
 
-**P3 — the matrix and its reduce function (S18-S23).**
+**P3 — the matrix and its reduce function, ranks 1 and 2 only (S18-S23).**
+
+Per F2, rank-3 summing is NOT in P3. The matrix P3 ships is uniform in its KEY SPACE: every observed
+`(platform, metricId)` gets a cell, and a cell that would need a sum carries
+`reason='incomplete-rows'` instead of a value. That delivers the complete per-platform inventory and
+an honest gap statement without publishing a number whose row set cannot be proven whole.
 
 - S18. Add `platforms[].metrics{}` as a SIBLING of `platforms[].headline{}`. `headline{}` stays
   byte-identical, including its `hasComparison` scalar key.
 - S19. Implement the reduce function of §4 "Data model" as a total function over the contribution
-  set, ranked by structure only, grouped by `(providerId, metricId)`.
+  set, ranked by structure only, grouped by `(providerId, metricId)`, with rank 3 stubbed to the
+  `incomplete-rows` reason token. The rank ladder and every rank-3 precondition are specified now so
+  P6 is a fill-in rather than a redesign, but P3 emits no summed value.
 - S20. Every observed `(platform, metricId)` gets exactly one cell. A cell carries a value with its
   numerics and display strings, or a reason token, never nothing and never two cells.
 - S21. Every cell carries its `method`, `aggClass`, `scope`, `basis`, `contributingWidgetIds[]` and
@@ -122,6 +134,17 @@ load-bearing and was violated by rev-1; see §4 "Migration".
   `summed-rows` exception conditional on the disclosure fid being anchored on the same line.
 - S33. Bump `meta.canonicalVersion` 2 to 3, disclose the enumerated flip set in facts, and produce
   the measured flip set of §4 "Rollout" before the waiver is approved.
+
+**P6 — rank-3 summing (S34-S36). CONDITIONAL: does not start until S14's probe reports.**
+
+- S34. Only if S14 establishes an affirmative row-set signal, implement rank 3 against the
+  preconditions already specified in §4 "Data model", replacing the `incomplete-rows` stub from S19.
+  If the probe finds no such field, P6 is closed WONTDO and the stub is the permanent answer.
+- S35. Wire the S30 forcing class and the S31 prose check to the rank-3 disclosure finding. Both
+  mechanisms ship in P5 unused by any rule; P6 is what gives them a producer.
+- S36. Bump `meta.canonicalVersion` again and produce a second measured flip set covering only the
+  cells that move from `reason='incomplete-rows'` to a value. That set is small and exactly
+  enumerable by construction, which is what U9 D3 asks of a waiver.
 
 ## 3. Non-goals (OUT)
 
@@ -185,7 +208,8 @@ value adjudication because it would make the winner depend on data that changes 
   `$isKpi` expression at `Analyze-SwydoReport.ps1:734`: the blended guard sits five lines above it at
   `:729`, so copying the predicate does not copy the guard.
 - Rank 2: an explicit total row on a dimensioned widget.
-- Rank 3: a sum over detail rows, under the preconditions below.
+- Rank 3: a sum over detail rows, under the preconditions below. DEFERRED to P6 per F2. P3 stubs it
+  to `reason='incomplete-rows'`, so the ladder is complete in specification and inert in behaviour.
 - Within a rank, document order wins, using S10's `documentIndex` so the winner is recordable rather
   than an implicit array position.
 
@@ -195,17 +219,20 @@ shipped suite, not hypothetical: fixture `u5c` at `Test-Analyze.ps1:538-541` car
 dimensioned table total and a USD zero-dimension KPI for one metric in one report, and U6:242 records
 same-metric-two-currencies as a standing WONTFIX.
 
-**Rank-3 preconditions.** U6 D5 deferred synthesis in full and set a hard bar: synthesis may proceed
-only when completeness is affirmatively proven, never merely because no warning said otherwise. All
-of the following must hold; a failure emits the named reason token and no value.
+**Rank-3 preconditions.** These are the P6 contract, specified here so P6 is a fill-in rather than a
+redesign. U6 D5 deferred synthesis in full and set a hard bar: synthesis may proceed only when
+completeness is affirmatively proven, never merely because no warning said otherwise. F2 keeps that
+bar rather than working around it. All of the following must hold; a failure emits the named reason
+token and no value.
 
 1. `widget.pagesComplete` is `$true`. This proves pagination was exhausted, nothing more.
 2. An affirmative ROW-SET signal: `serverRowTotal` equal to the returned row count, or an equivalent
    no-row-limit flag recovered from the retained `raw` blob. A widget configured to show its top N
    rows returns N edges with `hasNextPage` false and reports pages-complete, so precondition 1 alone
-   would publish an under-counted total. `serverRowTotal` is UNKNOWN until S14 answers; until then
-   rank 3 either does not ship, or ships with `scope='summed-rows:<dim>'` explicitly documented as a
-   sum of SHOWN rows and excluded from S28's coverage. Failure token: `incomplete-rows`.
+   would publish an under-counted total whose disclosure would read "tool-computed" when the real
+   defect is "rows are missing". `serverRowTotal` is UNKNOWN until S14 answers, and F2 resolved that
+   rank 3 waits for that answer rather than shipping a shown-rows sum. Failure token:
+   `incomplete-rows`.
 3. `Test-Summable` on the metric id, and `aggClass` is `sum`.
 4. Exactly one dimension AND its NAME satisfies `Test-PartitionDim` at
    `Analyze-SwydoReport.ps1:484-488`. The dimension id from S1 is provenance only. An id changes
@@ -326,7 +353,8 @@ have no affirmative signal. That degradation is correct and is the visible reaso
 ### Rollout
 
 P1 through P4 are additive and land dark, which is true only because S1 and S24 were made additive.
-P5 is the only phase that changes default output and the only one that needs the waiver.
+P5 changes default output and needs the waiver. P6, if it is ever built, needs a second and much
+smaller one, because F2 confined the summed values to their own phase.
 
 The waiver cannot be approved on a promise. U9 D3 ratified that a waiver's blast surface must be
 enumerable and provable, and no research or review agent could measure one because `skill/archive` is
@@ -359,8 +387,8 @@ block, because such a block would be invisible to the analyst that owns a platfo
 | `skill/report-template.md` | P5 | whitelist, hard rule 1 and hard rule 2 |
 | `skill/SKILL.md` | P1, P5 | schemaVersion 3 in Mode B; matrix in the analyst brief; trend asymmetry |
 | `Test-Extractor.ps1` | P1 | additive |
-| `Test-Analyze.ps1` | P1-P5 | additive, plus the enumerated flip set rewrites |
-| `Test-Closer.ps1` | P5 | additive |
+| `Test-Analyze.ps1` | P1-P6 | additive, plus the enumerated flip set rewrites |
+| `Test-Closer.ps1` | P5, P6 | additive |
 | `SWYDO_REPORT_EXTRACTION_SPEC.md` | P1 | schemaVersion 3 contract |
 
 ### Alternatives rejected
@@ -423,12 +451,12 @@ block, because such a block would be invisible to the analyst that owns a platfo
   throw, and every rank-3 candidate cell carries `reason='incomplete-rows'`.
 - AC4. When a widget carries two metrics with the same display name, each metric's cell carries its
   OWN value, and the resulting headline value change appears in S33's flip set.
-- AC5. When a dimensioned widget satisfies every rank-3 precondition, its cell carries a value with
-  `method='summed-rows'`, a populated `contributingRowKeys[]` whose count equals the filtered row
-  count, and a force-surfaced disclosure finding.
-- AC6. When any one rank-3 precondition fails, the cell carries the matching reason token and NO
-  value, and no finding claims a computed total. Covered per token, including `no-summable-rows` on
-  an all-group-row widget and `incomplete-rows` on a top-N widget.
+- AC5. **(P6)** When a dimensioned widget satisfies every rank-3 precondition, its cell carries a
+  value with `method='summed-rows'`, a populated `contributingRowKeys[]` whose count equals the
+  filtered row count, and a force-surfaced disclosure finding.
+- AC6. **(P6)** When any one rank-3 precondition fails, the cell carries the matching reason token
+  and NO value, and no finding claims a computed total. Covered per token, including
+  `no-summable-rows` on an all-group-row widget and `incomplete-rows` on a top-N widget.
 - AC7. When a widget's rows include a `subtotal` row, that row is excluded from the sum, proven by a
   fixture that would double-count without the exclusion.
 - AC8. When the `u5c` fixture shape is analyzed (one metric, EUR table total and USD KPI card),
@@ -449,6 +477,12 @@ block, because such a block would be invisible to the analyst that owns a platfo
 - AC14. S33's measured flip set exists as an in-repo artifact enumerating cells added, findings added,
   findings removed and severities crossed, plus the three P5 measurements of §4 "Rollout". The waiver
   is not approvable without it.
+- AC15. **(P3)** When a widget satisfies every rank-3 precondition EXCEPT the deferral, its cell still
+  carries `reason='incomplete-rows'` and no value, and no `summed-rows` cell exists anywhere in the
+  facts document. This pins the F2 stub so P6 cannot leak into P3 unnoticed.
+- AC16. **(P1, conditional)** When a live share link is available, `meta.fieldProbe` records one
+  result per c3 candidate and the six UNKNOWN rows of §4 "Inventory" are each resolved to present or
+  absent. Without a share link this criterion is not observable, and P1 lands without it.
 
 ## 7. Gates
 
@@ -465,14 +499,19 @@ block, because such a block would be invisible to the analyst that owns a platfo
 
 ## 8. Open questions
 
-- **F1. Phase split.** Land as five sequenced units, or fewer? RECOMMENDATION: five. P1 alone is a
-  schemaVersion bump touching three consumers, which the tier rule already makes a design-pass unit.
-- **F2. Does rank 3 ship before `serverRowTotal` is settled?** Precondition 2 has no affirmative
-  signal until S14 probes it. Option A: defer rank 3 to a sixth phase, so P3 ships ranks 1 and 2 only
-  and the matrix is uniform in KEYS but not yet in values. Option B: ship rank 3 with
-  `scope='summed-rows:<dim>'` documented as a sum of SHOWN rows, excluded from S28 coverage.
-  RECOMMENDATION: Option A. U6 D5 deferred synthesis in full for this exact reason, and Option B
-  publishes a number whose disclosure says "tool-computed" while the real defect is "incomplete".
+- **F1. Phase split.** Land as sequenced units, or grouped by waiver boundary?
+  **RESOLVED (owner, 2026-08-04): one unit per phase.** Each phase takes its own branch, spec,
+  adversarial review and merge. The rule is one-per-phase rather than a fixed count, so F2's
+  resolution raising the phase count to six raises the unit count to six with it. The rejected
+  alternative was three units grouped by waiver boundary (P1 · P2+P3+P4 · P5).
+- **F2. Does rank 3 ship before `serverRowTotal` is settled?**
+  **RESOLVED (owner, 2026-08-04): probe first — Option A with a trigger.** Rank 3 moves to a
+  conditional P6 that does not start until S14 reports. P3 ships ranks 1 and 2 with rank 3 stubbed to
+  `reason='incomplete-rows'`, so the matrix is uniform in its key space immediately and uniform in its
+  values only once completeness can be affirmatively proven. If the probe finds no row-set signal, P6
+  closes WONTDO and the stub is the permanent answer. This keeps U6 D5's bar rather than working
+  around it. Prereq on the owner: one live share link, since `skill/archive` is gitignored and absent
+  from this checkout.
 - **F3. Do the two `major` rules stay `major` once they fire on more metrics?** RECOMMENDATION: keep
   the severity, add a per-provider rollup with U6 D11's 20-item cap, so the report discloses once
   rather than twenty times.
@@ -501,6 +540,12 @@ block, because such a block would be invisible to the analyst that owns a platfo
   numerics its repointed rules read; ratio recomposition had no guards; the closer's per-platform bag
   made the anchor requirement unenforceable; the force-surfacing mechanism did not exist; and the JWT
   scope claim cannot enumerate GraphQL fields.
+- rev-3 · 2026-08-04 · owner resolved F1 and F2 in place; header tail carries `ratified 2026-08-04`.
+  F2 splits rank-3 summing out of P3 into a conditional P6 (S34-S36) gated on S14's field probe, so
+  P3 now ships ranks 1 and 2 with rank 3 stubbed to `incomplete-rows`. AC5 and AC6 are re-scoped to
+  P6; AC15 pins the P3 stub so P6 cannot leak into P3 unnoticed; AC16 covers the probe and states
+  plainly that it is unobservable without a share link. F1 makes each phase its own unit, which now
+  means six units rather than five.
 
 ## 10. Reuse audit
 
