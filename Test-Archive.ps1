@@ -1,4 +1,4 @@
-# Tests for Manage-SwydoArchive.ps1 — pure helpers (dot-source -DefineOnly) + FS integration (subprocess).
+# Tests for Manage-SwydoArchive.ps1 - pure helpers (dot-source -DefineOnly) + FS integration (subprocess).
 # PS 5.1. Run: powershell -File Test-Archive.ps1
 $ErrorActionPreference = 'Stop'
 $script:tool = "$PSScriptRoot\skill\scripts\Manage-SwydoArchive.ps1"

@@ -1,0 +1,22 @@
+# .memory-tree.conf — per-repo config for the memory-tree hygiene kit.
+# Copy to your repo ROOT as `.memory-tree.conf` and edit. Sourced by every kit script
+# (check-memory-hygiene.sh, gen-memory-tree.sh, adopt-memory-tree.sh). Plain shell assignments only.
+
+# Root folder of the structured memory tree, relative to the repo root.
+MEMORY_ROOT=memory
+
+# Discipline folders under $MEMORY_ROOT/ — your project's development streams. Each gets
+# README.md + TREE.md + DECISIONS.md + BACKLOG.md + decisions/ guides/ archive/ builds/.
+# Space-separated, lowercase, [a-z-] only. Add a discipline only when content exists for it.
+DISCIPLINES="architecture deployment blocks design performance"
+
+# discipline:FAMILY pairs. FAMILY is the id-family prefix that discipline's decisions/backlog use
+# (e.g. ARCH-<slug>-<seq>) AND the FAMILY a build folder under that discipline must carry
+# (builds/YYYY-MM-DD-<FAMILY>-<slug>/). Space-separated, FAMILY uppercase [A-Z].
+FAMILIES="architecture:ARCH deployment:DEPLOY blocks:BLOCK design:DES performance:PERF"
+
+# Spec-format ratchet (hygiene check 12). Set to the date you adopt the kit (YYYY-MM-DD): every
+# spec file whose FILENAME date is >= this must follow <MEMORY_ROOT>/TEMPLATE-SPEC.md (status
+# header; nine canonical sections + body assertions for Tier-2). Older specs are grandfathered by
+# filename date — never retrofit them. Blank = check 12 disabled.
+SPEC_FORMAT_CUTOFF=""

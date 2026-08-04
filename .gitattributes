@@ -1,0 +1,33 @@
+# Line-ending discipline for the coding-governance chain.
+#
+# DELIBERATELY ADDITIVE: this file pins only paths the governance adoption INTRODUCES. There is no
+# `* text=auto` and no `*.ps1` rule, because swydee's 28 pre-existing tracked blobs are already LF
+# in the index (verified with `git cat-file -p HEAD:<path> | cat -A`) while the working tree is
+# CRLF via core.autocrlf=true. A repo-wide rule would be a no-op at best and would renormalize
+# every tracked file in one commit at worst. Pin what is new; leave the existing corpus alone.
+
+# Execution-sensitive scripts — these run under git-bash. A stray CR breaks the shebang silently.
+*.sh text eol=lf
+
+# Git hooks are extensionless, so the *.sh rule above misses them. A CRLF hook does not execute,
+# which would leave every pre-commit gate dormant while still looking installed.
+.githooks/pre-commit text eol=lf
+
+# Bash-sourced kit config. memory-tree sources this directly, so a trailing CR would make
+# MEMORY_ROOT literally "memory<CR>" and every path built from it would miss.
+.memory-tree.conf text eol=lf
+
+# The gate leg manifest is runtime-read by run-gates.sh; a stray CR would corrupt leg names/argv.
+tools/gate-legs.json text eol=lf
+
+# memory-tree determinism: hygiene check 9 regenerates TREE.md and diffs it against the committed
+# copy, so a CRLF checkout would fail the check for a reason that has nothing to do with the tree.
+memory/**/TREE.md text eol=lf
+memory/project/legacy-files.txt text eol=lf
+memory/project/curation-debt.txt text eol=lf
+
+# The rendered recall Skill is compared to a fresh render with plain `diff` by
+# `adopt-memory-recall.sh --check`. The renderer always emits LF, so an unpinned CRLF checkout
+# reds the leg on every line — while passing whenever the working copy happens to have just been
+# rendered. That is green-by-accident, not a gate.
+.claude/skills/memory-recall/SKILL.md text eol=lf

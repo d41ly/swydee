@@ -1,0 +1,1 @@
+# legacy-files.txt — recording files kept under historical names (permanent C5 exemption). Empty = strict.

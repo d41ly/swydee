@@ -1,0 +1,8 @@
+# analysis decisions — index
+
+> One line per decision, append-only. Detail in decisions/.
+
+- ANLZ-aGovernedCanon-1 · analysis owns four ratified specs, moved into this tree at the 2026-08-04 readopt → [U6 canonical total](builds/2026-07-07-ANLZ-aCanonicalTotal/spec/2026-07-07-spec-aCanonicalTotal-1.md)
+- ANLZ-aGovernedCanon-2 · the rest → [U7a+U7b reconciliation](builds/2026-07-07-ANLZ-aCrossWidget/spec/2026-07-07-spec-aCrossWidget-1.md)
+- ANLZ-aGovernedCanon-4 · and the later pair → [U9 headline rank](builds/2026-07-13-ANLZ-aHeadlineRank/spec/2026-07-13-spec-aHeadlineRank-1.md) · [U10 data-gap rules](builds/2026-07-13-ANLZ-aGappedRanking/spec/2026-07-13-spec-aGappedRanking-1.md)
+- ANLZ-aGovernedCanon-3 · the default single-report output stays byte-for-byte unchanged and every change is additive-in-facts. Sole exception: the reviewed, disclosed U9 flip-set waiver, which bumps `meta.canonicalVersion` 1->2 and discloses each flipped cell in-facts.

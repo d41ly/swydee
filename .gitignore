@@ -18,3 +18,11 @@ Thumbs.db
 # client data archives - never commit
 skill/archive/
 
+# Linked worktrees live INSIDE the repo, so they must be excluded or a worktree's whole tree shows
+# up as untracked. This was previously only in .git/info/exclude, which is local and never travels
+# - a fresh clone would not have it. Tracked here so the exclusion survives.
+.claude/worktrees/
+
+# settings-merge.py's backup, written whenever a hook block is merged.
+.claude/settings.json.bak
+
