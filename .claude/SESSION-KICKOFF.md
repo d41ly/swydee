@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T02:12:18+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
+last-audit: 2026-08-05T02:32:38+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -102,7 +102,7 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1165 assertions across the 8 suites after ANLZ-aUniformLattice-4 (Extractor 283, Analyze 565,
+1183 assertions across the 8 suites after ANLZ-aUniformLattice-5 (Extractor 283, Analyze 583,
 Closer 129, TrendAnalyze 68, TrendFacts 24, Archive 94, Ledger 50, Sync 4; was 1064 at adoption).
 
 ### Tier rule

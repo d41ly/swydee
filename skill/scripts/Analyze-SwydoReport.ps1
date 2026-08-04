@@ -389,9 +389,16 @@ function Get-Breakdown($w, $cap, $mustLabels){
   else { $sorted=@($detail) }
   $top=@($sorted | Select-Object -First $cap)
   if($mustLabels){ foreach($r in $sorted){ $lbl=[string](Row-Label $r); if(($mustLabels -contains $lbl) -and -not @($top | Where-Object { [string](Row-Label $_) -eq $lbl })){ $top+=$r } } }
+  # ANLZ-aUniformLattice-5 (P4): how many metrics share each DISPLAY NAME in this widget. A collided
+  # name is the one case where reading a row cell by name returns the wrong metric's number, so it
+  # decides whether valuesById can be trusted for that metric on a schemaVersion-2 document.
+  $nameCount=@{}
+  foreach($m in $mets){ $nk=[string]$m.name; if($nameCount.ContainsKey($nk)){ $nameCount[$nk]=[int]$nameCount[$nk]+1 } else { $nameCount[$nk]=1 } }
   $rows=@()
+  $sawRowKey=$false
   foreach($r in $top){
     $vals=[ordered]@{}
+    $valsById=[ordered]@{}
     foreach($m in $mets){
       $cur=Row-Cur $r $m.name
       if($null -eq $cur){ continue }   # scalar-guard (echo objects)
@@ -399,10 +406,33 @@ function Get-Breakdown($w, $cap, $mustLabels){
       $cmp=Row-Cmp $r $m.name
       if($null -ne $cmp){ $cell.hasComparison=$true; $cell.displayPrevious=(Format-Metric $m.id $m.unit $cmp $cc); $d=Get-DeltaPct $cur $cmp; if($null -ne $d){ $cell.delta=(Format-Delta $d) } } else { $cell.hasComparison=$false }
       $vals[[string]$m.name]=$cell
+      # valuesById reads by P1's cellKey -- the exact key the extractor wrote into rows[].metrics --
+      # so a duplicate display name resolves to each metric's OWN column. `values` above keeps the name
+      # read byte-for-byte, so the two maps DELIBERATELY diverge on a collided name: that divergence is
+      # the whole point of the id map. With no cellKey (schemaVersion 2) and a collided name there is no
+      # way to disambiguate, so the metric is OMITTED rather than given a confidently wrong number.
+      $ck=$null
+      if($m.PSObject.Properties['cellKey'] -and $m.cellKey){ $ck=[string]$m.cellKey }
+      if($null -eq $ck){ if([int]$nameCount[[string]$m.name] -eq 1){ $ck=[string]$m.name } }
+      if($null -ne $ck){
+        $curById=Row-Cur $r $ck
+        if($null -ne $curById){
+          $cellById=[ordered]@{ display=(Format-Metric $m.id $m.unit $curById $cc); type=(Metric-Type $m.id $m.unit $cc) }
+          $cmpById=Row-Cmp $r $ck
+          if($null -ne $cmpById){ $cellById.hasComparison=$true; $cellById.displayPrevious=(Format-Metric $m.id $m.unit $cmpById $cc); $d2=Get-DeltaPct $curById $cmpById; if($null -ne $d2){ $cellById.delta=(Format-Delta $d2) } } else { $cellById.hasComparison=$false }
+          $valsById[[string]$m.id]=$cellById
+        }
+      }
     }
-    $rows+=[ordered]@{ label=[string](Row-Label $r); values=$vals }
+    $rowOut=[ordered]@{ label=[string](Row-Label $r); values=$vals; valuesById=$valsById }
+    # OMITTED, never null: an absent key means "this document predates row keys", which is different
+    # from "this row has no key".
+    if($r.PSObject.Properties['rowKey'] -and $r.rowKey){ $rowOut.rowKey=[string]$r.rowKey; $sawRowKey=$true }
+    $rows+=$rowOut
   }
-  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{$_.name}); rowCount=$detail.Count; shown=$rows.Count; rows=$rows }
+  # Derived from the EMITTED rows, not from meta.schemaVersion: Get-Breakdown never receives the
+  # document, and under -DefineOnly (how every unit test calls it) no $doc exists to read.
+  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{$_.name}); metricIds=@($mets|ForEach-Object{[string]$_.id}); rowCount=$detail.Count; shown=$rows.Count; rowKeyBasis=$(if($sawRowKey){'extractor'}else{'absent'}); rows=$rows }
   if($detail.Count -gt $rows.Count){ $out.note="showing top $($rows.Count) of $($detail.Count) rows" }
   return $out
 }

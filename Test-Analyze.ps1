@@ -1228,6 +1228,57 @@ foreach($needKey in @('id','name','category','headline','hasComparison','metrics
 }
 
 
+Write-Host "== ANLZ-aUniformLattice-5 (P4): the addressable second layer =="
+$p4a = RunAnalyze (MkDoc @(
+  (DW 'p4-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Clicks' 'google-adwords:clicks' $null)) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 900);Clicks=(Cell 90)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 500);Clicks=(Cell 50)}),(DRow 'data' 'B' 'Campaign' @{Cost=(Cell 400);Clicks=(Cell 40)})))
+))
+$bd = @($p4a.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+A (@($bd.PSObject.Properties.Name) -join ',' -eq 'widgetId,dimensions,metricNames,metricIds,rowCount,shown,rowKeyBasis,rows') "P4 AC7 breakdown key order pinned, metricIds adjacent to metricNames"
+A (@($bd.metricIds).Count -eq @($bd.metricNames).Count) "P4 AC2 metricIds is index-aligned with metricNames"
+A ($bd.metricIds[0] -eq 'google-adwords:cost_micros' -and $bd.metricIds[1] -eq 'google-adwords:clicks') "P4 AC2 metricIds holds the ids in metric order"
+$r0 = $bd.rows[0]
+A (@($r0.PSObject.Properties.Name) -join ',' -eq 'label,values,valuesById') "P4 AC7 row key order: label,values,valuesById (no null rowKey)"
+A ($r0.values.'Cost'.display -eq $r0.valuesById.'google-adwords:cost_micros'.display) "P4 AC3 the two maps agree for a unique display name"
+A (@($r0.valuesById.PSObject.Properties.Name).Count -eq @($r0.values.PSObject.Properties.Name).Count) "P4 AC3 same entry count when no name collides"
+A ($bd.rowKeyBasis -eq 'absent') "P4 AC5 a fixture without extractor rowKeys reports rowKeyBasis=absent"
+A ($null -eq $r0.rowKey) "P4 AC5/F4 rowKey is OMITTED, never emitted as null"
+
+# AC4: the duplicate-display-name case is exactly what valuesById exists for. Build the row map the way
+# the real extractor does -- Uniq-Key renames the collider -- so the fixture can express two columns.
+$dupMets = @((Met 'Clicks' 'google-adwords:clicks' $null),(Met 'Clicks' 'facebook-ads:clicks' $null))
+$dupMets[0] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Clicks' -Force
+$dupMets[1] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Clicks [facebook-ads:clicks]' -Force
+function DupRow($kind,$label,$v1,$v2){
+  $dm=[ordered]@{}; $dm['Campaign']=$label
+  $mm=[ordered]@{}; $mm['Clicks']=(Cell $v1); $mm['Clicks [facebook-ads:clicks]']=(Cell $v2)
+  $o=[pscustomobject]@{ kind=$kind; dimensions=[pscustomobject]$dm; metrics=[pscustomobject]$mm }
+  $o | Add-Member -NotePropertyName rowKey -NotePropertyValue ("rk-" + $label) -Force
+  return $o
+}
+$p4b = RunAnalyze (MkDoc @(
+  (DW 'p4-dup' 'google-adwords' 'Google Ads' @('Campaign') $dupMets @((DupRow 'total' 'T' 300 700),(DupRow 'data' 'A' 100 250),(DupRow 'data' 'B' 200 450)))
+))
+$bd2 = @($p4b.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+$rd = @($bd2.rows | Where-Object { $_.label -eq 'A' })[0]   # Get-Breakdown sorts DESC by the ordering metric, so rows[0] is not 'A'
+A (@($rd.values.PSObject.Properties.Name).Count -eq 1) "P4 AC4 values still COLLAPSES a duplicate display name to one entry (unchanged defect)"
+A (@($rd.valuesById.PSObject.Properties.Name).Count -eq 2) "P4 AC4 valuesById does NOT collapse: two ids, two entries"
+A ($rd.valuesById.'google-adwords:clicks'.display -ne $rd.valuesById.'facebook-ads:clicks'.display) "P4 AC4 each id carries its OWN number, not the first metric's"
+A ($rd.valuesById.'facebook-ads:clicks'.display -eq '250') "P4 AC4 the second metric's value is recoverable ONLY from valuesById"
+A ($rd.rowKey -eq 'rk-A') "P4 AC5 rowKey is copied verbatim from the extraction row"
+A ($bd2.rowKeyBasis -eq 'extractor') "P4 AC5 rowKeyBasis reports extractor when the rows carry keys"
+A (@($bd2.rows | Where-Object { $_.rowKey }).Count -eq @($bd2.rows).Count) "P4 AC5 every emitted row carries its key"
+
+# AC4/P4-5: with NO cellKey and a collided name there is no way to disambiguate, so the metric is
+# OMITTED rather than given a confidently wrong number.
+$dupNoKey = @((Met 'Clicks' 'google-adwords:clicks' $null),(Met 'Clicks' 'facebook-ads:clicks' $null))
+$p4c = RunAnalyze (MkDoc @(
+  (DW 'p4-dup2' 'google-adwords' 'Google Ads' @('Campaign') $dupNoKey @((DupRow 'total' 'T' 300 700),(DupRow 'data' 'A' 100 250)))
+))
+$bd3 = @($p4c.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+$rd3 = @($bd3.rows | Where-Object { $_.label -eq 'A' })[0]
+A (@($rd3.valuesById.PSObject.Properties.Name | Where-Object { $_ }).Count -eq 0) "P4 AC4 v2 + collided name => the metric is OMITTED from valuesById, never guessed"
+A ($null -eq $rd3.valuesById.'google-adwords:clicks' -and $null -eq $rd3.valuesById.'facebook-ads:clicks') "P4 AC4 v2 neither colliding id is addressable, so no wrong number is published"
+A (@($rd3.values.PSObject.Properties.Name).Count -eq 1) "P4 AC4 v2 values still carries the collapsed single entry"
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
