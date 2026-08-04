@@ -788,6 +788,17 @@ $wins=[System.Collections.ArrayList]@(); $losses=[System.Collections.ArrayList]@
 
 # GAP_WARNINGS (from extraction)
 foreach($warn in @($doc.meta.warnings)){ if($warn){ [void]$gaps.Add([ordered]@{ ruleId='GAP_WARNINGS'; severity='major'; statement=$warn }) } }
+# GAP_EXTRACTION_INCOMPLETE (EXTR-aPatientHarvest-1 S14). Unlike every other gap this one says the
+# INPUT is untrustworthy rather than one number being unavailable, hence 'critical'. Fires only on an
+# EXPLICIT $false: an extraction produced before this change has no such key and must keep passing.
+if(($doc.meta.PSObject.Properties.Name -contains 'extractionComplete') -and ($doc.meta.extractionComplete -eq $false)){
+  $incW   = @($doc.meta.incompleteWidgets)
+  $incWhy = @($incW | ForEach-Object { [string]$_.reason } | Where-Object { $_ } | Sort-Object -Unique)
+  $stmt = "extraction did not complete: " + @($incW).Count + " widget(s) returned no data within the fetch budget"
+  if($incWhy.Count -gt 0){ $stmt = $stmt + " (" + ($incWhy -join ', ') + ")" }
+  $stmt = $stmt + ". Numbers here may be computed over partial data - re-extract before publishing."
+  [void]$gaps.Add([ordered]@{ ruleId='GAP_EXTRACTION_INCOMPLETE'; severity='critical'; statement=$stmt })
+}
 # PROVIDER_FILTERED: --platform pulled a subset; force the exclusion into the report so a partial view is never
 # mistaken for a complete one (the completeness gate covers only what was pulled).
 $pff = Get-ProviderFilterFinding $doc.meta.providerFilter $doc.meta.providerInventory
@@ -989,6 +1000,10 @@ $facts=[ordered]@{
     hasComparison=$hasCmp; comparisonCaveats=$caveats;
     providers=@($platforms.Values | ForEach-Object { [ordered]@{ id=$_.id; name=$_.name; category=$_.category } })
     dataWidgets=$dataWidgets.Count; unitBasis=$doc.meta.unitBasis
+    # Carry the extraction's own completeness verdict so the closer can refuse to publish over a
+    # partial pull. Absent upstream key reads as complete (pre-change extractions stay publishable).
+    extractionComplete=($doc.meta.extractionComplete -ne $false)
+    incompleteWidgets=@(@($doc.meta.incompleteWidgets) | ForEach-Object { [string]$_.id } | Where-Object { $_ })
   }
   platforms=@($platforms.Values)
   findings=$findings

@@ -8,3 +8,4 @@ memory/extraction/
   BACKLOG.md
   builds/
     2026-07-13-EXTR-aRelativePeriod/
+    2026-08-04-EXTR-aPatientHarvest/

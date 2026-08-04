@@ -86,6 +86,11 @@ $factsDoc = [ordered]@{
     reportName=$doc.report.name; clientId=$doc.report.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerFilter=@(@($doc.meta.providerFilter) | Where-Object { $_ }); providerInventory=@(@($doc.meta.providerInventory) | Where-Object { $_ })
     coverage=$cov; cellCount=$cells.Count; warnings=@($doc.meta.warnings)
+    # Carry the extractor's completeness verdict down the trend chain (EXTR-aPatientHarvest-1 S16).
+    # Without this the ledger and the trend report would be permanently exempt from the gate, because
+    # the closer's absent-key compatibility rule would read "missing" as "complete".
+    extractionComplete=($doc.meta.extractionComplete -ne $false)
+    incompleteWidgets=@(@($doc.meta.incompleteWidgets) | ForEach-Object { [string]$_.id } | Where-Object { $_ })
   }
   cells = $cells
 }

@@ -991,6 +991,41 @@ $unt30 = @($res30bad.violations | Where-Object { $_.type -eq 'untraceable-number
 A (($unt30 -join '|') -match '47' -and ($unt30 -join '|') -match '404\.3') "U10-30c non-anchored: 47% and 404.3 flagged untraceable"
 A (-not (($unt30 -join '|') -match '860')) "U10-30c non-anchored: widget total 860.9 traces platform-wide (never flagged)"
 
+Write-Host "== EXTR-aPatientHarvest-1: extraction completeness carries into facts =="
+# A doc whose extractor said nothing about completeness - i.e. every extraction written before this
+# unit. It must behave EXACTLY as it did: complete, no new gap, still publishable.
+$dwOk = (DW 'w-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 1000000)})))
+$rAbsent = RunAnalyze (MkDoc @($dwOk))
+A ($rAbsent.facts.meta.extractionComplete -eq $true) "absent upstream key => facts say complete (pre-change extractions stay publishable)"
+A (-not (HasFind $rAbsent.facts 'GAP_EXTRACTION_INCOMPLETE')) "absent key => no GAP_EXTRACTION_INCOMPLETE"
+A (@($rAbsent.facts.meta.incompleteWidgets).Count -eq 0) "absent key => empty incompleteWidgets"
+
+# Explicit true: same behaviour, stated rather than inferred.
+$docTrue = MkDoc @($dwOk)
+$docTrue.meta | Add-Member -NotePropertyName extractionComplete -NotePropertyValue $true
+$docTrue.meta | Add-Member -NotePropertyName incompleteWidgets -NotePropertyValue @()
+$rTrue = RunAnalyze $docTrue
+A ($rTrue.facts.meta.extractionComplete -eq $true) "explicit true => complete"
+A (-not (HasFind $rTrue.facts 'GAP_EXTRACTION_INCOMPLETE')) "explicit true => no gap"
+
+# Explicit false: the input itself is untrustworthy, so this is critical, not just major.
+$docBad = MkDoc @($dwOk)
+$docBad.meta | Add-Member -NotePropertyName extractionComplete -NotePropertyValue $false
+$docBad.meta | Add-Member -NotePropertyName incompleteWidgets -NotePropertyValue @(
+  [pscustomobject]@{ id='w-lost'; visual='TABLE'; reason='budget-exhausted'; waitedMs=90000; lastVerdict=$null; queries=31 }
+)
+$rBad = RunAnalyze $docBad
+A ($rBad.facts.meta.extractionComplete -eq $false) "explicit false carries into facts"
+A (HasFind $rBad.facts 'GAP_EXTRACTION_INCOMPLETE') "incomplete extraction => GAP_EXTRACTION_INCOMPLETE"
+$gInc = GetFind $rBad.facts 'GAP_EXTRACTION_INCOMPLETE'
+A ($gInc.severity -eq 'critical') "severity is critical (owner fork 4, 2026-08-04)"
+A ($gInc.statement -match 'budget-exhausted') "the gap statement names the reason"
+A ($gInc.statement -match 're-extract') "the gap statement says what to do about it"
+A (@($rBad.facts.meta.incompleteWidgets) -contains 'w-lost') "facts carry the incomplete widget ids"
+A (@($rBad.facts.meta.incompleteWidgets).Count -eq 1) "ids only, one entry, no raw payload"
+# The pre-existing warnings path must be untouched by the new one.
+A (-not (HasFind $rBad.facts 'GAP_WARNINGS')) "GAP_WARNINGS is independent (no warnings here => none emitted)"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

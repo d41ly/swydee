@@ -43,6 +43,8 @@ param(
   [switch]$Trend,            # opt-in: pull a wide per-provider monthly history (cumulative-trend feature)
   [string]$CacheDir = "",    # ceiling-probe cache location; default %LOCALAPPDATA%\swydee\ceilings (NOT OutDir)
   [string[]]$Platform,       # optional provider-id filter (repeatable or comma-list); pull ONLY these providers
+  [int]$MaxWaitSec = 90,     # per-widget wall-clock budget for Swydo to answer (EXTR-aPatientHarvest-1 S9)
+  [int]$MaxTotalWaitSec = 420, # whole-run waiting budget; the run stops fetching when it is spent
   [switch]$DefineOnly
 )
 $ErrorActionPreference = "Stop"
@@ -50,49 +52,287 @@ $ErrorActionPreference = "Stop"
 # ============================ function definitions ============================
 $script:ct  = [Threading.CancellationToken]::None
 $script:buf = [byte[]]::new(1048576)
+# EXTR-aPatientHarvest-1 S1: the pending ReceiveAsync lives HERE, across calls. Abandoning it on a
+# timed-out slice is what made the shipped extractor blind: the next frame completed the orphaned
+# task into $script:buf with nobody reading .Result, so it was consumed and lost, and the following
+# ReceiveAsync was refused by ClientWebSocket (one outstanding receive only) into a bare catch{}.
+# Measured: shipped shape saw 0 of 5 kind:3 frames, this shape saw 5 of 5, same cold workload.
+$script:pendingRecv        = $null
+$script:outstandingComputes = 0    # widgets that ended with no verdict; their compute may still land
+$script:reconnects          = 0
+$script:totalWaitedMs       = 0
+$script:budgetExhausted     = $false
+$script:httpTimeoutSec      = 30   # PS 5.1 applies NO default (measured 721 s against a black hole)
+$script:sendWaitMs          = 10000
+$script:fetchPlan           = $null
+# NOT named $script:maxTotalWaitSec: PS variable names are case-insensitive at one scope, so that
+# name IS the [int]$MaxTotalWaitSec param, and initialising it to $null coerced the param to 0 -
+# which made every widget start with an already-exhausted run budget.
+$script:runWaitCapSec       = $null
+
+# Clear every piece of cross-widget fetch state. The run body calls this once at start; suites call
+# it in setup so no case inherits another's pending receive or budget.
+function Reset-FetchState {
+  $script:pendingRecv         = $null
+  $script:outstandingComputes = 0
+  $script:reconnects          = 0
+  $script:totalWaitedMs       = 0
+  $script:budgetExhausted     = $false
+}
 
 # --- auth / GraphQL (reference $key/$Secret/$script:jwt at call time) ---
 function Mint-Jwt {
   $basic = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes("$script:key`:$Secret"))
-  $j = (Invoke-RestMethod "https://vesting.swydo.com/jwt/share" -Headers @{authorization="Basic $basic"}).jwt
+  $j = (Invoke-RestMethod "https://vesting.swydo.com/jwt/share" -TimeoutSec $script:httpTimeoutSec -Headers @{authorization="Basic $basic"}).jwt
   if (-not $j) { throw "JWT mint failed (bad key or secret?)" }
   return $j
 }
-function Invoke-GQL($q,$vars){
+# An OBJECT, never a JSON string: a caller that forgets to branch faults loudly at ConvertFrom-Json
+# instead of quietly parsing to nulls and looking like an empty widget.
+function New-FetchFailure($reason,$attempts,$lastError){
+  return [pscustomobject]@{ __fetchFailed=$true; reason=[string]$reason; attempts=[int]$attempts; lastError=[string]$lastError }
+}
+function Test-FetchFailed($r){
+  if($null -eq $r){ return $false }
+  if($r -is [string]){ return $false }
+  if($null -eq $r.PSObject){ return $false }
+  return ($null -ne $r.PSObject.Properties['__fetchFailed'])
+}
+function Invoke-GQL($q,$vars,[switch]$NoRetry){
   if ((((Get-Date) - $script:jwtAt).TotalSeconds) -gt 500) { $script:jwt = Mint-Jwt; $script:jwtAt = Get-Date }
-  for($try=0; $try -lt 2; $try++){
+  $maxTries = 3; if($NoRetry){ $maxTries = 1 }
+  $body = @{query=$q; variables=$vars} | ConvertTo-Json -Compress -Depth 40
+  $lastErr = ''
+  $reminted = $false    # hoisted: one 401 re-mint per call, never a re-mint loop
+  for($try=1; $try -le $maxTries; $try++){
     try {
-      $body = @{query=$q; variables=$vars} | ConvertTo-Json -Compress -Depth 40
-      return (Invoke-WebRequest "https://graphql.swydo.com" -Method Post -UseBasicParsing `
+      return (Invoke-WebRequest "https://graphql.swydo.com" -Method Post -UseBasicParsing -TimeoutSec $script:httpTimeoutSec `
               -Headers @{authorization="Bearer $script:jwt"; "content-type"="application/json"} -Body $body).Content
     } catch {
-      $resp = $_.Exception.Response
-      if ($resp -and [int]$resp.StatusCode -eq 401) { $script:jwt = Mint-Jwt; $script:jwtAt = Get-Date; continue }
-      if ($resp) { return (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() }
-      throw
+      $lastErr = [string]$_.Exception.Message
+      $resp = $null; try { $resp = $_.Exception.Response } catch {}
+      if ($resp) {
+        $code = 0; try { $code = [int]$resp.StatusCode } catch {}
+        if ($code -eq 401 -and -not $reminted) {
+          $reminted = $true
+          try { $script:jwt = Mint-Jwt; $script:jwtAt = Get-Date; continue } catch { $lastErr = [string]$_.Exception.Message }
+        }
+        # a real HTTP response (GraphQL errors, 4xx bodies) is DATA, not a transport fault
+        try { return (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } catch { }
+      }
     }
+    if($try -lt $maxTries){ Start-Sleep -Milliseconds ([int]([math]::Pow(2,$try) * 250)) }
   }
+  # Startup calls (share page, structure query) opt out of retry AND keep failing loudly: a bad link
+  # must not degrade into a half-empty document.
+  if($NoRetry){ throw ("transport fault after " + $maxTries + " attempt(s): " + $lastErr) }
+  return (New-FetchFailure 'transport' $maxTries $lastErr)
 }
 
 # --- websocket (live socketId for cache-miss pushes) ---
-function Ws-Send($o){ try{ $b=[Text.Encoding]::UTF8.GetBytes(($o|ConvertTo-Json -Compress -Depth 10)); $script:ws.SendAsync([ArraySegment[byte]]::new($b),'Text',$true,$script:ct).Wait() }catch{} }
-function Ws-Recv($ms){ try{ $s=[ArraySegment[byte]]::new($script:buf); $t=$script:ws.ReceiveAsync($s,$script:ct); if($t.Wait($ms)){ return [Text.Encoding]::UTF8.GetString($script:buf,0,$t.Result.Count) } }catch{}; return $null }
-function Connect-Ws {
-  $script:ws=[System.Net.WebSockets.ClientWebSocket]::new()
-  $script:ws.Options.KeepAliveInterval=[TimeSpan]::FromSeconds(15)
-  $script:ws.ConnectAsync([Uri]"wss://ws.swydo.com",$script:ct).Wait()
-  Ws-Send @{kind=1; payload=@{}}
-  $script:socketId=$null
-  for($i=0;$i -lt 8 -and -not $script:socketId;$i++){ $m=Ws-Recv 5000; if($m){ try{$o=$m|ConvertFrom-Json; if($o.kind -eq 2){$script:socketId=$o.payload.socketId}}catch{} } }
+function Ws-Send($o){
+  try{
+    if($null -eq $script:ws){ return $false }
+    $b=[Text.Encoding]::UTF8.GetBytes(($o|ConvertTo-Json -Compress -Depth 10))
+    $t=$script:ws.SendAsync([ArraySegment[byte]]::new($b),'Text',$true,$script:ct)
+    return [bool]$t.Wait($script:sendWaitMs)
+  }catch{ return $false }
 }
-function Ws-Pulse {
-  if($script:ws.State -ne 'Open'){ try{ Connect-Ws }catch{} ; return }
-  Ws-Send @{kind=5; payload=@{socketId=$script:socketId}}
-  $m=Ws-Recv 1000
-  if($m){ try{$o=$m|ConvertFrom-Json; if($o.kind -eq 4){ Ws-Send @{kind=5;payload=@{socketId=$script:socketId}} }}catch{} }
+# S1. The slot is cleared ONLY when the task's Result has been read, or the task ended
+# Faulted/Canceled, or the peer sent Close. A timed-out slice keeps it pending so the frame that
+# arrives next is still delivered to the NEXT call rather than vanishing.
+function Ws-Recv($ms){
+  try {
+    if($null -eq $script:pendingRecv){
+      if($null -eq $script:ws){ return $null }
+      $seg=[ArraySegment[byte]]::new($script:buf)
+      $script:pendingRecv = $script:ws.ReceiveAsync($seg,$script:ct)
+    }
+    $t = $script:pendingRecv
+    if($t.Wait($ms)){
+      $r = $t.Result
+      $script:pendingRecv = $null
+      if($r.MessageType -eq 'Close'){ return $null }
+      return [Text.Encoding]::UTF8.GetString($script:buf,0,$r.Count)
+    }
+    if($t.IsFaulted -or $t.IsCanceled){ $script:pendingRecv = $null }
+  } catch {
+    $script:pendingRecv = $null
+  }
+  return $null
+}
+# Returns $true only with a socketId in hand. Never throws into a bare catch{}: the caller decides
+# whether a dead socket ends the widget or the run.
+function Connect-Ws {
+  $script:pendingRecv = $null      # FIRST: a task from the dead socket must never be re-awaited
+  $script:socketId    = $null
+  $plan = $script:fetchPlan
+  if($null -eq $plan){ $plan = Get-FetchPlan $null }
+  try { if($script:ws){ $script:ws.Dispose() } } catch {}
+  $script:ws = $null
+  try {
+    $w=[System.Net.WebSockets.ClientWebSocket]::new()
+    $w.Options.KeepAliveInterval=[TimeSpan]::FromSeconds(15)
+    $t=$w.ConnectAsync([Uri]"wss://ws.swydo.com",$script:ct)
+    if(-not $t.Wait([int]$plan.handshakeMs)){ return $false }
+    $script:ws=$w
+  } catch { return $false }
+  if(-not (Ws-Send @{kind=1; payload=@{}})){ return $false }
+  $sw=[Diagnostics.Stopwatch]::StartNew()
+  while($sw.ElapsedMilliseconds -lt [int]$plan.handshakeMs){
+    $m=Ws-Recv ([int]$plan.sliceMs)
+    if($m){ try{ $o=$m|ConvertFrom-Json; if($o.kind -eq 2){ $script:socketId=$o.payload.socketId; break } }catch{} }
+  }
+  $sw.Stop()
+  $script:totalWaitedMs = $script:totalWaitedMs + [int]$sw.ElapsedMilliseconds
+  return ($null -ne $script:socketId)
+}
+# Reconnect and account for it. A new socketId ORPHANS any compute still running for the old one,
+# which is exactly what makes positional frame attribution safe across a widget boundary.
+function Reset-Socket {
+  $plan = $script:fetchPlan
+  if($null -eq $plan){ $plan = Get-FetchPlan $null }
+  if($script:reconnects -ge [int]$plan.maxReconnects){ return $false }
+  $script:reconnects = $script:reconnects + 1
+  if(Connect-Ws){ $script:outstandingComputes = 0; return $true }
+  return $false
+}
+# Drain frames already buffered so a leftover verdict is not read as the next widget's answer.
+# drainSliceMs must be NON-ZERO: Task.Wait(0) returns false on a frame already sitting in the OS
+# buffer, which would silently turn the drain into a no-op.
+function Drain-Ws($plan){
+  if($null -eq $plan){ $plan = Get-FetchPlan $null }
+  $n=0
+  while($n -lt 200){
+    $m = Ws-Recv ([int]$plan.drainSliceMs)
+    if(-not $m){ break }
+    $n++
+    try{ $o=$m|ConvertFrom-Json; if($o.kind -eq 4){ [void](Ws-Send @{kind=5;payload=@{socketId=$script:socketId}}) } }catch{}
+  }
+  return $n
+}
+# Read until THIS request's verdict lands or the slice budget runs out. kind:3 carries the verdict
+# (RESOLVED = data ready, REJECTED = out of range and never coming); kind:4 is a keepalive.
+function Wait-WidgetVerdict($budgetMs,$plan){
+  if($null -eq $plan){ $plan = Get-FetchPlan $null }
+  $sw=[Diagnostics.Stopwatch]::StartNew()
+  $verdict=$null
+  while($sw.ElapsedMilliseconds -lt [int]$budgetMs){
+    $m = Ws-Recv ([int]$plan.sliceMs)
+    if($m){
+      $o=$null; try{ $o=$m|ConvertFrom-Json }catch{}
+      if($o){
+        if($o.kind -eq 3){ $verdict = [string]$o.payload.status; break }
+        if($o.kind -eq 4){ [void](Ws-Send @{kind=5;payload=@{socketId=$script:socketId}}) }
+      }
+    }
+  }
+  $sw.Stop()
+  $script:totalWaitedMs = $script:totalWaitedMs + [int]$sw.ElapsedMilliseconds
+  return @{ verdict=$verdict; waitedMs=[int]$sw.ElapsedMilliseconds }
 }
 
 # --- pure helpers ---
+# Every knob the fetch state machine turns, in ONE place, so a suite can assert the schedule without
+# sleeping and a future retune never has to touch the state machine.
+function Get-FetchPlan($maxWaitSec){
+  $m = 90
+  if($null -ne $maxWaitSec){ try { $m = [int]$maxWaitSec } catch { $m = 90 } }
+  if($m -lt 1){ $m = 1 }
+  return [ordered]@{
+    maxWaitSec         = $m
+    sliceMs            = 500     # one websocket read slice
+    pollEveryMs        = 3000    # fallback re-query cadence when no frame arrives
+    drainSliceMs       = 50      # non-zero on purpose; Wait(0) would no-op the drain
+    handshakeMs        = 15000   # bound on connect + kind:2 discovery
+    quietFallbackMs    = 6000
+    minFallbackQueries = 3
+    retryUnsettledOnce = $true   # the silent band is transient: 37mo went silent 30 s, then REJECTED in 49 ms
+    maxReconnects      = 3
+    transportRetries   = 3
+    # A verdict is attributed positionally, so a LATE verdict from the previous widget can be read as
+    # this one's. Observed live: widgets with data were being marked empty-resolved off a stale frame.
+    # Before believing "resolved but empty", wait one more window: this widget's OWN verdict will
+    # arrive if its compute is still running. Costs one extra wait+query on genuinely empty widgets.
+    emptyConfirms      = 1
+    # Ceiling probes are cheap and are EXPECTED to be refused: a refusal measured 44-260 ms and a
+    # resolve 1.2-3.4 s, so a probe never needs the full per-widget budget. Without this the
+    # unsettled band (measured at 37 and 39 months) burns 90 s twice per rung, and a trend run spends
+    # most of its whole-run budget re-deciding a ceiling it already knows.
+    probeMaxWaitSec    = 10
+  }
+}
+# The four-state classifier. $outstandingComputes guards the one window positional attribution cannot
+# cover: a verdict from a widget that already timed out can arrive during the NEXT widget's wait, and
+# reading it as "resolved, no rows" would turn a real gap into a silent "genuinely empty".
+function Get-WidgetOutcome($verdict,$rows,$budgetLeftMs,$outstandingComputes){
+  $n = 0;   if($null -ne $rows){ try { $n = [int]$rows } catch { $n = 0 } }
+  $out = 0; if($null -ne $outstandingComputes){ try { $out = [int]$outstandingComputes } catch { $out = 0 } }
+  $v = ''
+  if($null -ne $verdict){ $v = ([string]$verdict).ToUpperInvariant() }
+  if($n -gt 0){ return 'filled' }
+  if($v -eq 'REJECTED'){ return 'rejected' }
+  if($v -eq 'RESOLVED'){
+    if($out -gt 0){ return 'incomplete' }
+    return 'empty-resolved'
+  }
+  return 'incomplete'
+}
+# Build the whole additive meta block from the per-widget outcome records. Pure, and defined above the
+# -DefineOnly return, so the completeness contract is assertable offline instead of living in run-body
+# code no suite can reach.
+function Get-ExtractionCompleteness($outcomes,$plan,$budgetState){
+  $inc=[System.Collections.ArrayList]@()
+  foreach($o in @($outcomes)){
+    if($null -eq $o){ continue }
+    $st = [string]$o.outcome
+    # 'rejected' on the report path is a refusal of the report's OWN configured range: a real fault,
+    # not an expected answer (owner fork 3, 2026-08-04).
+    if($st -ne 'incomplete' -and $st -ne 'rejected'){ continue }
+    $reason = [string]$o.reason
+    if(-not $reason){ $reason = 'budget-exhausted' }
+    if($st -eq 'rejected'){ $reason = 'rejected' }
+    $row=[ordered]@{ id=$o.id; visual=$o.visual; reason=$reason
+                     waitedMs=[int]$o.waitedMs; lastVerdict=$o.lastVerdict; queries=[int]$o.queries }
+    if([int]$o.pagesFetched -gt 0){ $row.pagesFetched=[int]$o.pagesFetched }
+    if($o.endCursor){ $row.endCursor=[string]$o.endCursor }
+    [void]$inc.Add($row)
+  }
+  $mw = 90; $mt = 420
+  if($plan -and $null -ne $plan.maxWaitSec){ $mw = [int]$plan.maxWaitSec }
+  $tw = 0; $bx = $false
+  if($budgetState){
+    if($null -ne $budgetState.maxTotalWaitSec){ $mt = [int]$budgetState.maxTotalWaitSec }
+    if($null -ne $budgetState.totalWaitedMs){ $tw = [int]$budgetState.totalWaitedMs }
+    if($null -ne $budgetState.budgetExhausted){ $bx = [bool]$budgetState.budgetExhausted }
+  }
+  return [ordered]@{
+    extractionComplete = (@($inc).Count -eq 0)
+    incompleteWidgets  = @($inc)     # @()-wrapped: a lone null must never read as one entry
+    fetchBudget        = [ordered]@{ maxWaitSec=$mw; maxTotalWaitSec=$mt; totalWaitedMs=$tw; budgetExhausted=$bx }
+  }
+}
+# Whether a trend probe result is admissible evidence about the history ceiling.
+function Test-CeilingStillValid($probeResult,$minRun){
+  if($null -eq $probeResult){ return $false }
+  if([string]$probeResult.state -ne 'has-months'){ return $false }
+  return (Test-TrailingContiguous $probeResult.months $minRun)
+}
+# @($null).Count is 1, so a null edge list would read as ONE row and classify an empty widget as
+# 'filled'. Every rowcount in this file goes through here.
+function Count-Edges($obj){
+  if($null -eq $obj){ return 0 }
+  $e = $null
+  try { $e = $obj.data.widget.data.edges } catch { return 0 }
+  if($null -eq $e){ return 0 }
+  return @($e).Count
+}
+function Get-RunBudgetLeftMs {
+  if($null -eq $script:runWaitCapSec){ return 2147483647 }
+  $left = ([int]$script:runWaitCapSec * 1000) - [int]$script:totalWaitedMs
+  if($left -lt 0){ $left = 0 }
+  return [int]$left
+}
 function DimName($c){
   if($null -eq $c){ return $null }
   if($c -is [string]){ return $c }
@@ -136,29 +376,113 @@ function Flatten-Text($node){
 
 # --- data fetch: cache-warm retry on page 1, then paginate ---
 $script:baseQ='query($sid:ID!,$dr:DateRange!,$cp:ComparePeriod!,$after:String){widget(id:"__ID__"){id content comparisonFormat visual{id} displayOptions{title} widgetTemplate{id linked} target{value} manualKpiOptions{value compareValue} source{id name parts{id provider{id name} dataSource{id}}} metrics:fields(socketId:$sid,type:METRIC){edges{node{id name}}} dims:fields(socketId:$sid,type:DIMENSION){edges{node{id name}}} data(first:__N__,after:$after,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){edges{node}pageInfo{hasNextPage endCursor}}}}'
-function Fetch-Widget($w, $attempts, $dr, $cp){
+# Budgeted, verdict-driven fetch. Returns the GraphQL object exactly as before; the per-widget
+# outcome record is left in $script:lastFetchOutcome for the caller to collect (probe and discovery
+# callers deliberately do NOT collect it - a REJECTED probe is the answer they wanted).
+# NOTE the signature: the old attempt-count positional slot is REMOVED, not repurposed, so a
+# leftover `Fetch-Widget $w 5` would bind 5 to $dr and fail loudly rather than mean a 5 s budget.
+function Fetch-Widget($w, $dr, $cp, $opt){
   if($null -eq $dr){ $dr = $script:dr }   # default = report range (default extraction path unchanged)
   if($null -eq $cp){ $cp = $script:cp }
+  $plan = $null; $myMaxWait = $null
+  if($opt){
+    if($opt.plan){ $plan = $opt.plan }
+    if($null -ne $opt.maxWaitSec){ $myMaxWait = $opt.maxWaitSec }
+  }
+  if($null -eq $plan){ $plan = $script:fetchPlan }
+  if($null -eq $plan){ $plan = Get-FetchPlan $myMaxWait }
+  if($null -eq $myMaxWait){ $myMaxWait = $plan.maxWaitSec }
+
   $q = $script:baseQ -replace '__ID__',$w.id -replace '__N__',"$PageSize"
   $needData = $w.visual -notin @('TEXT','PAGE_BREAK')
-  $obj=$null
-  for($a=1;$a -le $attempts;$a++){
-    if($script:ws.State -ne 'Open'){ try{ Connect-Ws }catch{} }
-    $obj = (Invoke-GQL $q @{sid=$script:socketId;dr=$dr;cp=$cp;after=$null}) | ConvertFrom-Json
-    if(-not $needData -or ($obj.data.widget.data.edges.Count -gt 0)){ break }
-    Ws-Pulse; Start-Sleep -Milliseconds 900
+  $st = [ordered]@{ id=$w.id; visual=$w.visual; outcome='filled'; reason=$null
+                    waitedMs=0; lastVerdict=$null; queries=0; pagesFetched=0; endCursor=$null }
+
+  $runLeft = Get-RunBudgetLeftMs
+  if($needData -and $runLeft -le 0){
+    $script:budgetExhausted = $true
+    $st.outcome='incomplete'; $st.reason='run-budget-exhausted'
+    $script:outstandingComputes = $script:outstandingComputes + 1
+    $script:lastFetchOutcome = $st
+    return $null
   }
-  if($needData -and $obj.data.widget -and $obj.data.widget.data.edges.Count -gt 0){
+  if($needData -and $null -eq $script:socketId){
+    if(-not (Reset-Socket)){
+      $st.outcome='incomplete'; $st.reason='socket-lost'
+      $script:lastFetchOutcome = $st
+      return $null
+    }
+  }
+  if($needData){ [void](Drain-Ws $plan) }
+
+  $budgetMs = [int][math]::Min([double]([int]$myMaxWait * 1000), [double]$runLeft)
+  $sw=[Diagnostics.Stopwatch]::StartNew()
+  $obj=$null; $rows=0; $verdict=$null; $failed=$false; $confirms=0
+  $maxConfirms = 1; if($null -ne $plan.emptyConfirms){ $maxConfirms = [int]$plan.emptyConfirms }
+  while($true){
+    $raw = Invoke-GQL $q @{sid=$script:socketId;dr=$dr;cp=$cp;after=$null}
+    $st.queries = $st.queries + 1
+    if(Test-FetchFailed $raw){ $failed=$true; $st.reason='transport-failed'; break }
+    $obj = $raw | ConvertFrom-Json
+    $rows = Count-Edges $obj
+    if(-not $needData){ break }
+    if($rows -gt 0){ break }
+    if($verdict -and $verdict.ToUpperInvariant() -eq 'REJECTED'){ break }
+    # "Resolved but empty" is believed only after a further quiet window produces no NEW verdict.
+    # Otherwise the frame we acted on may have belonged to the PREVIOUS widget, and this one's own
+    # compute is still running - observed live, marking widgets with data as empty.
+    if($verdict -and $confirms -ge $maxConfirms){ break }
+    $left = $budgetMs - [int]$sw.ElapsedMilliseconds
+    if($left -le 0){ break }
+    $slice = [int][math]::Min([double]$plan.pollEveryMs,[double]$left)
+    $wv = Wait-WidgetVerdict $slice $plan
+    $st.waitedMs = $st.waitedMs + [int]$wv.waitedMs
+    if($wv.verdict){ $verdict = [string]$wv.verdict; $st.lastVerdict = $verdict }
+    elseif($verdict){ $confirms = $confirms + 1 }   # quiet confirm window: nothing new arrived
+    if($verdict -and $verdict.ToUpperInvariant() -eq 'REJECTED'){ break }   # never coming; do not re-query
+  }
+  $sw.Stop()
+
+  if(-not $needData){ $st.outcome='filled'; $st.reason=$null }
+  elseif($failed){ $st.outcome='incomplete' }
+  else {
+    $st.outcome = Get-WidgetOutcome $verdict $rows ($budgetMs - [int]$sw.ElapsedMilliseconds) $script:outstandingComputes
+    if($st.outcome -eq 'incomplete' -and -not $st.reason){
+      if($verdict -and $script:outstandingComputes -gt 0){ $st.reason='stale-verdict-risk' }
+      else { $st.reason='budget-exhausted' }
+    }
+  }
+
+  # Pagination. A faulted page is NOT a last page: breaking out as if it were would emit 500 of 2000
+  # rows as a complete widget, which the closer would certify and the analyzer would total.
+  if($needData -and $st.outcome -eq 'filled' -and $obj -and $obj.data.widget -and $rows -gt 0){
     $wd=$obj.data.widget.data
     $all=[System.Collections.ArrayList]@(); $wd.edges | ForEach-Object {[void]$all.Add($_)}
-    $pi=$wd.pageInfo
+    $pi=$wd.pageInfo; $st.pagesFetched=1; $truncated=$false
     while($pi.hasNextPage){
-      $pg=((Invoke-GQL $q @{sid=$script:socketId;dr=$dr;cp=$cp;after=$pi.endCursor}) | ConvertFrom-Json).data.widget.data
-      if(-not $pg -or $pg.edges.Count -eq 0){ break }
-      $pg.edges | ForEach-Object {[void]$all.Add($_)}; $pi=$pg.pageInfo
+      $praw = Invoke-GQL $q @{sid=$script:socketId;dr=$dr;cp=$cp;after=$pi.endCursor}
+      $st.queries = $st.queries + 1
+      if(Test-FetchFailed $praw){ $truncated=$true; break }
+      $pg=$null; try { $pg=($praw|ConvertFrom-Json).data.widget.data } catch { $pg=$null }
+      if(-not $pg){ $truncated=$true; break }
+      $pgEdges = $pg.edges
+      if($null -eq $pgEdges -or @($pgEdges).Count -eq 0){ $pi=$pg.pageInfo; break }
+      $pg.edges | ForEach-Object {[void]$all.Add($_)}
+      $pi=$pg.pageInfo; $st.pagesFetched = $st.pagesFetched + 1
+    }
+    if($truncated -or $pi.hasNextPage){
+      $st.outcome='incomplete'; $st.reason='partial-pages'; $st.endCursor=[string]$pi.endCursor
     }
     $obj.data.widget.data.edges=$all.ToArray(); $obj.data.widget.data.pageInfo=$pi
   }
+
+  # A widget that ended with NO verdict may still have a compute running server-side. Reconnecting
+  # mints a new socketId, which orphans it, so it can never be mis-read as the next widget's answer.
+  if($st.outcome -eq 'incomplete'){
+    $script:outstandingComputes = $script:outstandingComputes + 1
+    [void](Reset-Socket)
+  }
+  $script:lastFetchOutcome = $st
   return $obj
 }
 function New-RelDateRange($count,$measure){
@@ -275,16 +599,24 @@ function Test-CeilingFresh($discoveredAt,$now,$ttlDays){
 function Get-CurrentMonthKey($now){ return ([datetimeoffset]$now).ToString('yyyy-MM') }
 # Extract per-month raw cells from a fetched single-time-dimension widget object.
 # Returns @{ windowStatus = ok|overshoot-empty|error; metricIds[]; months[ @{ month; currency; values{metricId->raw} } ] }.
-function Get-TrendMonthCells($obj){
+function Get-TrendMonthCells($obj,$outcome){
   $out=[ordered]@{ windowStatus='ok'; metricIds=@(); months=@() }
   $w=$null; try { $w=$obj.data.widget } catch {}
-  if(-not $w){ $out.windowStatus='error'; return $out }
+  if(-not $w){
+    # An unanswered window is NOT an overshoot. Recording it as one is how a slow response became a
+    # false history ceiling and silently truncated a client's trend.
+    if($outcome -and [string]$outcome.outcome -eq 'incomplete'){ $out.windowStatus='unsettled'; return $out }
+    $out.windowStatus='error'; return $out
+  }
   $mets=@(); if($w.metrics -and $w.metrics.edges){ $mets=@($w.metrics.edges | ForEach-Object { $_.node }) }
   $dims=@(); if($w.dims -and $w.dims.edges){ $dims=@($w.dims.edges | ForEach-Object { $_.node }) }
   $out.metricIds=@($mets | ForEach-Object { [string]$_.id })
   $nd=$dims.Count
   $edges=@(); if($w.data -and $w.data.edges){ $edges=@($w.data.edges) }
-  if($edges.Count -eq 0){ $out.windowStatus='overshoot-empty'; return $out }
+  if($edges.Count -eq 0){
+    if($outcome -and [string]$outcome.outcome -eq 'incomplete'){ $out.windowStatus='unsettled'; return $out }
+    $out.windowStatus='overshoot-empty'; return $out
+  }
   # Resolve currency WIDGET-WIDE (like Normalize-Widget): low/zero-activity months can omit meta.currencyCode,
   # and a per-row currency would fork one real series into two basisVersions downstream (currency is in the hash).
   $wCur=$null; foreach($e in $edges){ if($e.node.meta -and $e.node.meta.currencyCode){ $wCur=[string]$e.node.meta.currencyCode; break } }
@@ -303,24 +635,57 @@ function Get-TrendMonthCells($obj){
   return $out
 }
 # --- impure probe orchestration (hits the network; the pure bracket/bisect it calls are unit-tested) ---
+# Four-state probe result. 'rejected' is Swydo explicitly refusing the window (measured 44-260 ms) and
+# is the ONLY definitive overshoot signal; 'unsettled' means no answer at all and must never be read
+# as one.
 function Probe-WidgetMonths($w,$n){
-  $o = Fetch-Widget $w 5 (New-RelDateRange (-1*$n) 'month')
-  return @((Get-TrendMonthCells $o).months | ForEach-Object { $_.month })
+  $popt = $script:probeOpt
+  if($null -eq $popt){ $popt = $script:fetchOpt }
+  $o = Fetch-Widget $w (New-RelDateRange (-1*$n) 'month') $null $popt
+  $rec = $script:lastFetchOutcome
+  $months = @()
+  if($o){ $months = @((Get-TrendMonthCells $o $rec).months | ForEach-Object { $_.month }) }
+  $state = 'unsettled'
+  if(@($months).Count -gt 0){ $state = 'has-months' }
+  elseif($rec -and [string]$rec.outcome -eq 'rejected'){ $state = 'rejected' }
+  elseif($rec -and [string]$rec.outcome -eq 'empty-resolved'){ $state = 'empty-resolved' }
+  return [ordered]@{ state=$state; months=@($months) }
+}
+# Retry an unsettled window ONCE before believing it: the silent band is transient. Measured on the
+# QCU Facebook widget, a 37-month window stayed silent for 30 s and then returned REJECTED in 49 ms
+# on the very next attempt. A window still unsettled after the retry is treated as overshoot - the
+# conservative direction, since claiming history you cannot prove is the worse error - and marks the
+# resulting ceiling as a lower bound rather than a measurement.
+function Get-CeilingProbe($w,$n){
+  $r = Probe-WidgetMonths $w $n
+  $unc = $false
+  if([string]$r.state -eq 'unsettled'){
+    $plan = $script:fetchPlan
+    if($null -eq $plan){ $plan = Get-FetchPlan $null }
+    if($plan.retryUnsettledOnce){ $r = Probe-WidgetMonths $w $n }
+    if([string]$r.state -eq 'unsettled'){ $unc = $true }
+  }
+  return @{ result=$r; uncertain=$unc }
 }
 # Per-widget ceiling: lazily probe the ladder descending (stop at first rung with >=2 trailing-contiguous
 # months = R, prior empty = F), then bisect (R,F) to the true max N. Returns months (0 = no monthly history).
+# Sets $script:lastCeilingUncertain when any rung stayed unanswered, so coverage can say so.
 function Get-WidgetCeiling($w){
-  $R=$null; $F=$null
+  $R=$null; $F=$null; $unc=$false
   foreach($n in $script:TrendLadder){
-    $km = Probe-WidgetMonths $w $n
-    if(Test-TrailingContiguous $km 2){ $R=$n; break } else { $F=$n }
+    $pr = Get-CeilingProbe $w $n
+    if($pr.uncertain){ $unc=$true }
+    if(Test-CeilingStillValid $pr.result 2){ $R=$n; break } else { $F=$n }
   }
-  if($null -eq $R){ return 0 }
+  if($null -eq $R){ $script:lastCeilingUncertain=$unc; return 0 }
   while($true){
     $mid = Get-NextBisectN $R $F
     if($null -eq $mid){ break }
-    if(Test-TrailingContiguous (Probe-WidgetMonths $w $mid) 2){ $R=$mid } else { $F=$mid }
+    $pr = Get-CeilingProbe $w $mid
+    if($pr.uncertain){ $unc=$true }
+    if(Test-CeilingStillValid $pr.result 2){ $R=$mid } else { $F=$mid }
   }
+  $script:lastCeilingUncertain=$unc
   return $R
 }
 
@@ -367,9 +732,15 @@ if($DefineOnly){ return }   # dot-source stops here (functions loaded, nothing r
 # ================================ run ================================
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 if(-not $ShareUrl){ throw "ShareUrl is required" }
+Reset-FetchState
+$script:fetchPlan       = Get-FetchPlan $MaxWaitSec
+$script:runWaitCapSec = $MaxTotalWaitSec
+$script:fetchOpt        = @{ plan=$script:fetchPlan; maxWaitSec=$MaxWaitSec }
+$script:probeOpt        = @{ plan=$script:fetchPlan; maxWaitSec=$script:fetchPlan.probeMaxWaitSec }
+$script:outcomes        = [System.Collections.ArrayList]@()
 
 # 1. resolve share key + report id
-$html = Invoke-RestMethod -Uri $ShareUrl
+$html = Invoke-RestMethod -Uri $ShareUrl -TimeoutSec $script:httpTimeoutSec
 if ($html -match 'app\.swydo\.com/g/([^/]+)/reports/([A-Za-z0-9_-]+)') { $script:key=$Matches[1]; $reportId=$Matches[2] }
 else { throw "Could not find the 'app.swydo.com/g/<key>/reports/<id>' iframe in the share page (bad/expired link, or password required?)" }   # never interpolate $ShareUrl - it carries the share key
 Write-Host ("key=***  reportId={0}" -f $reportId)   # never echo the raw share key (it is the Basic-auth credential)
@@ -378,13 +749,12 @@ Write-Host ("key=***  reportId={0}" -f $reportId)   # never echo the raw share k
 $script:jwt = Mint-Jwt; $script:jwtAt = Get-Date
 
 # 3. websocket
-Connect-Ws
-if(-not $script:socketId){ throw "no socketId from wss://ws.swydo.com" }
+if(-not (Connect-Ws)){ throw "no socketId from wss://ws.swydo.com" }
 Write-Host "socketId=$script:socketId"
 
 # 4. structure
 $structQ='query($id:ID!){report(id:$id){id name subtitle orientation custom client{id name} author{id name email} dateRange compareDateRange sections{id name isHidden} widgets{edges{node{id visual{id} section{id} source{id parts{provider{id name}}}}}} teamName}}'
-$structRaw = Invoke-GQL $structQ @{id=$reportId}
+$structRaw = Invoke-GQL $structQ @{id=$reportId} -NoRetry
 $s = ($structRaw | ConvertFrom-Json).data.report
 if(-not $s){ throw "structure query returned no report: $structRaw" }
 $script:dr=$s.dateRange; $script:cp=$s.compareDateRange
@@ -420,7 +790,7 @@ if($Trend){
   Write-Host ("trend: discovering monthly time-series widgets among {0} data widgets..." -f $twids.Count)
   $trendW=@()
   foreach($w in $twids){
-    $o=Fetch-Widget $w 5 (New-RelDateRange -12 'month')
+    $o=Fetch-Widget $w (New-RelDateRange -12 'month') $null $script:probeOpt
     $dims=@(); try{ $dims=@($o.data.widget.dims.edges.node.name) }catch{}
     if((@($dims).Count -eq 1) -and (Test-TrendTimeWidget $dims)){ $trendW += $w; Write-Host ("  TIME {0} [{1}] prov={2} dim='{3}'" -f $w.id,$w.visual,$w.prov,($dims -join ',')) }
   }
@@ -431,15 +801,29 @@ if($Trend){
   $cov=[ordered]@{}
   $newCache=@{}
   foreach($w in $trendW){
-    $ceiling=$null
+    $ceiling=$null; $script:lastCeilingUncertain=$false; $keptStamp=$null
     $ce=$cache[$w.id]
-    if($ce -and (Test-CeilingFresh $ce.discoveredAt $now 30)){
-      if(Test-TrailingContiguous (Probe-WidgetMonths $w ([int]$ce.ceilingMonths)) 2){ $ceiling=[int]$ce.ceilingMonths }
+    # probeVersion gate: a ceiling discovered by the pre-EXTR-aPatientHarvest-1 prober inferred
+    # overshoot from emptiness, so it may be false. Ignore those exactly once and re-derive.
+    $ceUsable = $false
+    if($ce -and $null -ne $ce.probeVersion){ try { $ceUsable = ([int]$ce.probeVersion -ge 2) } catch { $ceUsable = $false } }
+    if($ceUsable -and (Test-CeilingFresh $ce.discoveredAt $now 30)){
+      # The revalidation caller has a safe fallback the bisect does not: an unsettled probe simply
+      # means "cache not validated", so it falls through to a full probe instead of erroring.
+      if(Test-CeilingStillValid (Probe-WidgetMonths $w ([int]$ce.ceilingMonths)) 2){
+        $ceiling=[int]$ce.ceilingMonths
+        $keptStamp=[string]$ce.discoveredAt   # a HIT must not re-stamp, or the 30-day TTL never expires
+      }
     }
     if($null -eq $ceiling){ $ceiling = Get-WidgetCeiling $w }
     if($ceiling -le 0){ Write-Host ("  {0}: no monthly history (ceiling 0)" -f $w.id); continue }
-    $newCache[$w.id]=@{ ceilingMonths=$ceiling; discoveredAt=([datetimeoffset]$now).ToString('o') }
-    $mc = Get-TrendMonthCells (Fetch-Widget $w 6 (New-RelDateRange (-1*$ceiling) 'month'))
+    $stamp = $keptStamp
+    if(-not $stamp){ $stamp = ([datetimeoffset]$now).ToString('o') }
+    $newCache[$w.id]=@{ ceilingMonths=$ceiling; discoveredAt=$stamp; probeVersion=2 }
+    $tfo = Fetch-Widget $w (New-RelDateRange (-1*$ceiling) 'month') $null $script:fetchOpt
+    $trec = $script:lastFetchOutcome
+    if($trec){ [void]$script:outcomes.Add($trec) }
+    $mc = Get-TrendMonthCells $tfo $trec
     $wMonths=@()
     foreach($mo in $mc.months){
       if($mo.month -eq $curMonth){ continue }   # drop the partial current month
@@ -450,8 +834,11 @@ if($Trend){
       }
     }
     $pk = if($w.prov){ $w.prov } else { 'unknown' }
-    if(-not $cov.Contains($pk)){ $cov[$pk]=[ordered]@{ providerId=$pk; providerName=$w.pname; hasMonthlyGrain=$true; ceilingMonths=$ceiling; probeLadderHit=$false; earliestMonth=$null; latestMonth=$null; windowStatus=$mc.windowStatus; probedAt=([datetimeoffset]$now).ToString('o') } }
-    else { if($ceiling -gt $cov[$pk].ceilingMonths){ $cov[$pk].ceilingMonths=$ceiling } }
+    if(-not $cov.Contains($pk)){ $cov[$pk]=[ordered]@{ providerId=$pk; providerName=$w.pname; hasMonthlyGrain=$true; ceilingMonths=$ceiling; ceilingUncertain=[bool]$script:lastCeilingUncertain; probeLadderHit=$false; earliestMonth=$null; latestMonth=$null; windowStatus=$mc.windowStatus; probedAt=([datetimeoffset]$now).ToString('o') } }
+    else {
+      if($ceiling -gt $cov[$pk].ceilingMonths){ $cov[$pk].ceilingMonths=$ceiling }
+      if($script:lastCeilingUncertain){ $cov[$pk].ceilingUncertain=$true }
+    }
     if($wMonths.Count -gt 0){
       $mn=($wMonths|Sort-Object|Select-Object -First 1); $mx=($wMonths|Sort-Object|Select-Object -Last 1)
       if(-not $cov[$pk].earliestMonth -or $mn -lt $cov[$pk].earliestMonth){ $cov[$pk].earliestMonth=$mn }
@@ -471,12 +858,18 @@ if($Trend){
   $tslug=($s.name -replace '[^A-Za-z0-9]+','-').Trim('-').ToLower(); if(-not $tslug){ $tslug='report' }
   $twarn=@(); $noGrain=@($cov.Values | Where-Object { -not $_.hasMonthlyGrain } | ForEach-Object { $_.providerId })
   if($noGrain.Count -gt 0){ $twarn += ("no monthly time-series widget for provider(s): " + ($noGrain -join ', ') + " -- add a by-month widget to include them in trend history") }
+  $uncertain=@($cov.Values | Where-Object { $_.ceilingUncertain } | ForEach-Object { $_.providerId })
+  if($uncertain.Count -gt 0){ $twarn += ("history ceiling is a LOWER BOUND for provider(s): " + ($uncertain -join ', ') + " -- a probe window went unanswered twice, so more history may exist than was pulled") }
+  $tcompleteness = Get-ExtractionCompleteness $script:outcomes $script:fetchPlan `
+                     @{ maxTotalWaitSec=$MaxTotalWaitSec; totalWaitedMs=$script:totalWaitedMs; budgetExhausted=$script:budgetExhausted }
   $tdoc=[ordered]@{
     meta=[ordered]@{
       tool='Get-SwydoReport.ps1'; schemaVersion=2; trend=$true; extractedAt=(Get-Date).ToString('o')
       shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
       trendWidgets=$trendW.Count; cellCount=$cells.Count; coverage=@($cov.Values); warnings=$twarn
       providerInventory=$providerInventory; providerFilter=$platFilter
+      extractionComplete=$tcompleteness.extractionComplete; incompleteWidgets=@($tcompleteness.incompleteWidgets)
+      fetchBudget=$tcompleteness.fetchBudget
     }
     report=[ordered]@{ name=$s.name; client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName }
     trendCells=@($cells)
@@ -488,23 +881,31 @@ if($Trend){
   return
 }
 
-# 5. fetch all, reconcile cold widgets
+# 5. fetch all. The old reconcile loop is GONE: its job (wait, then ask again) now lives inside
+# Fetch-Widget's verdict wait, where it is bounded and where the outcome is recorded exactly once.
+# A second pass could otherwise overwrite a settled outcome and make publish depend on round timing.
 $fetched=@{}; $empty=@()
 try {
   foreach($w in $wids){
-    $o = Fetch-Widget $w 5; $fetched[$w.id]=$o
-    $n = $o.data.widget.data.edges.Count
-    $tag = if($n -gt 0){"DATA"} elseif($o.data.widget.content){"TEXT"} else {"none"}
-    Write-Host ("  {0,-4} {1} [{2}] rows={3}" -f $tag,$w.id,$w.visual,$n)
+    $o = Fetch-Widget $w $null $null $script:fetchOpt
+    $fetched[$w.id]=$o
+    $rec = $script:lastFetchOutcome
+    if($rec){ [void]$script:outcomes.Add($rec) }
+    $n = Count-Edges $o
+    $tag = if($n -gt 0){"DATA"} elseif($o -and $o.data.widget.content){"TEXT"} else {"none"}
+    $oc = 'filled'; if($rec){ $oc = [string]$rec.outcome }
+    $extra = ''
+    if($oc -ne 'filled'){
+      $extra = (" {0}" -f $oc)
+      if($rec -and $rec.reason){ $extra = $extra + (" ({0})" -f $rec.reason) }
+      if($rec -and $rec.lastVerdict){ $extra = $extra + (" verdict={0}" -f $rec.lastVerdict) }
+    }
+    Write-Host ("  {0,-4} {1} [{2}] rows={3}{4}" -f $tag,$w.id,$w.visual,$n,$extra)
     if($n -eq 0 -and $w.visual -notin @('TEXT','PAGE_BREAK')){ $empty += $w }
   }
-  for($round=1; $round -le 3 -and $empty.Count -gt 0; $round++){
-    Write-Host ("reconcile round {0}: {1} still empty" -f $round,$empty.Count); Start-Sleep -Seconds 2
-    $still=@()
-    foreach($w in $empty){ $o=Fetch-Widget $w 4; $fetched[$w.id]=$o; if($o.data.widget.data.edges.Count -eq 0){ $still+=$w } }
-    $empty=$still
-  }
 } finally { try{ $script:ws.Dispose() }catch{} }
+$completeness = Get-ExtractionCompleteness $script:outcomes $script:fetchPlan `
+                  @{ maxTotalWaitSec=$MaxTotalWaitSec; totalWaitedMs=$script:totalWaitedMs; budgetExhausted=$script:budgetExhausted }
 
 # 6. normalize + assemble
 $widgetsOut = @(foreach($w in $wids){ Normalize-Widget $w $fetched[$w.id] })
@@ -521,6 +922,8 @@ $doc = [ordered]@{
     shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
     widgetCount=$wids.Count; dataWidgets=@($widgetsOut|Where-Object{$_.kind -eq 'data'}).Count
     unitBasis=$unitBasis; warnings=$warnings; providerInventory=$providerInventory; providerFilter=$platFilter
+    extractionComplete=$completeness.extractionComplete; incompleteWidgets=@($completeness.incompleteWidgets)
+    fetchBudget=$completeness.fetchBudget
   }
   report = [ordered]@{
     name=$s.name; subtitle=$s.subtitle; orientation=$s.orientation

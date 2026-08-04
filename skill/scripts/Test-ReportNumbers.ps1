@@ -465,6 +465,18 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
     [void]$violations.Add([ordered]@{ type='credential-leak'; section='(report)'; detail='report contains a Swydo share-key pattern'; snippet=$cm.Value })
   }
 
+  # 5: completeness. A report built on an extraction that could not finish is not publishable, no
+  # matter how cleanly its numbers trace - they may be totals over partial data. Fires ONLY on an
+  # explicit $false, so every facts file written before EXTR-aPatientHarvest-1 (no such key) passes
+  # exactly as it did; this is what makes the gate inert by construction rather than by a flag.
+  if($facts.meta -and ($facts.meta.PSObject.Properties.Name -contains 'extractionComplete') -and ($facts.meta.extractionComplete -eq $false)){
+    $incIds = @(@($facts.meta.incompleteWidgets) | ForEach-Object { [string]$_ } | Where-Object { $_ })
+    $sn = ($incIds -join ',')
+    if($sn.Length -gt 80){ $sn = $sn.Substring(0,80) + '...' }
+    [void]$violations.Add([ordered]@{ type='incomplete-extraction'; section='(facts)'
+      detail=("facts declare extractionComplete=false (" + @($incIds).Count + " widget(s) incomplete) - re-extract before publishing"); snippet=$sn })
+  }
+
   return [ordered]@{ measuresChecked=$measured; traced=$traced; violations=$violations }
 }
 

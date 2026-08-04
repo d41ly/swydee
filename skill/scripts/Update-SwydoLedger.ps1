@@ -185,6 +185,13 @@ if($tf.meta.trendFactsVersion -ne 1){ throw "not a trend-facts file (need meta.t
 # merging it would silently accumulate a partial ledger a later trend report reads as complete.
 $tfFilter = @(@($tf.meta.providerFilter) | Where-Object { $_ })   # @() when absent/null (avoid @($null)=[null])
 if($tfFilter.Count -gt 0){ throw ("refusing: these trend facts are --platform-filtered (" + ($tfFilter -join ',') + ") - the per-client ledger must reflect the FULL account. Re-run trend sync without a platform filter.") }
+# Same shape, same reason, different cause: an incomplete pull merged into the cumulative ledger would
+# freeze partial months a later trend report reads as settled history (EXTR-aPatientHarvest-1 S16).
+# Explicit $false only - trend facts written before that unit carry no such key and still merge.
+if(($tf.meta.PSObject.Properties.Name -contains 'extractionComplete') -and ($tf.meta.extractionComplete -eq $false)){
+  $tfInc = @(@($tf.meta.incompleteWidgets) | Where-Object { $_ })
+  throw ("refusing: these trend facts came from an INCOMPLETE extraction (" + $tfInc.Count + " widget(s) unresolved) - merging them would freeze partial months into the cumulative ledger. Re-run the trend pull.")
+}
 
 # Canonical client folder by stable clientId via the registry (same resolution as Manage -Store, so a report
 # pull and a trend pull for the same client land in ONE folder). Reused via -DefineOnly dot-source of Manage.
