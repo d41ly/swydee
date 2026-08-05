@@ -454,7 +454,9 @@ foreach($bad in 'value','basisVersion','synthesizedFrom'){ A (-not ($h9.canonica
 # ANLZ-aUniformLattice-6 (P5) bumped this 2 -> 3 under its disclosed waiver. U9 D6's rule is that the
 # marker names WHICH canonical algorithm produced the facts and moves on ANY algorithm change, global
 # and non-flip-conditional -- so the pin follows the bump rather than the bump breaking the pin.
-A ($r9.facts.meta.canonicalVersion -eq 3 -and $r9.facts.meta.factsVersion -eq 1) "e2e14/U9: meta.canonicalVersion=3 after the P5 waiver (D6 global bump), factsVersion=1"
+# factsVersion 1 -> 2 by ANLZ-aUniformLattice-8: the first SUBTRACTIVE change to the facts shape
+# (valuesById became collisions-only), so the marker that names the shape has to move.
+A ($r9.facts.meta.canonicalVersion -eq 3 -and $r9.facts.meta.factsVersion -eq 2) "e2e14/U9: canonicalVersion=3 (P5 waiver), factsVersion=2 (the lean-facts subtraction)"
 A ($r9.facts.meta.matrixVersion -eq 1) "e2e14: meta.matrixVersion=1 names the matrix algorithm separately"
 # 15. GAP_NO_ACCOUNT_TOTAL shape: info + fid + evidence.metrics
 $g15 = GetFind $r8.facts 'GAP_NO_ACCOUNT_TOTAL'
@@ -1237,13 +1239,18 @@ $p4a = RunAnalyze (MkDoc @(
   (DW 'p4-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Clicks' 'google-adwords:clicks' $null)) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 900);Clicks=(Cell 90)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 500);Clicks=(Cell 50)}),(DRow 'data' 'B' 'Campaign' @{Cost=(Cell 400);Clicks=(Cell 40)})))
 ))
 $bd = @($p4a.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
-A (@($bd.PSObject.Properties.Name) -join ',' -eq 'widgetId,dimensions,metricNames,metricIds,rowCount,shown,rowKeyBasis,rows') "P4 AC7 breakdown key order pinned, metricIds adjacent to metricNames"
+A (@($bd.PSObject.Properties.Name) -join ',' -eq 'widgetId,dimensions,metricNames,metricIds,rowCount,shown,rowKeyBasis,valuesByIdScope,rows') "P4 AC7 breakdown key order pinned; valuesByIdScope sits beside rowKeyBasis"
 A (@($bd.metricIds).Count -eq @($bd.metricNames).Count) "P4 AC2 metricIds is index-aligned with metricNames"
 A ($bd.metricIds[0] -eq 'google-adwords:cost_micros' -and $bd.metricIds[1] -eq 'google-adwords:clicks') "P4 AC2 metricIds holds the ids in metric order"
 $r0 = $bd.rows[0]
 A (@($r0.PSObject.Properties.Name) -join ',' -eq 'label,values,valuesById') "P4 AC7 row key order: label,values,valuesById (no null rowKey)"
-A ($r0.values.'Cost'.display -eq $r0.valuesById.'google-adwords:cost_micros'.display) "P4 AC3 the two maps agree for a unique display name"
-A (@($r0.valuesById.PSObject.Properties.Name).Count -eq @($r0.values.PSObject.Properties.Name).Count) "P4 AC3 same entry count when no name collides"
+# SUPERSEDED by ANLZ-aUniformLattice-8. P4 mirrored every cell into valuesById, which measured 41% of
+# the whole facts document and was read by nothing. The map is now COLLISIONS-ONLY: a unique display
+# name is addressed through the index-aligned metricIds[]/metricNames[] arrays, so its id map is empty.
+A (@($r0.valuesById.PSObject.Properties.Name | Where-Object { $_ }).Count -eq 0) "L8 AC1 no colliding name => valuesById is EMPTY (the duplication is gone)"
+A ($bd.valuesByIdScope -eq 'collisions-only') "L8 AC1 valuesByIdScope states the rule, so an empty map is not ambiguous"
+A ($r0.values.'Cost'.display) "L8 AC3 values still carries the cell, keyed by display name"
+A ($bd.metricIds[0] -eq 'google-adwords:cost_micros' -and $bd.metricNames[0] -eq 'Cost') "L8 D1 index-aligned arrays are the addressing path for a unique name"
 A ($bd.rowKeyBasis -eq 'absent') "P4 AC5 a fixture without extractor rowKeys reports rowKeyBasis=absent"
 A ($null -eq $r0.rowKey) "P4 AC5/F4 rowKey is OMITTED, never emitted as null"
 
@@ -1361,6 +1368,45 @@ A ($null -eq $fc3.conflict -or (@($fc3.conflict.losingWidgetIds) -notcontains 'w
 # V2: the two dedup terms that had no behavioural pin.
 A ((Get-AggregationClass 'x:frequency' $null) -eq 'dedup-nonsummable') "V2 frequency => dedup-nonsummable"
 A ((Get-AggregationClass 'x:unique_visitors' $null) -eq 'dedup-nonsummable') "V2 unique_visitors => dedup-nonsummable"
+Write-Host "== ANLZ-aUniformLattice-8: lean facts, collisions-only valuesById =="
+# AC2: a COLLIDED display name is the one case values cannot express, so the id map keeps it.
+$l8Mets = @((Met 'Clicks' 'google-adwords:clicks' $null),(Met 'Clicks' 'facebook-ads:clicks' $null))
+$l8Mets[0] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Clicks' -Force
+$l8Mets[1] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Clicks [facebook-ads:clicks]' -Force
+function L8Row($kind,$label,$v1,$v2){
+  $dm=[ordered]@{}; $dm['Campaign']=$label
+  $mm=[ordered]@{}; $mm['Clicks']=(Cell $v1); $mm['Clicks [facebook-ads:clicks]']=(Cell $v2)
+  [pscustomobject]@{ kind=$kind; dimensions=[pscustomobject]$dm; metrics=[pscustomobject]$mm }
+}
+$l8a = RunAnalyze (MkDoc @((DW 'l8-dup' 'google-adwords' 'Google Ads' @('Campaign') $l8Mets @((L8Row 'total' 'T' 300 700),(L8Row 'data' 'A' 100 250),(L8Row 'data' 'B' 200 450)))))
+$b8 = @($l8a.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+$rA = @($b8.rows | Where-Object { $_.label -eq 'A' })[0]
+A (@($rA.values.PSObject.Properties.Name).Count -eq 1) "L8 AC2 values still collapses the collided name to one entry"
+A (@($rA.valuesById.PSObject.Properties.Name).Count -eq 2) "L8 AC2 valuesById KEEPS both collided ids"
+A ($rA.valuesById.'facebook-ads:clicks'.display -eq '250') "L8 AC2 each collided id carries its OWN value"
+A ($b8.valuesByIdScope -eq 'collisions-only') "L8 AC2 scope marker present on a collided block too"
+
+# D1-2 (review): the id read must be INDEPENDENT of the display-name read. When the FIRST colliding
+# metric's column is null, the old shared scalar guard dropped the second metric's value entirely --
+# losing data in exactly the case the map exists for.
+$l8b = RunAnalyze (MkDoc @((DW 'l8-null1' 'google-adwords' 'Google Ads' @('Campaign') $l8Mets @((L8Row 'total' 'T' 300 700),(L8Row 'data' 'A' $null 250)))))
+$b8b = @($l8b.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+$rN = @($b8b.rows | Where-Object { $_.label -eq 'A' })[0]
+A (@($rN.values.PSObject.Properties.Name | Where-Object { $_ }).Count -eq 0) "L8 D1-2 values drops the row (its display-name read is null) -- unchanged behaviour"
+A ($rN.valuesById.'facebook-ads:clicks'.display -eq '250') "L8 D1-2 valuesById STILL recovers the second metric: the id read no longer shares the name guard"
+
+# AC1: the no-collision case is where the 129,815 bytes came from, and it is now empty.
+$l8c = RunAnalyze (MkDoc @((DW 'l8-uniq' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Clicks' 'google-adwords:clicks' $null)) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 900);Clicks=(Cell 90)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 500);Clicks=(Cell 50)})))))
+$b8c = @($l8c.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+foreach($rr in $b8c.rows){ A (@($rr.valuesById.PSObject.Properties.Name | Where-Object { $_ }).Count -eq 0) "L8 AC1 unique names => empty valuesById on every row" }
+
+# AC7: the size pin. No metric id may appear as a ROW-level key on a no-collision block, so a future
+# change cannot silently re-inflate the document back to duplicating every cell.
+$rowsJson = ($b8c.rows | ConvertTo-Json -Depth 20 -Compress)
+foreach($mid in @($b8c.metricIds)){
+  A ($rowsJson -notmatch [regex]::Escape('"' + $mid + '":{')) "L8 AC7 no-collision rows carry no id-keyed cell for '$mid' (re-inflation guard)"
+}
+A ($l8c.facts.meta.factsVersion -eq 2) "L8 AC5 factsVersion is 2"
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

@@ -34,6 +34,13 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 ### 3. Decide single-pass vs fan-out
 - Count distinct `meta.providers[].category`. **Single-pass** if 1 category (and not `--thorough`). **Fan-out** if ≥ 2 distinct categories (or `--thorough`); `--fast` forces single-pass.
 - Fan-out: write one facts-slice file per category (the facts subset for that category's platforms) to the out dir, spawn one analyst subagent per category **passing only the slice file path** (never the extraction), plus one cross-cutting agent for portfolio/cross-platform notes; then synthesize. Completeness gate: every `meta.providers` platform appears exactly once in the report.
+- **What to read, and what to skip (ANLZ-aUniformLattice-8).** The facts document carries machine
+  addressing fields alongside the narrative ones. Read `platforms[].headline` and `findings` for
+  numbers, `platforms[].metrics` for coverage, and `breakdowns[].rows[]` `label` + `values` for
+  per-row detail. SKIP `valuesById`, `rowKey`, `rowKeyBasis`, `valuesByIdScope`, `metricIds`,
+  `basis`, `contributingWidgetIds`, `observedOnWidgetIds` and `coverageBasis` - they exist so a
+  future tool can address a cell by id, and carry no narrative content. Spending attention on
+  them costs context and buys nothing.
 - **Coverage (ANLZ-aUniformLattice-6):** each platform carries `platforms[].metrics`, one entry per metric the
   dashboard declares for it. An entry with a `reason` is a metric the tool could NOT give an account-level
   value, and the reason says why (`no-usable-cell`, `incomplete-rows`, `blended-undecomposable`,

@@ -21,6 +21,7 @@ One unit per phase, per F1. Each sub-spec is adversarially reviewed before its c
 | P4 | [-5](spec/2026-08-04-spec-aUniformLattice-5.md) | the addressable second layer | no, dark |
 | P5 | [-6](spec/2026-08-04-spec-aUniformLattice-6.md) | rewire, closer split index, forced disclosure | YES |
 | P6 | WONTDO | rank-3 summing | refused |
+| — | [-8](spec/2026-08-05-spec-aUniformLattice-8.md) | lean facts: valuesById collisions-only, -37% | YES |
 
 P6 is CLOSED. The S14 field probe ran against a live report on 2026-08-05 and proved Swydo exposes no
 row-set completeness signal: `serverRowTotal`, `data.totalCount` and `rows[].isTotalOfShownRows` are

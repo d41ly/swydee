@@ -400,27 +400,38 @@ function Get-Breakdown($w, $cap, $mustLabels){
     $vals=[ordered]@{}
     $valsById=[ordered]@{}
     foreach($m in $mets){
+      # --- values: display-name keyed, byte-for-byte unchanged ---
       $cur=Row-Cur $r $m.name
-      if($null -eq $cur){ continue }   # scalar-guard (echo objects)
-      $cell=[ordered]@{ display=(Format-Metric $m.id $m.unit $cur $cc); type=(Metric-Type $m.id $m.unit $cc) }
-      $cmp=Row-Cmp $r $m.name
-      if($null -ne $cmp){ $cell.hasComparison=$true; $cell.displayPrevious=(Format-Metric $m.id $m.unit $cmp $cc); $d=Get-DeltaPct $cur $cmp; if($null -ne $d){ $cell.delta=(Format-Delta $d) } } else { $cell.hasComparison=$false }
-      $vals[[string]$m.name]=$cell
-      # valuesById reads by P1's cellKey -- the exact key the extractor wrote into rows[].metrics --
-      # so a duplicate display name resolves to each metric's OWN column. `values` above keeps the name
-      # read byte-for-byte, so the two maps DELIBERATELY diverge on a collided name: that divergence is
-      # the whole point of the id map. With no cellKey (schemaVersion 2) and a collided name there is no
-      # way to disambiguate, so the metric is OMITTED rather than given a confidently wrong number.
-      $ck=$null
-      if($m.PSObject.Properties['cellKey'] -and $m.cellKey){ $ck=[string]$m.cellKey }
-      if($null -eq $ck){ if([int]$nameCount[[string]$m.name] -eq 1){ $ck=[string]$m.name } }
-      if($null -ne $ck){
-        $curById=Row-Cur $r $ck
-        if($null -ne $curById){
-          $cellById=[ordered]@{ display=(Format-Metric $m.id $m.unit $curById $cc); type=(Metric-Type $m.id $m.unit $cc) }
-          $cmpById=Row-Cmp $r $ck
-          if($null -ne $cmpById){ $cellById.hasComparison=$true; $cellById.displayPrevious=(Format-Metric $m.id $m.unit $cmpById $cc); $d2=Get-DeltaPct $curById $cmpById; if($null -ne $d2){ $cellById.delta=(Format-Delta $d2) } } else { $cellById.hasComparison=$false }
-          $valsById[[string]$m.id]=$cellById
+      if($null -ne $cur){
+        $cell=[ordered]@{ display=(Format-Metric $m.id $m.unit $cur $cc); type=(Metric-Type $m.id $m.unit $cc) }
+        $cmp=Row-Cmp $r $m.name
+        if($null -ne $cmp){ $cell.hasComparison=$true; $cell.displayPrevious=(Format-Metric $m.id $m.unit $cmp $cc); $d=Get-DeltaPct $cur $cmp; if($null -ne $d){ $cell.delta=(Format-Delta $d) } } else { $cell.hasComparison=$false }
+        $vals[[string]$m.name]=$cell
+      }
+      # --- valuesById: ANLZ-aUniformLattice-8, COLLISIONS ONLY ---
+      # A metric whose display name is UNIQUE is already addressable by id without any per-row payload:
+      # metricIds[] and metricNames[] are index-aligned, so index -> name -> values[name]. Duplicating
+      # every cell to provide that was 41% of the whole facts document and read by nothing. The map is
+      # kept ONLY for a collided display name, which is the one case `values` cannot express because its
+      # second write overwrites the first.
+      #
+      # This read is INDEPENDENT of the `values` read above, deliberately. The old code shared one
+      # scalar guard on $cur (the display-NAME cell), so when the first colliding metric's column was
+      # null the second metric's value was dropped even though its own cellKey resolved -- losing data in
+      # exactly the case the map exists for.
+      if([int]$nameCount[[string]$m.name] -gt 1){
+        $ck=$null
+        if($m.PSObject.Properties['cellKey'] -and $m.cellKey){ $ck=[string]$m.cellKey }
+        # No cellKey (schemaVersion 2) and a collided name => no way to disambiguate. OMIT rather than
+        # publish a confidently wrong number under the right id.
+        if($null -ne $ck){
+          $curById=Row-Cur $r $ck
+          if($null -ne $curById){
+            $cellById=[ordered]@{ display=(Format-Metric $m.id $m.unit $curById $cc); type=(Metric-Type $m.id $m.unit $cc) }
+            $cmpById=Row-Cmp $r $ck
+            if($null -ne $cmpById){ $cellById.hasComparison=$true; $cellById.displayPrevious=(Format-Metric $m.id $m.unit $cmpById $cc); $d2=Get-DeltaPct $curById $cmpById; if($null -ne $d2){ $cellById.delta=(Format-Delta $d2) } } else { $cellById.hasComparison=$false }
+            $valsById[[string]$m.id]=$cellById
+          }
         }
       }
     }
@@ -432,7 +443,7 @@ function Get-Breakdown($w, $cap, $mustLabels){
   }
   # Derived from the EMITTED rows, not from meta.schemaVersion: Get-Breakdown never receives the
   # document, and under -DefineOnly (how every unit test calls it) no $doc exists to read.
-  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{$_.name}); metricIds=@($mets|ForEach-Object{[string]$_.id}); rowCount=$detail.Count; shown=$rows.Count; rowKeyBasis=$(if($sawRowKey){'extractor'}else{'absent'}); rows=$rows }
+  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{$_.name}); metricIds=@($mets|ForEach-Object{[string]$_.id}); rowCount=$detail.Count; shown=$rows.Count; rowKeyBasis=$(if($sawRowKey){'extractor'}else{'absent'}); valuesByIdScope=$(if(@($mets).Count -gt 0){'collisions-only'}else{'none'}); rows=$rows }
   if($detail.Count -gt $rows.Count){ $out.note="showing top $($rows.Count) of $($detail.Count) rows" }
   return $out
 }
@@ -1262,7 +1273,7 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 }
 $facts=[ordered]@{
   meta=[ordered]@{
-    tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=3; matrixVersion=1; computedFrom=$doc.meta.tool
+    tool='Analyze-SwydoReport.ps1'; factsVersion=2; canonicalVersion=3; matrixVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence; period=$periodMeta
