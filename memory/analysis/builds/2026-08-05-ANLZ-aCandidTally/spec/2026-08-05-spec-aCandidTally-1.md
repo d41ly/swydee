@@ -1,6 +1,6 @@
 # ANLZ-aCandidTally-1 — cell-key identity for metric lookups
 
-**Status:** SPECCED · rev-5 · 2026-08-05 · node a · Tier-2 · base 39def66f · review wf_572b24b3-f3c · survey wf_0039abb6-748
+**Status:** SPECCED · rev-6 · 2026-08-05 · node a · Tier-2 · base 39def66f · ratified 2026-08-05 · review wf_572b24b3-f3c · survey wf_0039abb6-748
 
 > **REBASE NOTE (2026-08-05).** rev-1 through rev-4 were written and built against `6920f017`. The
 > whole ANLZ-aUniformLattice program landed mid-unit, so the base moved to `39def66` and the body
@@ -66,6 +66,14 @@ happens to be the first holder of its display name.**
   and state in `skill/report-template.md` that `valuesById` is deliberately not quotable, so a later
   session does not "fix" the omission without doing the closer half.
 - **S13.** Tests, per §6 and §7.
+- **S14.** One info-severity per-provider roll-up naming the metric ids whose display names were
+  ambiguous, plus a count as a string. It copies the shape of the shipped
+  `GAP_HEADLINE_SOURCE_CHANGED`: ids and a count, never a metric value, which is why that finding was
+  ratified as closer-safe. S9 alone leaves the reader no visible signal that the repair fired.
+- **S15.** The trend facts document echoes the source `canonicalVersion` as one additive `meta` key.
+  `-PeriodKpiFacts` is a file path, so a trend run can consume a pre-repair archive and today has no
+  way to tell. The trend counter stays independent of the report counter, stated in `### Migration`
+  so a future reader does not "align" them.
 
 ## 3. Non-goals (OUT)
 
@@ -147,6 +155,17 @@ a key-resolution change under an unchanged reduce moves the marker of every laye
 `meta.factsVersion` stays 2. It names the facts SHAPE and moves on a subtractive change; everything
 here is additive. This is a direct consequence of withdrawing rev-3's S5, since renaming published
 `values` keys would have been a shape change.
+
+No `meta.breakdownVersion` is minted (OD-3, owner). S7 changes a published breakdown display string,
+and a dimensioned widget with no total row feeds neither the headline nor the matrix, so that flip is
+reachable with both moved markers untouched. That is an ACCEPTED, UNMARKED residual: a consumer
+diffing two facts documents cannot attribute a breakdown-only change to this unit from the markers
+alone. It is pinned by AC18 rather than left latent, and the marker taxonomy keeps three names rather
+than four.
+
+The trend facts document gains `meta.sourceCanonicalVersion` (S15), echoing the report document it
+was handed. Trend `meta.factsVersion` stays 1 and is a SEPARATE numbering line from the report's:
+the two counters have never been aligned and must not be.
 
 Extraction `meta.schemaVersion` stays 3. Note a structural trap: `Test-Extractor.ps1:154-158` regexes
 the extractor SOURCE for `schemaVersion=\d+` and asserts exactly two matches. S1 moves functions out
@@ -244,6 +263,15 @@ criterion instead, so the drop is asserted rather than latent.
 - **AC16.** When a trend RECON pass runs over repaired facts, a metric that previously had no
   headline cell is reconciled and no statement carries a blank label.
 - **AC17.** When the full bar runs, every leg is green and no untouched suite's count moves.
+- **AC18.** When a dimensioned no-total widget with a collided display name is analyzed, its
+  breakdown cell changes owner while `canonicalVersion`, `matrixVersion` and `factsVersion` all stay
+  put. This pins the unmarked breakdown flip that OD-3 accepted as a residual.
+- **AC19.** When a report carries an ambiguous display name, one info-severity roll-up names the
+  affected metric ids, and `Build-FactIndex` over that document yields no candidate equal to any
+  superseded value.
+- **AC20.** When the trend analyzer is handed a facts document, the trend facts carry
+  `meta.sourceCanonicalVersion` equal to the source document's `canonicalVersion`, and the trend's
+  own `factsVersion` is unchanged at 1.
 
 ## 7. Gates
 
@@ -265,20 +293,25 @@ path rather than a zero that is never written.
   roll-up naming the ambiguous metric ids plus a count, copying the shape of the shipped
   `GAP_HEADLINE_SOURCE_CHANGED`, which is ids-and-count only and was ratified as safe precisely
   because it carries no metric value to trace.
+  RESOLVED (owner, 2026-08-05): yes. Built as S14.
 - **OD-2 — does the trend facts document echo the source `canonicalVersion`?** `-PeriodKpiFacts` is a
   file path, so a trend run can consume a pre-repair archive and cannot tell. Recommendation: yes,
   one additive key, plus a spec sentence that the trend counter is independent of the report counter
   so a future reader does not "align" them.
+  RESOLVED (owner, 2026-08-05): yes. Built as S15.
 - **OD-3 — is a breakdown-only flip allowed to ship under an unchanged marker set?** S7 changes a
   published breakdown display string, and a dimensioned widget with no total row feeds neither the
   headline nor the matrix, so that flip is reachable with both moved markers untouched. Options are
   to mint `meta.breakdownVersion` or to record it as an accepted residual. This is the
   weakest-supported item in the spec and I have no strong recommendation.
+  RESOLVED (owner, 2026-08-05): NO. No marker is minted; the unmarked breakdown flip is an accepted
+  residual, pinned by AC18 so it is asserted rather than latent.
 - **OD-4 — does this unit fix S6 and S7 at all?** Both are defects in code that landed hours ago from
   a different unit, not in the lookup path this unit was scoped to. They are in scope only because
   repairing the lookups without them leaves the breakdown cell internally inconsistent.
   Recommendation: keep them here, because splitting them out means two units touching
   `Analyze-SwydoReport.ps1` in sequence for one coherent repair.
+  RESOLVED (owner, 2026-08-05): fix them here. S6 and S7 stay in scope.
 
 ## 9. Revision log
 
@@ -287,6 +320,9 @@ path rather than a zero that is never written.
 - rev-3 · 2026-08-05 · folded review `wf_572b24b3-f3c` as an AMENDMENTS block, A1 through A14, from
   28 confirmed findings against 16 refuted. F5 opened and resolved.
 - rev-4 · 2026-08-05 · built and landed on the branch against `6920f017`. Gates green there.
+- rev-6 · 2026-08-05 · owner resolved OD-1 through OD-4. OD-1 and OD-2 become S14 and S15; OD-3 is
+  declined, so the unmarked breakdown flip is an accepted residual pinned by AC18; OD-4 keeps the two
+  freshly-landed defects in scope. AC18 through AC20 added.
 - rev-5 · 2026-08-05 · rebased onto `39def66f` after ANLZ-aUniformLattice landed mid-unit. Body
   rewritten against the new base from survey `wf_0039abb6-748`. rev-3's AMENDMENTS retired per the
   rebase note. S1 dropped as landed upstream; rev-3's S5 withdrawn; the matrix, the breakdown cell
