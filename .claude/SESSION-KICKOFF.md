@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T17:34:28+03:00 @ 3bf65010cfc8cc8caaf52e3e620d09a4573a70ae
+last-audit: 2026-08-05T18:40:43+03:00 @ 7f1bee1fe6279eebaa0ae3ba61306f13232b47f2
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -98,7 +98,9 @@ agent-instructions wiring (+ self-test) · agent-cap self-test · check-wiring s
 run-gates canary.
 
 **From PowerShell, `bash` is WSL, not git-bash** — a different git against a `/mnt/c` mount. Always
-spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
+spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`, or run `.\tools\Run-Gates.ps1`,
+which resolves git-bash by absolute path for exactly this reason (ORCH-aUniformLattice-1 moved it there
+from the repo root).
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
@@ -164,6 +166,12 @@ true. Keep each to one line; link out for detail.*
 - Hardened scripts are reused via `-DefineOnly` dot-sourcing (functions-first pattern) and are
   **never behaviorally modified**; guard captured vars with the `$my*` prefix when dot-sourcing.
 - `@($null).Count -eq 1`: always `@(...)`-wrap collections before `.Count`/indexing.
+- **`PSModulePath` is inherited, so a suite's result used to depend on which shell started the bar.**
+  Under a PowerShell 7 parent the 5.1 children inherited pwsh's module path, never searched their own
+  `v1.0\Modules`, and `Get-FileHash` stopped resolving — `Test-Archive` lost 6 assertions while the
+  identical tree was green from git-bash. `tools/run-ps-suite.sh` now `unset PSModulePath`, so 5.1
+  rebuilds its default. Verified 2026-08-05 green from both parents (ORCH-aUniformLattice-1). Any NEW
+  launcher that spawns `powershell.exe` must do the same, or it reintroduces the split.
 - Swydo orders the lists inside grouped cells **non-deterministically**: three QCU widgets differ
   between ANY two extractions of the same report, including two runs of identical code. A
   byte-comparison of two extractions is therefore only meaningful per-widget and after excluding
