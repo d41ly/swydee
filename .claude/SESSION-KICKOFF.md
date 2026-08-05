@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T23:41:58+03:00 @ 6213a2392b47d9e26c78d892ea27c6397518908c
+last-audit: 2026-08-05T23:53:18+03:00 @ 6213a2392b47d9e26c78d892ea27c6397518908c
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -104,10 +104,11 @@ from the repo root).
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1413 assertions across the 8 suites after ANLZ-aUniformLattice-10 --
+1435 assertions across the 8 suites after ANLZ-aUniformLattice-9 --
 the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 327,
 Analyze 701, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
-Was 1405 after EXTR-aUniformLattice-1 + ANLZ-aCandidTally-1, 1276 after
+Was 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +
+ANLZ-aCandidTally-1, 1276 after
 ANLZ-aUniformLattice-8, and 1064 at adoption.
 
 ### Tier rule
@@ -206,7 +207,18 @@ true. Keep each to one line; link out for detail.*
   extractor now COMPUTES the window, passes it explicitly as `{start,type:FROM}`, and records both in
   `meta.periodResolved`. `referenceCompareDate` is `ComparePeriod!` and cannot be omitted, so the
   fail-closed gate lives in the ANALYZER: `compareBasis='untrusted'` suppresses every comparative
-  field. A sixth disclosed change needs its own MEASURED flip set before it lands.
+  field.
+  The SIXTH is ANLZ-aUniformLattice-9, marked by **`meta.factsVersion` 3->4**: row-level findings
+  gained `dimension`, `metricId` and `scope`, and their STATEMENT text changed. A row share used to
+  be a share of whatever its widget totalled, so `'CONTENT' is 100% of Impressions (617 of 617)` read
+  as "Google is all Display" when 617 is 3% of the account. Statements now name the cut
+  (`by Publisher platform / Placement`), join every dimension value in the row label, and disclose
+  the denominator when the widget total is not the account total. MEASURED flip set on the live QCU
+  report: 34 of 78 finding statements changed (ANOM_NEW 13, ANOM_CONCENTRATION 11,
+  ANOM_SEGMENT_DIVERGENCE 8, ANOM_EFFORT_NO_RESULT 2), 4 sub-scope and 1 over-scope disclosure
+  added, finding COUNT unchanged at 78, and **0 headline cells changed** - no number moved, only its
+  labelling and denominator disclosure. `canonicalVersion` and `matrixVersion` did not move.
+  A seventh disclosed change needs its own MEASURED flip set before it lands.
 - Every write path keeps its **fail-closed credential gate**; only `ConvertTo-SwydoTrendFacts`
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the

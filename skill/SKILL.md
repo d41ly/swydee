@@ -46,7 +46,15 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
   number is NOT quotable at row level. A cell whose display name was ambiguous carries
   `canonical.keyBasis` and is named in the info finding `GAP_METRIC_NAME_AMBIGUOUS`, which lists ids
   and a count and no values.
-  SKIP `valuesById`, `rowKey`, `rowKeyBasis`, `valuesByIdScope`, `metricIds`,
+  **Row findings (ANLZ-aUniformLattice-9).** Every row-level anomaly carries `dimension` (the cut it
+  measures, e.g. `Publisher platform / Placement`) and `metricId`. Its statement names that cut, so
+  two findings with the same row label are distinguishable rather than contradictory. When the
+  widget's total for that metric is not the account total, the statement carries a scope clause —
+  `within a N% subset of <Platform> <metric>` or `against a widget total N.Nx the account <metric>`
+  — and `scope` holds the same numbers. **That clause is load-bearing: never strip it when moving
+  the statement into prose.** Without it, `'CONTENT' is 100% of Impressions (617 of 617)` reads as
+  "this platform is all Display" when 617 is 3% of the account.
+  SKIP `valuesById`, `rowKey`, `rowKeyBasis`, `valuesByIdScope`, `metricIds`, `scope`,
   `basis`, `contributingWidgetIds`, `observedOnWidgetIds` and `coverageBasis` - they exist so a
   future tool can address a cell by id, and carry no narrative content. Spending attention on
   them costs context and buys nothing.
@@ -130,6 +138,8 @@ script's functions and runs nothing, and is how the suites and any reusing calle
 | `-WinLossPct <n>` | `10.0` | tuning the win/loss delta threshold |
 | `-SmallN <n>` | `30` | tuning when a finding is tagged `confidence='low'` |
 | `-BrandSharePct <n>` | `25.0` | tuning the brand-baseline dominance gate |
+| `-ScopeFullPct <n>` | `0.95` | tuning when a row finding's widget total counts as the full account total |
+| `-ScopeOverPct <n>` | `1.05` | tuning when a widget total is treated as EXCEEDING the account total (a cross-tab) |
 | `-NotesFile <path>` | none | supplying client context notes from a file |
 | `-DefineOnly` | off | loading the functions without running |
 

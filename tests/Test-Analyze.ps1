@@ -459,7 +459,8 @@ foreach($bad in 'value','basisVersion','synthesizedFrom'){ A (-not ($h9.canonica
 # MERGED PIN: four disclosed changes have now moved a marker. canonicalVersion 4 = P5 waiver then
 # the aCandidTally cell-key waiver; matrixVersion 2 = the matrix reads by resolved key;
 # factsVersion 3 = the lean-facts subtraction then EXTR-aUniformLattice-1's period strings.
-A ($r9.facts.meta.canonicalVersion -eq 4 -and $r9.facts.meta.factsVersion -eq 3) "e2e14: canonicalVersion=4 (P5 + cell-key waivers), factsVersion=3 (lean facts + proven periods)"
+# factsVersion 4 = ANLZ-aUniformLattice-9 added dimension/metricId/scope to row findings.
+A ($r9.facts.meta.canonicalVersion -eq 4 -and $r9.facts.meta.factsVersion -eq 4) "e2e14: canonicalVersion=4 (P5 + cell-key waivers), factsVersion=4 (lean facts, proven periods, row-scope)"
 A ($r9.facts.meta.matrixVersion -eq 2) "e2e14/aCandidTally: matrixVersion=2 - the matrix reads by resolved key now, so its own marker moves too"
 # 15. GAP_NO_ACCOUNT_TOTAL shape: info + fid + evidence.metrics
 $g15 = GetFind $r8.facts 'GAP_NO_ACCOUNT_TOTAL'
@@ -1618,7 +1619,7 @@ $row21 = @($bd21.rows | Where-Object { $_.label -eq 'A' })[0]
 A (@($row21.valuesById.PSObject.Properties.Name).Count -eq 2) "AC21 a v2 collided pair yields TWO valuesById entries, where it used to yield none"
 A ($row21.valuesById.'google-adwords:clicks'.display -ne $row21.valuesById.'facebook-ads:clicks'.display) "AC21 and the two carry different numbers, each its own"
 A ($row21.valuesById.'facebook-ads:clicks'.display -eq '150') "AC21 the second metric's own row value, not the first's"
-A ($l8c.facts.meta.factsVersion -eq 3) "L8 AC5 factsVersion is 3 (bumped again by EXTR-aUniformLattice-1)"
+A ($l8c.facts.meta.factsVersion -eq 4) "L8 AC5 factsVersion is 4 (bumped again by ANLZ-aUniformLattice-9)"
 Write-Host "== EXTR-aUniformLattice-1: fail closed on an unproven compare window =="
 # D5: the extractor CANNOT decline to send a compare (ComparePeriod! is required, measured at HTTP
 # 400 three ways), so the gate lives here. An untrusted basis must suppress EVERY comparative field.
@@ -1695,13 +1696,97 @@ $fdUnk = CmpFacts $null 100 100 80 55
 A ($fdUnk.meta.compareBasis -eq 'unknown') "ANLZ-10 AC4 a pre-contract extraction reads as 'unknown'"
 A ((NDisc $fdUnk 'previous') -ge 1) "ANLZ-10 AC4 'unknown' compares like 'computed' and is NOT suppressed"
 # AC5: no marker moved - a bug fix inside an existing contract, not a new disclosed change.
-A ($fdC.meta.factsVersion -eq 3 -and $fdC.meta.canonicalVersion -eq 4 -and $fdC.meta.matrixVersion -eq 2) "ANLZ-10 AC5 no version marker moves"
+# ANLZ-10 itself moved nothing; factsVersion has since gone to 4 for ANLZ-9, so this pins the two
+# markers ANLZ-10 owns rather than a number another unit legitimately moved.
+A ($fdC.meta.canonicalVersion -eq 4 -and $fdC.meta.matrixVersion -eq 2) "ANLZ-10 AC5 no canonical/matrix marker moves"
 # AC6 (the left-shift): census the .compare reads. The defect existed for as long as it did because
 # nothing counted them. Count non-comment LINES, not tokens - line 198 alone carries five.
 $anzLines = Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'skill\scripts\Analyze-SwydoReport.ps1')
 $cmpLines = @($anzLines | Where-Object { $_ -match '\.compare\b' -and $_ -notmatch '^\s*#' }).Count
 A ($cmpLines -eq 4) "ANLZ-10 AC6 exactly 4 non-comment lines read .compare (got $cmpLines) - a new read must be gated by compareUntrusted before this pin moves"
 A (@($anzLines | Where-Object { $_ -match 'compareUntrusted' }).Count -ge 6) "ANLZ-10 AC6 the D5 gate has its assignment plus at least four consumers"
+
+# ---- ANLZ-aUniformLattice-9: the row layer answers to the computed platform total ---------------
+Write-Host "== ANLZ-aUniformLattice-9: dimension-qualified, scope-disclosed row findings =="
+# N-dimension row. DRow only does one dimension, so build the multi-dim shape directly.
+function NRow($kind,$dimMap,$mv){
+  $dm=[ordered]@{}; foreach($k in $dimMap.Keys){ $dm[$k]=$dimMap[$k] }
+  $mm=[ordered]@{}; foreach($k in $mv.Keys){ $mm[$k]=$mv[$k] }
+  [pscustomobject]@{ kind=$kind; dimensions=[pscustomobject]$dm; metrics=[pscustomobject]$mm }
+}
+# One concentrated row (>=50% of the widget total) so ANOM_CONCENTRATION always fires; $accTot sets
+# a SECOND zero-dim KPI widget that establishes the canonical account total the row is judged against.
+function ScopeFacts($dims,$rowDims,$rowVal,$widgetTot,$accTot){
+  $ws=@(
+    (DW 'w-brk' 'google-adwords' 'Google Ads' $dims @((Met 'Impressions' 'google-adwords:impressions')) @(
+        (NRow 'total' $rowDims @{Impressions=(Cell $widgetTot)}),
+        (NRow 'data'  $rowDims @{Impressions=(Cell $rowVal)})))
+  )
+  if($accTot){ $ws=@( (DW 'w-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Impressions' 'google-adwords:impressions')) @((KRow @{Impressions=(Cell $accTot)}))) ) + $ws }
+  return (RunAnalyze (MkDoc $ws)).facts
+}
+function ConcFind($facts){ return @(@($facts.findings.anomalies) | Where-Object { $_ -and $_.ruleId -eq 'ANOM_CONCENTRATION' })[0] }
+
+# AC1 + AC8: a 2-dimension row is labelled with BOTH values, and the finding carries the full cut.
+$f9a = ScopeFacts @('Publisher platform','Placement') ([ordered]@{'Publisher platform'='facebook';Placement='feed'}) 900 1000 1000
+$c9a = ConcFind $f9a
+A ($null -ne $c9a) "ANLZ-9 AC1 a 2-dim widget still emits ANOM_CONCENTRATION"
+A ($c9a.statement -match "'facebook / feed'") "ANLZ-9 AC1 the statement joins both dimension values (got: $($c9a.statement))"
+A ($c9a.dimension -eq 'Publisher platform / Placement') "ANLZ-9 AC8 the finding carries the full dimension list"
+A ($c9a.metricId -eq 'google-adwords:impressions') "ANLZ-9 AC8 the finding names the metric its share is computed on"
+# AC1 (second half): the PUBLISHED breakdown label is untouched - Row-Label was wrapped, not changed.
+$bl9 = @(@($f9a.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns | Where-Object { $_.widgetId -eq 'w-brk' })[0]
+A ($null -ne $bl9 -and (@($bl9.rows | Where-Object { $_.label -eq 'facebook' }).Count -ge 1)) "ANLZ-9 AC1 the published rows[].label still carries the FIRST dimension value only"
+# AC7: the force-include still pulls the finding's row into the published breakdown.
+A (@($bl9.rows).Count -ge 1) "ANLZ-9 AC7 a 2-dim finding's row is still force-included into the breakdown"
+
+# AC2: sentinel dimension values are dropped, never joined - no dangling separator, no '(group)'.
+$c9b = ConcFind (ScopeFacts @('Network','Placement') ([ordered]@{Network='SEARCH';Placement='(group)'}) 900 1000 1000)
+A ($c9b.statement -match "'SEARCH'" -and $c9b.statement -notmatch '\(group\)' -and $c9b.statement -notmatch "SEARCH / '") "ANLZ-9 AC2 a '(group)' sentinel is dropped, not joined (got: $($c9b.statement))"
+$c9c = ConcFind (ScopeFacts @('Network','Placement') ([ordered]@{Network='SEARCH';Placement=''}) 900 1000 1000)
+A ($c9c.statement -match "'SEARCH'" -and $c9c.statement -notmatch "SEARCH / ") "ANLZ-9 AC2 a blank dimension value leaves no dangling separator"
+
+# AC3: SUB-SCOPE. Widget totals 617 against a canonical 18321 -> r=0.034 -> '3% subset'.
+$c9d = ConcFind (ScopeFacts @('Network') ([ordered]@{Network='CONTENT'}) 617 617 18321)
+A ($c9d.statement -match 'within a 3% subset of .+ Impressions') "ANLZ-9 AC3 a 3% sub-scope is disclosed in the statement (got: $($c9d.statement))"
+A ($c9d.scope.sharePct -eq 3 -and $c9d.scope.canonicalTotal -eq 18321 -and $c9d.scope.widgetTotal -eq 617) "ANLZ-9 AC3 scope carries the same integer the clause renders"
+
+# AC4: OVER-SCOPE. A cross-tab totalling 1034 against a canonical 236 -> r=4.4 -> disclosed, and it
+# must NOT take the full-scope path (the two-rung ladder blessed exactly this case).
+$c9e = ConcFind (ScopeFacts @('Campaign','Network') ([ordered]@{Campaign='auto';Network='SEARCH'}) 900 1034 236)
+A ($c9e.statement -match 'against a widget total 4\.4x the account Impressions') "ANLZ-9 AC4 an over-scope cross-tab is disclosed (got: $($c9e.statement))"
+A ($c9e.statement -notmatch 'subset') "ANLZ-9 AC4 over-scope does NOT render the sub-scope clause"
+
+# AC5: full scope (r ~ 0.97) => no clause at all.
+$c9f = ConcFind (ScopeFacts @('Network') ([ordered]@{Network='SEARCH'}) 900 970 1000)
+A ($c9f.statement -notmatch 'subset|against a widget total') "ANLZ-9 AC5 a full-scope widget gets no disclosure clause"
+A ($c9f.scope.canonicalTotal -eq 1000) "ANLZ-9 AC5 full scope still records the canonical total it checked"
+
+# AC6: rung 1 - no canonical cell, a zero canonical total, and a basis mismatch all take the
+# undisclosed path. Tested directly on the resolver, because with only the breakdown widget in a
+# document the matrix CORRECTLY derives the account total from that very widget, so an e2e fixture
+# cannot manufacture a missing cell. A null denominator must never become a fabricated one.
+$m9 = Met 'Impressions' 'google-adwords:impressions'
+$sd1 = Get-ScopeDisclosure $null $m9 900 'Google Ads' 'Impressions' $null 'USD'
+A ($sd1.clause -eq '' -and $null -eq $sd1.scope.canonicalTotal) "ANLZ-9 AC6 no canonical view => no clause, null canonicalTotal"
+$canonEmpty = [ordered]@{ 'google-adwords' = [ordered]@{ metrics=[ordered]@{} } }
+$sd2 = Get-ScopeDisclosure $canonEmpty $m9 900 'Google Ads' 'Impressions' $null 'USD'
+A ($sd2.clause -eq '' -and $null -eq $sd2.scope.canonicalTotal) "ANLZ-9 AC6 a platform with no cell for the metric => undisclosed"
+$canonZero = [ordered]@{ 'google-adwords' = [ordered]@{ metrics=[ordered]@{ 'google-adwords:impressions'=[ordered]@{ current=0; unit=$null; currency='USD' } } } }
+$sd3 = Get-ScopeDisclosure $canonZero $m9 900 'Google Ads' 'Impressions' $null 'USD'
+A ($sd3.clause -eq '' -and $null -eq $sd3.scope.canonicalTotal) "ANLZ-9 AC6 a canonical total of zero is never divided by"
+$canonOk = [ordered]@{ 'google-adwords' = [ordered]@{ metrics=[ordered]@{ 'google-adwords:impressions'=[ordered]@{ current=18321; unit=$null; currency='USD' } } } }
+$sd4 = Get-ScopeDisclosure $canonOk $m9 617 'Google Ads' 'Impressions' $null 'USD'
+A ($sd4.scope.sharePct -eq 3 -and $sd4.clause -match 'within a 3% subset of Google Ads Impressions') "ANLZ-9 AC6 the resolver renders the clause with the real platform name"
+$sd5 = Get-ScopeDisclosure $canonOk $m9 617 'Google Ads' 'Impressions' 'currency' 'EUR'
+A ($null -eq $sd5.scope.canonicalTotal) "ANLZ-9 AC6 a unit/currency basis mismatch takes the undisclosed path"
+
+# AC9: exactly one marker moved.
+A ($f9a.meta.factsVersion -eq 4 -and $f9a.meta.canonicalVersion -eq 4 -and $f9a.meta.matrixVersion -eq 2) "ANLZ-9 AC9 factsVersion=4, canonical and matrix unchanged"
+
+# Row-LabelFull unit coverage: the fallback path when every value is a sentinel.
+A ((Row-LabelFull (NRow 'data' ([ordered]@{A='(group)';B='All'}) @{})) -eq '(group)') "ANLZ-9 D3 an all-sentinel row falls back to Row-Label rather than emitting empty"
+A ((Row-LabelFull (NRow 'data' ([ordered]@{A='x';B='y';C='z'}) @{})) -eq 'x / y / z') "ANLZ-9 D3 three dimensions join in order"
 
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})

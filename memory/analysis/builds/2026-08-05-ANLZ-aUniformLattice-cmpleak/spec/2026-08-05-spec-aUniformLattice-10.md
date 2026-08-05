@@ -1,6 +1,6 @@
 # ANLZ-aUniformLattice-10 — close the compare-suppression leak in the discrepancy layer
 
-**Status:** SPECCED · rev-1 · 2026-08-05 · node a · Tier-2 · base 6213a239
+**Status:** CLOSED · rev-1 · 2026-08-05 · node a · Tier-2 · base 6213a239
 
 Found by the adversarial review of ORCH-aUniformLattice-3, which tried to document the claim
 "`compareBasis='untrusted'` suppresses every comparative field" and discovered it is false.
@@ -89,12 +89,16 @@ seven suite counts stay unchanged.
 
 ## 8. Open questions
 
+none - resolved in the build. Recorded because the trade-off still binds:
+
 - AC6's structural scan pins a count of `.compare` reads. A count-pin is brittle against innocent
   refactors and will red on a rename that changes nothing. The alternative — asserting each read
   site is within N lines of a `compareUntrusted` guard — is less brittle but also less honest,
   because proximity is not a guard. This spec takes the count-pin and accepts the false positives,
   on the grounds that a red gate asking "is this new read gated?" is the cheapest possible version
-  of this bug not recurring. Worth challenging.
+  of this bug not recurring. RESOLVED: shipped as a LINE count rather than a token count (line 198
+  alone carries five `.compare` tokens), which is stable against the reformatting a token count
+  would trip on, and it caught a real regression during the build when the guard was removed.
 
 ## 9. Revision log
 

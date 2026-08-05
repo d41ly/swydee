@@ -1,6 +1,6 @@
 # ORCH-aUniformLattice-3 — SKILL.md states the comparison contract
 
-**Status:** SPECCED · rev-2 · 2026-08-05 · node a · Tier-1 · base 6213a239 · depends on ANLZ-aUniformLattice-10
+**Status:** CLOSED · rev-2 · 2026-08-05 · node a · Tier-1 · base 6213a239 · depends on ANLZ-aUniformLattice-10
 
 ## Goal
 

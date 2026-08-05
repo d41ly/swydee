@@ -1,6 +1,6 @@
 # ANLZ-aUniformLattice-9 — the row layer answers to the computed platform total
 
-**Status:** SPECCED · rev-2 · 2026-08-05 · node a · Tier-2 · base 6213a239
+**Status:** CLOSED · rev-3 · 2026-08-05 · node a · Tier-2 · base 6213a239
 
 The uniform per-platform view shipped in `platforms[].metrics` (P1-P5). The headline-driven rules
 read it. The ROW-level rules never got repointed and still reason inside one widget at a time, so a
@@ -154,20 +154,32 @@ green-count contract survives because no assertion is removed.
 
 ## 8. Open questions
 
-- `$ScopeFullPct = 0.95` is a judgement. The live distribution is NOT the clean gap an earlier
+none - both were resolved by building and measuring. Recorded because the reasoning still binds:
+
+- `$ScopeFullPct = 0.95` is a judgement, and the live run CONFIRMED the noise it predicted: The live distribution is NOT the clean gap an earlier
   revision asserted: measured r values are 0.034, 0.68, 0.80, 0.91, ~1.0 and 4.37, so three real
   findings sit between the rungs and WILL gain a sub-scope clause. That is arguably correct — a
   keyword widget covering 68% of account impressions genuinely is a subset — but it means the change
-  is noisier than "fix the 617 case", and the threshold deserves a second look after one live run.
+  is noisier than "fix the 617 case". Measured on the live report: 4 sub-scope and 1 over-scope
+  disclosure across 34 changed statements, which is proportionate. RESOLVED: keep 0.95, revisit only
+  if a real widget lands mid-range and the clause reads as noise rather than as information.
 - Placement of the clause in the statement rather than in `evidence` is a PROSE call, not an
   enforcement one. The closer treats statement and evidence identically (`Test-ReportNumbers.ps1:251`
   buckets both by fid) and its surfacing gate (:425) matches only the fid anchor, never statement
   text. So putting it in the statement buys visibility to a human report writer and nothing
-  mechanical. An earlier revision claimed the closer made it hard to drop; that was wrong.
+  mechanical. An earlier revision claimed the closer made it hard to drop; that was wrong. RESOLVED:
+  the clause stays in the statement, because a human report writer is the reader who needs it and the
+  statement is what they copy from.
 
 ## 9. Revision log
 
 - rev-1 · 2026-08-05 · initial spec, with a D4 dedup rung and a two-rung D2.
+- rev-3 · 2026-08-05 · BUILT and landed. Measured flip set on the live QCU report: 34 of 78
+  finding statements changed (ANOM_NEW 13, ANOM_CONCENTRATION 11, ANOM_SEGMENT_DIVERGENCE 8,
+  ANOM_EFFORT_NO_RESULT 2), 4 sub-scope and 1 over-scope disclosure added, finding count unchanged
+  at 78, and 0 headline cells changed. AC6 moved to resolver unit tests: with only the breakdown
+  widget in a document the matrix correctly derives the account total FROM that widget, so an e2e
+  fixture cannot manufacture a missing cell. Test-Analyze 709 -> 731.
 - rev-2 · 2026-08-05 · adversarial review, 46 standing findings. D4 DELETED (its only measured
   collision is a cross-cut pair the spec's own non-goal protects). D2 gained the over-scope rung
   (live `r = 4.37` was being certified full-scope), a basis check, and a pinned rounding rule. D3
