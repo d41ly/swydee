@@ -795,7 +795,7 @@ function Get-MatrixContributions($dataWidgets){
         providerId=$prov; metricId=[string]$m.id; metric=$m; widgetId=[string]$w.id; documentIndex=$docIdx
         eligible=[bool]$eligible; blended=[bool](Test-Blended $w); hidden=[bool]($w.sectionHidden -eq $true)
         dimensioned=[bool](-not $isKpi); dims=$dims; hasTotalRow=[bool]($null -ne $tr)
-        rank=0; cell=$null; currencyCode=$w.currencyCode
+        rank=0; cell=$null; currencyCode=$w.currencyCode; ord=0
       }
       if($eligible -and $tr){
         $c = $tr.metrics.$($m.name)   # by display NAME, byte-identically to the headline (see D3)
@@ -829,7 +829,12 @@ function Reduce-MatrixCell($group,$periods,$coverageBasis){
   $first=$g[0]; $m=$first.metric
   $aggClass = Get-AggregationClass $m.id $m.unit
   $observedOn=@(@($g | ForEach-Object { $_.widgetId }) | Select-Object -Unique)
-  $ranked=@($g | Where-Object { $_.rank -gt 0 } | Sort-Object @{Expression={[int]$_.rank}}, @{Expression={[int]$_.documentIndex}})
+  # A THIRD sort key: PS 5.1's Sort-Object is not stable, so two contributions with equal (rank,
+  # documentIndex) -- which one widget declaring the same metric id twice produces -- would otherwise
+  # pick an arbitrary winner that can differ between runs on identical input.
+  $ci=-1
+  foreach($gc in $g){ $ci=$ci+1; $gc.ord=$ci }
+  $ranked=@($g | Where-Object { $_.rank -gt 0 } | Sort-Object @{Expression={[int]$_.rank}}, @{Expression={[int]$_.documentIndex}}, @{Expression={[int]$_.ord}})
   $out=[ordered]@{ id=[string]$m.id; metric=[string]$m.name }
   if($ranked.Count -eq 0){
     $basis = Get-CellBasis $m.id $m.unit $first.currencyCode
@@ -841,7 +846,10 @@ function Reduce-MatrixCell($group,$periods,$coverageBasis){
     $out.reason=(Get-MatrixReason $g $aggClass)
     return $out
   }
-  $win=$ranked[0]; $c=$win.cell; $cc=$win.currencyCode
+  # Identity comes from the WINNER, not from $g[0]: when one widget declares the same metric id twice
+  # under different display names, taking the name from $g[0] and the value from the winner labels the
+  # cell with one column's name and the other column's number.
+  $win=$ranked[0]; $c=$win.cell; $cc=$win.currencyCode; $m=$win.metric
   $delta = Get-DeltaPct $c.current $c.compare
   $dispCur = Format-Metric $m.id $m.unit $c.current $cc
   $out.current=$c.current; $out.previous=$c.compare; $out.deltaPct=$delta
@@ -860,12 +868,17 @@ function Reduce-MatrixCell($group,$periods,$coverageBasis){
   $out.coverageBasis=$coverageBasis; $out.period=$periods.current
   # A disagreement keeps the winner's VALUE and records the losers by id only -- never a losing display
   # string (U9 D4/FP-3). Basis mismatch is reported ahead of same-rank because it is the stronger claim.
-  $losers=@($ranked | Select-Object -Skip 1)
+  # A conflict is only recorded when there is something to disagree ABOUT. Two cloned KPI cards carrying
+  # the SAME number are an ordinary report layout, not a discrepancy, and claiming otherwise in facts is
+  # the kind of false signal U9 D4 warns teaches readers to discount the channel.
+  $losers=@($ranked | Select-Object -Skip 1 | Where-Object { $_.widgetId -ne $win.widgetId })
   if($losers.Count -gt 0){
     $offBasis=@($losers | Where-Object { (Get-BasisVersion $m.id $m.unit $_.currencyCode) -ne $out.basis.basisVersion })
-    $why = $(if($offBasis.Count -gt 0){ 'basis-mismatch' } else { 'same-rank-disagreement' })
-    $pool = $(if($offBasis.Count -gt 0){ $offBasis } else { @($losers | Where-Object { [int]$_.rank -eq [int]$win.rank }) })
-    if(@($pool).Count -gt 0){
+    $sameRankDiff=@($losers | Where-Object { ([int]$_.rank -eq [int]$win.rank) -and ($null -ne $_.cell) -and ([double]$_.cell.current -ne [double]$c.current) })
+    $why=$null; $pool=@()
+    if($offBasis.Count -gt 0){ $why='basis-mismatch'; $pool=$offBasis }
+    elseif($sameRankDiff.Count -gt 0){ $why='same-rank-disagreement'; $pool=$sameRankDiff }
+    if($why -and @($pool).Count -gt 0){
       $out.conflict=[ordered]@{ losingWidgetIds=@(@($pool | ForEach-Object { $_.widgetId }) | Select-Object -Unique); reason=$why }
     }
   }

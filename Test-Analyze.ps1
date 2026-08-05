@@ -1157,7 +1157,7 @@ $c3 = Mx $p3b.facts 'google-adwords' 'google-adwords:impressions'
 A ($c3.reason -eq 'incomplete-rows') "P3 AC5 dimensioned no-total summable => incomplete-rows (the permanent rank-3 stub)"
 A ($null -eq $c3.current -and $null -eq $c3.displayCurrent -and $null -eq $c3.method) "P3 AC5 a reason cell carries no value and no method"
 A (@($c3.contributingWidgetIds).Count -eq 0 -and (@($c3.observedOnWidgetIds) -contains 'p3-nototal')) "P3 AC5 a valueless cell still points at its cause"
-A ($null -eq (Mx $p3b.facts 'google-adwords' 'google-adwords:impressions').value) "P3 AC5b no cell carries both a value and a reason"
+A ($null -eq (Mx $p3b.facts 'google-adwords' 'google-adwords:impressions').current) "P3 AC5b no cell carries both a value and a reason"
 
 # AC5c: declared metric whose total-row cell is a non-numeric echo object => no-usable-cell.
 $echo = [pscustomobject]@{ campaign_name='Alpha' }
@@ -1280,6 +1280,7 @@ $p4c = RunAnalyze (MkDoc @(
 ))
 $bd3 = @($p4c.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
 $rd3 = @($bd3.rows | Where-Object { $_.label -eq 'A' })[0]
+A (@($rd3.PSObject.Properties.Name) -contains 'valuesById') "P4 AC4 v2 valuesById is EMITTED (an omitted key would pass the emptiness test vacuously)"
 A (@($rd3.valuesById.PSObject.Properties.Name | Where-Object { $_ }).Count -eq 0) "P4 AC4 v2 + collided name => the metric is OMITTED from valuesById, never guessed"
 A ($null -eq $rd3.valuesById.'google-adwords:clicks' -and $null -eq $rd3.valuesById.'facebook-ads:clicks') "P4 AC4 v2 neither colliding id is addressable, so no wrong number is published"
 A (@($rd3.values.PSObject.Properties.Name).Count -eq 1) "P4 AC4 v2 values still carries the collapsed single entry"
@@ -1329,6 +1330,37 @@ $p5d = RunAnalyze (MkDoc @(
 ))
 A (-not (HasFind $p5d.facts 'GAP_NO_ACCOUNT_TOTAL')) "P5 AC6 a fully-covered platform emits no gap, exactly as before"
 A ((Hl $p5d.facts 'google-adwords' 'google-adwords:clicks').displayCurrent -eq '42') "P5 AC6 headline values are untouched by the waiver"
+Write-Host "== final-review fixes: matrix conflict honesty and classifier coverage =="
+# UL-3: two cloned KPI cards carrying the SAME number are an ordinary layout, not a discrepancy.
+$fx1 = RunAnalyze (MkDoc @(
+  (DW 'clone-a' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100 80)}))),
+  (DW 'clone-b' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100 80)})))
+))
+$fc1 = Mx $fx1.facts 'google-adwords' 'google-adwords:clicks'
+A ($fc1.current -eq 100) "UL-3 cloned agreeing KPI cards still yield the winner's value"
+A ($null -eq $fc1.conflict) "UL-3 agreeing sources record NO conflict (a false disagreement is a false signal)"
+# and a real disagreement still does
+$fx2 = RunAnalyze (MkDoc @(
+  (DW 'dis-a' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100)}))),
+  (DW 'dis-b' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 250)})))
+))
+A ((Mx $fx2.facts 'google-adwords' 'google-adwords:clicks').conflict.reason -eq 'same-rank-disagreement') "UL-3 a REAL value disagreement still records the conflict"
+
+# UL-2: one widget declaring the same metric id twice must not label the cell with one column's name
+# and the other column's number, and must never name itself as its own loser.
+$dupIdMets = @((Met 'Spend' 'google-adwords:cost_micros' 'micros'),(Met 'Cost' 'google-adwords:cost_micros' 'micros'))
+$dupIdMets[0] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Spend' -Force
+$dupIdMets[1] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Cost' -Force
+$dupRow=[pscustomobject]@{ kind='data'; metrics=[pscustomobject]([ordered]@{ Spend=(Cell 1000000); Cost=(Cell 7000000) }) }
+$fx3 = RunAnalyze (MkDoc @((DW 'w-dup-id' 'google-adwords' 'Google Ads' @() $dupIdMets @($dupRow))))
+$fc3 = Mx $fx3.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($null -ne $fc3) "UL-2 a widget declaring one metric id twice still yields exactly one cell"
+A (($fc3.metric -eq 'Spend' -and $fc3.current -eq 1000000) -or ($fc3.metric -eq 'Cost' -and $fc3.current -eq 7000000)) "UL-2 the cell's NAME and VALUE come from the same contribution"
+A ($null -eq $fc3.conflict -or (@($fc3.conflict.losingWidgetIds) -notcontains 'w-dup-id')) "UL-2 a widget is never recorded as its own loser"
+
+# V2: the two dedup terms that had no behavioural pin.
+A ((Get-AggregationClass 'x:frequency' $null) -eq 'dedup-nonsummable') "V2 frequency => dedup-nonsummable"
+A ((Get-AggregationClass 'x:unique_visitors' $null) -eq 'dedup-nonsummable') "V2 unique_visitors => dedup-nonsummable"
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

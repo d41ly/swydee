@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T02:58:28+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
+last-audit: 2026-08-05T03:42:22+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -102,8 +102,9 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1198 assertions across the 8 suites after ANLZ-aUniformLattice-6 (Extractor 283, Analyze 598,
-Closer 129, TrendAnalyze 68, TrendFacts 24, Archive 94, Ledger 50, Sync 4; was 1064 at adoption).
+1264 assertions across the 8 suites after ANLZ-aUniformLattice-6 -- the total is the SUM of the
+per-suite figures, so an arithmetic slip is self-evident: Extractor 288, Analyze 607, Closer 129,
+TrendAnalyze 68, TrendFacts 24, Archive 94, Ledger 50, Sync 4. Was 1064 at adoption.
 
 ### Tier rule
 
@@ -168,9 +169,12 @@ true. Keep each to one line; link out for detail.*
   `raw` (which carries per-query node ids). Verified 2026-08-04 by running the pre-change extractor
   twice. Prune when a run-to-run diff of unchanged code comes back empty.
 - The default single-report output path must stay **byte-for-byte unchanged** — every change is
-  additive-in-facts (new `meta` fields / findings only). Sole exception: the reviewed, disclosed U9
-  flip-set waiver (D1/D3) — a zero-dim KPI superseding a doc-earlier table total changes the flipped
-  cells (always disclosed in-facts) and bumps `meta.canonicalVersion` 1->2.
+  additive-in-facts (new `meta` fields / findings only). TWO reviewed, disclosed waivers now exist, and
+  `meta.canonicalVersion` names which algorithm produced an artifact. **1->2** is the U9 flip-set
+  waiver (D1/D3), where a zero-dim KPI superseding a doc-earlier table total changes the flipped cells.
+  **2->3** is ANLZ-aUniformLattice-6, whose entire flip set is the `GAP_NO_ACCOUNT_TOTAL` statement
+  wording plus its new `evidence.byReason`, with membership provably unchanged. Both disclose
+  in-facts. A third waiver needs its own MEASURED flip set before it lands.
 - Every write path keeps its **fail-closed credential gate**; only `ConvertTo-SwydoTrendFacts`
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the

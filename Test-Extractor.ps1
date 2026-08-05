@@ -695,6 +695,14 @@ $unbounded = @($callSites | Where-Object { $_.Value -notmatch '-TimeoutSec' })
 Assert ($unbounded.Count -eq 0) ("AC22 every HTTP call passes -TimeoutSec (unbounded: " + (@($unbounded | ForEach-Object { $_.Value.Trim() }) -join ' | ') + ")")
 Assert (@([regex]::Matches($srcG,'\.Wait\(\s*\)')).Count -eq 0) "AC22 no .Wait() is called without a bound"
 
+Write-Host "== V5: the GraphQL query surface the normalizer depends on =="
+# Normalize-Widget reads fields that must actually be REQUESTED. A dropped selection would fail only
+# against the live API, which no offline suite exercises -- so pin the query text itself.
+$srcQ = Get-Content (Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1') -Raw
+foreach($need in @('dateRange','widgetTemplate{id linked}','parts{id provider{id name} dataSource{id}}','sections{id name isHidden}')){
+  Assert ($srcQ -match [regex]::Escape($need)) "V5 the GraphQL query still requests '$need' (Normalize-Widget reads it)"
+}
+Assert ($srcQ -match 'data\(first:__N__,after:\$after,socketId:\$sid') "V5 the data selection keeps its pagination + socket args"
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
