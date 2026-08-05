@@ -36,7 +36,10 @@ if (-not $bash) {
 
 if ($GateBase) { $env:GATE_BASE = $GateBase }
 
-Push-Location $PSScriptRoot
+# This script lives in tools/, but every kit script it invokes assumes cwd == repo root, so push the
+# PARENT of $PSScriptRoot. Keeping the argument repo-root-relative ('tools/run-gates.sh') matches
+# AGENTS.md 6 and the gate-legs.json argv convention, so all three read the same way.
+Push-Location (Split-Path -Parent $PSScriptRoot)
 try {
   & $bash 'tools/run-gates.sh'
   $code = $LASTEXITCODE

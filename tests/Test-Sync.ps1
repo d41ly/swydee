@@ -2,10 +2,10 @@
 .SYNOPSIS
   Offline checks for Sync-SwydoTrend.ps1: it parses/loads (-DefineOnly), and it is FAIL-SOFT -- a bad
   invocation degrades to a clean non-zero exit + warning, never an uncaught throw (so it can never abort
-  the primary /swydee report). Network success path is covered by the live smoke. Run: .\Test-Sync.ps1
+  the primary /swydee report). Network success path is covered by the live smoke. Run: .\tests\Test-Sync.ps1
 #>
 $ErrorActionPreference = "Stop"
-$sync = "$PSScriptRoot\skill\scripts\Sync-SwydoTrend.ps1"
+$sync = "$PSScriptRoot\..\skill\scripts\Sync-SwydoTrend.ps1"
 $pass=0; $fail=0
 function Ok($c,$n){ if($c){ $script:pass++ } else { $script:fail++; Write-Host "  FAIL: $n" -ForegroundColor Red } }
 

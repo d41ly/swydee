@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
   Offline unit tests for Analyze-SwydoReport.ps1's pure helpers (unit/direction/additive/
-  money/format/delta/period/scrub). Dot-sources via -DefineOnly (no I/O). Run: .\Test-Analyze.ps1
+  money/format/delta/period/scrub). Dot-sources via -DefineOnly (no I/O). Run: .\tests\Test-Analyze.ps1
 #>
 $ErrorActionPreference="Stop"
-. "$PSScriptRoot\skill\scripts\Analyze-SwydoReport.ps1" -DefineOnly
+. "$PSScriptRoot\..\skill\scripts\Analyze-SwydoReport.ps1" -DefineOnly
 $pass=0;$fail=0
 function A($c,$m){ if($c){$script:pass++}else{$script:fail++;Write-Host "  FAIL: $m" -ForegroundColor Red} }
 
@@ -385,7 +385,7 @@ A (-not (HasRule (Get-BreakdownFindings $u6conc) 'ANOM_CONCENTRATION')) "Get-Bre
 
 Write-Host "== U6: end-to-end body (write v2 extraction, run the REAL script, read back facts) =="
 # The 135 cases above are -DefineOnly unit tests that never exercise the run body. These run the script.
-$AnalyzeScript = "$PSScriptRoot\skill\scripts\Analyze-SwydoReport.ps1"
+$AnalyzeScript = "$PSScriptRoot\..\skill\scripts\Analyze-SwydoReport.ps1"
 function Cell($cur,$cmp=$null){ [pscustomobject]@{ current=$cur; compare=$cmp } }
 # zero-dim (KPI) data row: no dimensions; the single row IS the account total
 function KRow($mv){ $mm=[ordered]@{}; foreach($k in $mv.Keys){ $mm[$k]=$mv[$k] }; [pscustomobject]@{ kind='data'; metrics=[pscustomobject]$mm } }
@@ -650,7 +650,7 @@ $u5h = RunAnalyze (MkDoc @(
 A (-not (HasFind $u5h.facts 'RECON_SLICE_OVER_ACCOUNT')) "u7a#5h: two differing zero-dim account KPIs => ambiguous ceiling => skip"
 
 Write-Host "== U6/U7a closer integration (dot-source the REAL closer; Test-Closer stays 119, untouched) =="
-. "$PSScriptRoot\skill\scripts\Test-ReportNumbers.ps1" -DefineOnly
+. "$PSScriptRoot\..\skill\scripts\Test-ReportNumbers.ps1" -DefineOnly
 # 22. closer graceful-ignore: facts carrying `canonical` on every headline cell still trace displayCurrent
 $r22 = RunAnalyze (MkDoc @( (DW 'wc' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Clicks' 'google-adwords:clicks')) @((KRow @{Cost=(Cell 10864723050);Clicks=(Cell 15627)}))) ))
 $rep22 = "## Google Ads`n<!-- platform:google-adwords -->`nCost was `$10,864.72 on 15,627 clicks this period.`n"
@@ -1411,7 +1411,7 @@ foreach($mid in @($b8c.metricIds)){
 }
 
 Write-Host "== ANLZ-aCandidTally-1: cell-key identity =="
-. "$PSScriptRoot\skill\scripts\Test-ReportNumbers.ps1" -DefineOnly
+. "$PSScriptRoot\..\skill\scripts\Test-ReportNumbers.ps1" -DefineOnly
 # MetCk builds a metric record the way the extractor does on schemaVersion 3.
 function MetCk($n,$id,$ck,$unit=$null){ $m=[pscustomobject]@{name=$n;id=$id;unit=$unit}; $m | Add-Member -NotePropertyName cellKey -NotePropertyValue $ck -Force; return $m }
 function CkRow($kind,$label,$dim,$pairs){

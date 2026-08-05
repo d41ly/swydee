@@ -2,10 +2,10 @@
 .SYNOPSIS
   Offline tests for Analyze-SwydoTrend.ps1: pure quarter math + honesty gate, and the load-bearing R1
   closer-integration proof -- a synthetic ledger -> trend facts -> the REAL closer (Test-ReportNumbers.ps1)
-  must force GAP_RESTATEMENT_SUPPRESSED into the report and reject a fabricated number. Run: .\Test-TrendAnalyze.ps1
+  must force GAP_RESTATEMENT_SUPPRESSED into the report and reject a fabricated number. Run: .\tests\Test-TrendAnalyze.ps1
 #>
 $ErrorActionPreference = "Stop"
-$scripts = "$PSScriptRoot\skill\scripts"
+$scripts = "$PSScriptRoot\..\skill\scripts"
 . "$scripts\Analyze-SwydoTrend.ps1" -DefineOnly
 
 $pass=0; $fail=0
