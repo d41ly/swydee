@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T10:42:27+03:00 @ e4a95a999b993a556219d6f7d6cb09b5c5d89e44
+last-audit: 2026-08-05T14:55:21+03:00 @ 39def66ff1b952851da8245ac4e5ea0a37d65f99
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -102,8 +102,8 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1276 assertions across the 8 suites after ANLZ-aUniformLattice-8 -- the total is the SUM of the
-per-suite figures, so an arithmetic slip is self-evident: Extractor 288, Analyze 619, Closer 129,
+1323 assertions across the 8 suites after EXTR-aUniformLattice-1 -- the total is the SUM of the
+per-suite figures, so an arithmetic slip is self-evident: Extractor 319, Analyze 635, Closer 129,
 TrendAnalyze 68, TrendFacts 24, Archive 94, Ledger 50, Sync 4. Was 1064 at adoption.
 
 ### Tier rule
@@ -178,7 +178,10 @@ true. Keep each to one line; link out for detail.*
   than by `canonicalVersion` (the headline algorithm is untouched): it is the first SUBTRACTIVE change
   to the facts shape, making `breakdowns[].rows[].valuesById` collisions-only and reclaiming 37% of the
   document. Its flip set is exactly those rows, the new `valuesByIdScope`, and the version marker.
-  A fourth disclosed change needs its own MEASURED flip set before it lands.
+  A FOURTH is EXTR-aUniformLattice-1, marked by **`meta.factsVersion` 2->3** and by
+  `meta.compareBasis`: the extractor now COMPUTES the previous-period window and passes it explicitly
+  instead of inheriting the dashboard's saved compare selector, so previous-period values and every
+  delta change. A fifth disclosed change needs its own MEASURED flip set before it lands.
 - Every write path keeps its **fail-closed credential gate**; only `ConvertTo-SwydoTrendFacts`
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the
@@ -201,6 +204,19 @@ true. Keep each to one line; link out for detail.*
   addressing keys are machine fields with no narrative content, and `skill/SKILL.md` carries an
   explicit read/skip list so the model does not spend attention on them. Before adding a per-row key,
   measure: `valuesById` reached 41% of the document (129,815 of 318,082 bytes) before being cut back.
+- The previous-period column is NOT free. `referenceCompareDate` is `ComparePeriod!` - REQUIRED and
+  non-null, measured at HTTP 400 three ways - so the extractor can never decline to send one. The
+  window is computed by `Get-PreviousWindow` and passed explicitly at the ONE report fetch site;
+  `$script:cp` deliberately keeps the report's SAVED spec because the three trend fetches and the
+  field probe all pass `$null` and INHERIT it. Never assign the computed spec to `$script:cp`.
+- `ps-hygiene` cannot tell a `$name` token inside a QUOTED STRING from an identifier, so a
+  source-scanning assertion must not embed one; and it flags case-only collisions across the WHOLE
+  file, so a new `$w1` collides with an existing `$W`.
+- Two hygiene check-12 traps on a spec headed for `CLOSED`/`WONTDO`: the body must not contain the
+  literal date-skeleton token `Y`+`YYY-MM-DD` anywhere (it reads as an unfilled placeholder even in
+  prose), and §8's first non-blank line must START with `none` or `N/A`. `TEMPLATE-SPEC.md` says a
+  "fully RESOLVED" §8 also qualifies, but the SCRIPT does not implement that — write `none — <why>`
+  and record the resolution below it.
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
 - Filing a new record costs three hygiene legs beyond writing it: a `DECISIONS.md` index line has a

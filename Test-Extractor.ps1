@@ -288,7 +288,10 @@ function AT($y,$m,$d){ New-Object DateTime($y,$m,$d) }
 
 # U8-E1: the live-verified pair (quarter/-1 @ 2026-07-06) => 2026-04..2026-06, wrapper fields
 $r1 = Resolve-ReportPeriod (DR -1 'quarter' 'RELATIVE') (AT 2026 7 6)
-Assert ($r1.resolverVersion -eq 1) "E1 resolverVersion 1"
+# MODIFIED by EXTR-aUniformLattice-1 D4: the resolver's accepted domain changed (STATIC now resolves,
+# month/-1 admitted after a live probe), so the marker must move. Leaving it at 1 would be exactly the
+# silent-algorithm-change-under-an-unchanged-version U6 D10 forbids.
+Assert ($r1.resolverVersion -eq 2) "E1 resolverVersion 2 (domain widened: STATIC + month/-1)"
 Assert ($r1.rule -eq 'relative-last-complete') "E1 rule"
 Assert ($r1.anchorDate -eq '2026-07-06') "E1 anchorDate"
 Assert (-not $r1.Contains('note')) "E1 no note when resolved"
@@ -307,10 +310,18 @@ Assert ($r2.primary.startYm -eq '2025-10' -and $r2.primary.endYm -eq '2025-12') 
 $r3 = Resolve-ReportPeriod (DR -1 'quarter' 'RELATIVE') (AT 2026 7 1)
 Assert ($r3.primary.startYm -eq '2026-04' -and $r3.primary.endYm -eq '2026-06') "E3 boundary day still Q2"
 
-# U8-E4: month/-1 UNRESOLVED under the unattended domain (shrunk to quarter/-1 only)
+# MODIFIED by EXTR-aUniformLattice-1 D4. U8 left month/-1 unresolved pending "a credentialed live
+# probe"; that probe has now run against the QCU report -- RELATIVE {count:-1,measure:month} and
+# STATIC 2026-07-01..2026-07-31 returned identical values (Clicks current 2591, compare 5277), so
+# Swydo's month/-1 IS the last COMPLETE month and our arithmetic matches it.
 $r4 = Resolve-ReportPeriod (DR -1 'month' 'RELATIVE') (AT 2026 7 6)
-Assert ($null -eq $r4.primary) "E4 month/-1 -> null (unattended domain: quarter-only)"
-Assert ($r4.Contains('note') -and $r4.note -match 'measure') "E4 month note names measure"
+Assert ($null -ne $r4.primary) "E4 month/-1 now RESOLVES (live-probe verified)"
+Assert ($r4.primary.startDate -eq '2026-06-01' -and $r4.primary.endDate -eq '2026-06-30') "E4 month/-1 @ 2026-07-06 => last complete month 2026-06"
+Assert ($r4.primary.calendarAligned -eq $true) "E4 month/-1 is calendar aligned"
+# an UNVERIFIED measure still falls to the unresolved path, so the domain is a whitelist not a guess
+$r4u = Resolve-ReportPeriod (DR -1 'week' 'RELATIVE') (AT 2026 7 6)
+Assert ($null -eq $r4u.primary) "E4 week/-1 still unresolved (verified domain only)"
+Assert ($r4u.Contains('note') -and $r4u.note -match 'measure') "E4 unverified-measure note names measure"
 
 # U8-E5: year/-1 UNRESOLVED under the unattended domain
 $r5 = Resolve-ReportPeriod (DR -1 'year' 'RELATIVE') (AT 2026 7 6)
@@ -369,7 +380,7 @@ Assert ($r13.anchorDate -match '^[0-9]{4}-[0-9]{2}-[0-9]{2}$') "E13 anchorDate s
 # U8-E14: wrapper key contract
 $k1 = @($r1.Keys)
 Assert (($k1 -join ',') -eq 'resolverVersion,rule,anchorDate,primary') "E14 resolved wrapper keys exactly 4"
-$k4 = @($r4.Keys)
+$k4 = @($r4u.Keys)
 Assert (($k4 -join ',') -eq 'resolverVersion,rule,anchorDate,primary,note') "E14 unresolved wrapper adds note"
 
 # ============================================================================================
@@ -703,6 +714,62 @@ foreach($need in @('dateRange','widgetTemplate{id linked}','parts{id provider{id
   Assert ($srcQ -match [regex]::Escape($need)) "V5 the GraphQL query still requests '$need' (Normalize-Widget reads it)"
 }
 Assert ($srcQ -match 'data\(first:__N__,after:\$after,socketId:\$sid') "V5 the data selection keeps its pagination + socket args"
+Write-Host "== EXTR-aUniformLattice-1: proven compare window =="
+# AC1/AC2/AC3: the previous-window arithmetic, exact on every boundary.
+$pvw1 = Get-PreviousWindow '2026-07-01' '2026-07-31'
+Assert ($pvw1.start -eq '2026-05-31' -and $pvw1.end -eq '2026-06-30' -and $pvw1.lengthDays -eq 31) "AC1 Jul => May31..Jun30, len 31"
+$pvw2 = Get-PreviousWindow '2026-07-15' '2026-07-15'
+Assert ($pvw2.start -eq '2026-07-14' -and $pvw2.end -eq '2026-07-14' -and $pvw2.lengthDays -eq 1) "AC2 one-day primary"
+$pvw3 = Get-PreviousWindow '2026-01-01' '2026-01-31'
+Assert ($pvw3.start -eq '2025-12-01' -and $pvw3.end -eq '2025-12-31') "AC2 year boundary"
+$pvw4 = Get-PreviousWindow '2028-02-01' '2028-02-29'
+Assert ($pvw4.start -eq '2028-01-03' -and $pvw4.end -eq '2028-01-31' -and $pvw4.lengthDays -eq 29) "AC2 leap February"
+$pvw5 = Get-PreviousWindow '2026-07-15' '2026-08-14'
+Assert ($pvw5.start -eq '2026-06-14' -and $pvw5.end -eq '2026-07-14') "AC2 non-calendar-aligned primary"
+Assert ($null -eq (Get-PreviousWindow '2026-07-31' '2026-07-01')) "AC1 end-before-start => null, no throw"
+Assert ($null -eq (Get-PreviousWindow 'garbage' '2026-07-01')) "AC1 unparseable => null, no throw"
+# AC3: adjacency holds on the whole emitted domain
+foreach($pair in @(@('2026-07-01','2026-07-31'),@('2026-01-01','2026-01-31'),@('2028-02-01','2028-02-29'),@('2026-07-15','2026-08-14'),@('2026-07-15','2026-07-15'))){
+  $pw = Get-PreviousWindow $pair[0] $pair[1]
+  $inv=[Globalization.CultureInfo]::InvariantCulture
+  $pe=[datetime]::ParseExact($pw.end,'yyyy-MM-dd',$inv).AddDays(1).ToString('yyyy-MM-dd',$inv)
+  Assert ($pe -eq $pair[0]) "AC3 adjacency: prevEnd+1 == primaryStart for $($pair[0])"
+}
+# AC4: the compare builder, and its refusal outside the proven region
+$cp = New-ComparePeriodFrom '2026-05-31' '2026-07-01'
+Assert ($cp.comparePeriod.start -eq '2026-05-31' -and $cp.comparePeriod.type -eq 'FROM') "AC4 builds {start,FROM}"
+Assert ($null -eq $cp.parentComparePeriod) "AC4 parentComparePeriod null"
+$threw=$false; try { New-ComparePeriodFrom '2026-08-01' '2026-07-01' } catch { $threw=$true }
+Assert $threw "AC4 REFUSES a start at/after the primary start (D3b adjacency invariant)"
+$threw2=$false; try { New-ComparePeriodFrom 'nope' '2026-07-01' } catch { $threw2=$true }
+Assert $threw2 "AC4 throws on an unparseable start"
+# AC5: resolver domain
+$rs = Resolve-ReportPeriod ([pscustomobject]@{ primary=[pscustomobject]@{ start='2026-07-01'; end='2026-07-31'; type='STATIC' } }) (New-Object DateTime(2026,8,5))
+Assert ($rs.rule -eq 'static' -and $rs.primary.startDate -eq '2026-07-01' -and $rs.primary.endDate -eq '2026-07-31') "AC5 STATIC resolves to its own dates"
+Assert ($rs.resolverVersion -eq 2) "AC5 resolverVersion 2"
+# AC6: culture-proof
+$old=[Threading.Thread]::CurrentThread.CurrentCulture
+try {
+  [Threading.Thread]::CurrentThread.CurrentCulture=[Globalization.CultureInfo]::GetCultureInfo('de-DE')
+  $pvwc = Get-PreviousWindow '2026-07-01' '2026-07-31'
+  $rc = Resolve-ReportPeriod ([pscustomobject]@{ primary=[pscustomobject]@{ start='2026-07-01'; end='2026-07-31'; type='STATIC' } }) (New-Object DateTime(2026,8,5))
+  Assert ($pvwc.start -eq '2026-05-31' -and $pvwc.end -eq '2026-06-30') "AC6 Get-PreviousWindow is culture-proof (de-DE)"
+  Assert ($rc.primary.startDate -eq '2026-07-01') "AC6 Resolve-ReportPeriod is culture-proof (de-DE)"
+} finally { [Threading.Thread]::CurrentThread.CurrentCulture=$old }
+# D7 divergence detection
+Assert (Test-SameComparePeriod (New-ComparePeriodFrom '2026-05-31' '2026-07-01') (New-ComparePeriodFrom '2026-05-31' '2026-07-01')) "D7 identical FROM specs are equivalent"
+Assert (-not (Test-SameComparePeriod ([pscustomobject]@{comparePeriod=[pscustomobject]@{period='previousMonth';type='PERIOD'}}) (New-ComparePeriodFrom '2026-05-31' '2026-07-01'))) "D7 a PERIOD enum is NOT equivalent to our FROM window"
+Assert (-not (Test-SameComparePeriod ([pscustomobject]@{comparePeriod=[pscustomobject]@{start='2026-06-24';type='FROM'}}) (New-ComparePeriodFrom '2026-05-31' '2026-07-01'))) "D7 a different FROM start is NOT equivalent (the shipped defect)"
+Assert (-not (Test-SameComparePeriod $null (New-ComparePeriodFrom '2026-05-31' '2026-07-01'))) "D7 null saved spec is not equivalent"
+# AC11: $script:cp must stay the saved spec -- the trend path and field probe inherit it
+$srcP = Get-Content (Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1') -Raw
+Assert ($srcP -match '\$script:cp\s*=\s*\$s\.compareDateRange') "AC11 script:cp still holds the report's SAVED compare spec"
+Assert (-not ($srcP -match '\$script:cp\s*=\s*\$script:reportCp')) "AC11 the computed compare never overwrites script:cp"
+# NB: the patterns below avoid a literal dollar-w token, which ps-hygiene cannot tell apart
+# from an identifier when it appears inside a quoted string.
+Assert ($srcP -match 'Fetch-Widget [^\r\n]*cpForFetch') "AC11 the report fetch passes an EXPLICIT compare, not the inherit default"
+$trendNulls = @([regex]::Matches($srcP,'Fetch-Widget [^\r\n]*New-RelDateRange[^\r\n]*')).Count
+Assert ($trendNulls -ge 1) "AC11 trend fetches still pass \$null and inherit the saved spec"
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

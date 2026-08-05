@@ -190,7 +190,9 @@ function Get-WidgetProvider($w){
 # U6/D6: a blended (multi-provider) widget is never a headline source.
 function Test-Blended($w){ return [bool]($w.providers -and @($w.providers).Count -gt 1) }
 function Row-Cur($row,$name){ $c=$row.metrics.$name; if($c -and ($c.current -is [double] -or $c.current -is [int] -or $c.current -is [long] -or $c.current -is [decimal])){ return [double]$c.current } return $null }
-function Row-Cmp($row,$name){ $c=$row.metrics.$name; if($c -and ($c.compare -is [double] -or $c.compare -is [int] -or $c.compare -is [long] -or $c.compare -is [decimal])){ return [double]$c.compare } return $null }
+function Row-Cmp($row,$name){
+  if($script:compareUntrusted){ return $null }   # EXTR-aUniformLattice-1 D5
+  $c=$row.metrics.$name; if($c -and ($c.compare -is [double] -or $c.compare -is [int] -or $c.compare -is [long] -or $c.compare -is [decimal])){ return [double]$c.compare } return $null }
 function Row-Label($row){ $ps=@($row.dimensions.PSObject.Properties); if($ps.Count -gt 0){ return $ps[0].Value } return $null }
 function Total-Row($w){
   $t=@($w.rows | Where-Object { $_.kind -eq 'total' }); if($t.Count -gt 0){ return $t[0] }
@@ -301,8 +303,18 @@ function Get-BreakdownFindings($w,$clientName){
   return @($out)
 }
 # period derivation from extractedAt + dateRange.primary (ignore compareDateRange.period)
-function Derive-Periods($extractedAt,$dateRange){
+# EXTR-aUniformLattice-1: when the extractor PROVED both windows it records them, and the labels become
+# the real dates instead of the literals 'current'/'previous'. $periodResolved is meta.periodResolved
+# from the extraction; absent on older documents, which keep the derived-or-literal behaviour below.
+function Derive-Periods($extractedAt,$dateRange,$periodResolved){
   $out=[ordered]@{ current='current'; previous='previous'; label='current vs previous'; confidence='unconfirmed' }
+  if($periodResolved -and $periodResolved.current -and $periodResolved.previous -and $periodResolved.current.start){
+    $out.current  = ([string]$periodResolved.current.start  + '..' + [string]$periodResolved.current.end)
+    $out.previous = ([string]$periodResolved.previous.start + '..' + [string]$periodResolved.previous.end)
+    $out.label    = ($out.current + ' vs ' + $out.previous)
+    $out.confidence = 'resolved'
+    return $out
+  }
   try {
     $anchor=[DateTimeOffset]::Parse($extractedAt).Date
     $p=$dateRange.primary
@@ -329,7 +341,9 @@ function Get-PeriodMeta($dateRange,$resolved){
   $meas='custom'
   if($dateRange -and $dateRange.primary -and $dateRange.primary.measure){ $meas=([string]$dateRange.primary.measure).ToLowerInvariant() }
   $out=[ordered]@{ measure=$meas; startYm=$null; endYm=$null; calendarAligned=$false }
-  $rp=$null; if($resolved -and ($resolved.resolverVersion -eq 1)){ $rp=$resolved.primary }
+  # EXTR-aUniformLattice-1: v2 widened the resolver's domain (STATIC + month/-1). Both versions carry
+  # the same primary SHAPE, so both are readable; an unknown future version is still ignored.
+  $rp=$null; if($resolved -and ($resolved.resolverVersion -in @(1,2))){ $rp=$resolved.primary }
   if($rp -and ([string]$rp.startYm -match '^[0-9]{4}-(0[1-9]|1[0-2])$') -and ([string]$rp.endYm -match '^[0-9]{4}-(0[1-9]|1[0-2])$')){
     $out.startYm=[string]$rp.startYm; $out.endYm=[string]$rp.endYm
     $out.calendarAligned=($rp.calendarAligned -eq $true)
@@ -861,15 +875,17 @@ function Reduce-MatrixCell($group,$periods,$coverageBasis){
   # under different display names, taking the name from $g[0] and the value from the winner labels the
   # cell with one column's name and the other column's number.
   $win=$ranked[0]; $c=$win.cell; $cc=$win.currencyCode; $m=$win.metric
-  $delta = Get-DeltaPct $c.current $c.compare
+  $cmpM = $c.compare
+  if($script:compareUntrusted){ $cmpM = $null }   # EXTR-aUniformLattice-1 D5
+  $delta = Get-DeltaPct $c.current $cmpM
   $dispCur = Format-Metric $m.id $m.unit $c.current $cc
-  $out.current=$c.current; $out.previous=$c.compare; $out.deltaPct=$delta
+  $out.current=$c.current; $out.previous=$cmpM; $out.deltaPct=$delta
   $out.displayCurrent=$dispCur
-  $out.displayPrevious=(Format-Metric $m.id $m.unit $c.compare $cc)
+  $out.displayPrevious=(Format-Metric $m.id $m.unit $cmpM $cc)
   $out.displayDelta=(Format-Delta $delta)
   $out.type=(Metric-Type $m.id $m.unit $cc); $out.direction=(Get-Direction $m.id)
   $out.unit=$m.unit; $out.currency=$cc
-  $out.hasComparison=[bool]($null -ne $c.compare)
+  $out.hasComparison=[bool]($null -ne $cmpM)
   $out.scope=$(if($win.dimensioned){ "table-total:$($win.dims[0])" }else{ 'account' })
   $out.method=$(if($win.dimensioned){ 'total-row' }else{ 'kpi-widget' })
   $out.aggClass=$aggClass
@@ -908,7 +924,12 @@ if($doc.meta.schemaVersion -notin @(2,3)){ throw "unsupported schemaVersion (nee
 if(-not $doc.report -or -not $doc.report.name -or -not $doc.widgets){ throw "not a valid v2 extraction (missing report/widgets)" }
 $doc = Scrub-Credential $doc
 
-$periods = Derive-Periods $doc.meta.extractedAt $doc.report.dateRange
+# EXTR-aUniformLattice-1 D5: the extractor CANNOT decline to send a compare (ComparePeriod! is
+# required), so the gate lives here. An explicit 'untrusted' basis means the previous column came from
+# a window nobody proved -- suppress every comparative field rather than publish a delta against it.
+$script:compareUntrusted = ([string]$doc.meta.compareBasis -eq 'untrusted')
+if($script:compareUntrusted){ Write-Host "compareBasis=untrusted -> comparisons suppressed" }
+$periods = Derive-Periods $doc.meta.extractedAt $doc.report.dateRange $doc.meta.periodResolved
 $periodMeta = Get-PeriodMeta $doc.report.dateRange $doc.report.dateRangeResolved   # U8: D-period read-through
 $dataWidgets = @($doc.widgets | Where-Object { $_.kind -eq 'data' })
 if($dataWidgets.Count -eq 0){ throw "no data widgets to analyze (all text/empty)" }
@@ -980,15 +1001,17 @@ foreach($w in $dataWidgets){
       [void]$displaced[$prov].Add([ordered]@{ metricId=$key; supersededWidgetId=$existing.canonical.sourceWidgetId })
     }
     $dir = Get-Direction $m.id
-    $delta = Get-DeltaPct $cell.current $cell.compare
-    $hasCmp = ($null -ne $cell.compare)
+    $cmpVal = $cell.compare
+    if($script:compareUntrusted){ $cmpVal = $null }   # EXTR-aUniformLattice-1 D5
+    $delta = Get-DeltaPct $cell.current $cmpVal
+    $hasCmp = ($null -ne $cmpVal)
     if($hasCmp){ $platforms[$prov].headline.hasComparison=$true; $platforms[$prov].hasComparison=$true }
     $dispCur = (Format-Metric $m.id $m.unit $cell.current $cc)
     $platforms[$prov].headline[$key]=[ordered]@{
       metric=$m.name; id=$m.id; unit=$m.unit; type=(Metric-Type $m.id $m.unit $cc); direction=$dir; currency=$cc
-      current=$cell.current; previous=$cell.compare; deltaPct=$delta; hasComparison=$hasCmp
+      current=$cell.current; previous=$cmpVal; deltaPct=$delta; hasComparison=$hasCmp
       displayCurrent=$dispCur
-      displayPrevious=(Format-Metric $m.id $m.unit $cell.compare $cc)
+      displayPrevious=(Format-Metric $m.id $m.unit $cmpVal $cc)
       displayDelta=(Format-Delta $delta)
       # ---- U6 provenance (additive; canonical.display IS displayCurrent so the closer needs no change) ----
       canonical=[ordered]@{ display=$dispCur; sourceWidgetId=$w.id; scope=$scope; period=$periods.current; source=$src }
@@ -1273,10 +1296,11 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 }
 $facts=[ordered]@{
   meta=[ordered]@{
-    tool='Analyze-SwydoReport.ps1'; factsVersion=2; canonicalVersion=3; matrixVersion=1; computedFrom=$doc.meta.tool
+    tool='Analyze-SwydoReport.ps1'; factsVersion=3; canonicalVersion=3; matrixVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence; period=$periodMeta
+    compareBasis=$(if($doc.meta.compareBasis){[string]$doc.meta.compareBasis}else{'unknown'}); periodResolved=$doc.meta.periodResolved
     hasComparison=$hasCmp; comparisonCaveats=$caveats;
     providers=@($platforms.Values | ForEach-Object { [ordered]@{ id=$_.id; name=$_.name; category=$_.category } })
     dataWidgets=$dataWidgets.Count; unitBasis=$doc.meta.unitBasis

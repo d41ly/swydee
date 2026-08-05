@@ -920,12 +920,82 @@ function Get-WidgetCeiling($w){
 # only major). Pure; $anchor is a [datetime]; date-only arithmetic; InvariantCulture formatting.
 # count cast is [double] NOT [int]: PS 5.1 [int] banker's-rounds -0.6/-1.4 to -1, which would
 # resolve a fractional hand-edited count to a complete span (violates D1). [double] keeps -1 exact.
+# EXTR-aUniformLattice-1 (D3): the window immediately preceding a primary, same length. Pure date
+# arithmetic on .Date values, InvariantCulture on every boundary -- PS 5.1 parsing and formatting are
+# culture-sensitive, so a de-DE host must produce byte-identical strings.
+function Get-PreviousWindow($start,$end){
+  $inv=[Globalization.CultureInfo]::InvariantCulture
+  $s=$null; $e=$null
+  try { $s=[datetime]::ParseExact([string]$start,'yyyy-MM-dd',$inv).Date } catch { return $null }
+  try { $e=[datetime]::ParseExact([string]$end,'yyyy-MM-dd',$inv).Date } catch { return $null }
+  if($e -lt $s){ return $null }
+  $len = ($e - $s).Days + 1
+  $prevEnd = $s.AddDays(-1)
+  $prevStart = $prevEnd.AddDays(-1*($len-1))
+  return [ordered]@{ start=$prevStart.ToString('yyyy-MM-dd',$inv); end=$prevEnd.ToString('yyyy-MM-dd',$inv); lengthDays=$len }
+}
+# EXTR-aUniformLattice-1 (D3b): FROM is only PROVEN to mean what we need when the compare window is
+# ADJACENT to the primary (prevEnd + 1 day == primaryStart). On that domain "same length from this
+# date" and "runs to the primary start" coincide, so both readings are safe. Refuse anything else
+# rather than silently leaving the measured region.
+function New-ComparePeriodFrom($startDate,$primaryStart){
+  $inv=[Globalization.CultureInfo]::InvariantCulture
+  $ps=$null; $st=$null
+  try { $st=[datetime]::ParseExact([string]$startDate,'yyyy-MM-dd',$inv).Date } catch { throw "New-ComparePeriodFrom: unparseable start '$startDate'" }
+  try { $ps=[datetime]::ParseExact([string]$primaryStart,'yyyy-MM-dd',$inv).Date } catch { throw "New-ComparePeriodFrom: unparseable primaryStart '$primaryStart'" }
+  if($st -ge $ps){ throw "New-ComparePeriodFrom: compare start '$startDate' is not before primary start '$primaryStart'" }
+  return [pscustomobject]@{ parentComparePeriod=$null; comparePeriod=[pscustomobject]@{ start=$st.ToString('yyyy-MM-dd',$inv); type='FROM' } }
+}
+# Are two compare specs the same window? Only a FROM-with-the-same-start is provably equivalent to
+# ours; every other shape (a PERIOD enum, a different FROM) is a divergence worth disclosing.
+function Test-SameComparePeriod($saved,$computed){
+  if($null -eq $saved -or $null -eq $computed){ return $false }
+  $a=$null; $b=$null
+  try { $a=$saved.comparePeriod } catch { $a=$null }
+  try { $b=$computed.comparePeriod } catch { $b=$null }
+  if($null -eq $a -or $null -eq $b){ return $false }
+  if([string]$a.type -ne 'FROM' -or [string]$b.type -ne 'FROM'){ return $false }
+  return ([string]$a.start -eq [string]$b.start)
+}
+# First numeric cell of a widget's total row -- the smallest stable signal for "did these two date
+# specs return the same data". Pure; null when the widget gave nothing usable.
+function Get-ProbeCurrentValue($obj){
+  if($null -eq $obj){ return $null }
+  $edges=@()
+  try { $edges=@($obj.data.widget.data.edges) } catch { return $null }
+  if($edges.Count -eq 0){ return $null }
+  $node=$null
+  foreach($e in $edges){ if($e -and $e.node -and $e.node.isTotals){ $node=$e.node; break } }
+  if($null -eq $node){ $node=$edges[0].node }
+  if($null -eq $node){ return $null }
+  $cells=@($node.cells)
+  foreach($c in $cells){ if($c -is [double] -or $c -is [int] -or $c -is [long] -or $c -is [decimal]){ return [string]$c } }
+  return $null
+}
 function Resolve-ReportPeriod($dateRange,$anchor){
   $inv=[Globalization.CultureInfo]::InvariantCulture
-  $out=[ordered]@{ resolverVersion=1; rule='relative-last-complete'
+  # resolverVersion 2 (EXTR-aUniformLattice-1 D4): the accepted domain CHANGED -- STATIC is now
+  # resolved (its dates were always given; calling that "unresolved" is what let a static report ship
+  # with periodConfidence unconfirmed) and month/-1 is admitted after a live probe proved Swydo's
+  # month/-1 is the last COMPLETE month. Leaving the marker at 1 would be a silent algorithm change.
+  $out=[ordered]@{ resolverVersion=2; rule='relative-last-complete'
                    anchorDate=(([datetime]$anchor).Date).ToString('yyyy-MM-dd',$inv); primary=$null }
   $p=$null; if($dateRange){ $p=$dateRange.primary }
   if($null -eq $p){ $out.note='unresolved: no primary date range'; return $out }
+  if([string]$p.type -eq 'STATIC'){
+    $sd=$null; $ed=$null
+    try { $sd=[datetime]::ParseExact([string]$p.start,'yyyy-MM-dd',$inv).Date } catch { $sd=$null }
+    try { $ed=[datetime]::ParseExact([string]$p.end,'yyyy-MM-dd',$inv).Date } catch { $ed=$null }
+    if($null -eq $sd -or $null -eq $ed -or $ed -lt $sd){ $out.note='unresolved: STATIC range unparseable'; return $out }
+    $out.rule='static'
+    $out.primary=[ordered]@{
+      measure='static'; count=0
+      startDate=$sd.ToString('yyyy-MM-dd',$inv); endDate=$ed.ToString('yyyy-MM-dd',$inv)
+      startYm=$sd.ToString('yyyy-MM',$inv);      endYm=$ed.ToString('yyyy-MM',$inv)
+      calendarAligned=(($sd.Day -eq 1) -and ($ed.AddDays(1).Day -eq 1))
+    }
+    return $out
+  }
   if([string]$p.type -ne 'RELATIVE'){ $out.note=('unresolved: type ''' + [string]$p.type + ''''); return $out }
   $n=$null; try{ $n=[double]$p.count }catch{}
   if($n -ne -1){ $out.note=('unresolved: count ''' + [string]$p.count + ''' (only -1 verified)'); return $out }
@@ -934,7 +1004,10 @@ function Resolve-ReportPeriod($dateRange,$anchor){
   # quarter/-1 is the sole live-verified pair; month/-1 and year/-1 cannot be resolved unattended
   # (the last-complete-vs-current-partial semantic needs a credentialed live probe) so they resolve
   # to the null triple. The arithmetic below stays measure-general for the post-probe widening.
-  if(@('quarter') -notcontains $meas){ $out.note=('unresolved: measure ''' + [string]$p.measure + ''' (unattended domain: quarter/-1 only)'); return $out }
+  # 'month' admitted by EXTR-aUniformLattice-1 D4: the credentialed live probe U8 asked for has now
+  # run. RELATIVE {count:-1, measure:month} and STATIC 2026-07-01..2026-07-31 returned identical
+  # values (Clicks current 2591, compare 5277), so Swydo's month/-1 IS the last complete month.
+  if(@('quarter','month') -notcontains $meas){ $out.note=('unresolved: measure ''' + [string]$p.measure + ''' (verified domain: quarter/-1, month/-1)'); return $out }
   $a=([datetime]$anchor).Date
   $curStart=New-Object DateTime($a.Year,$a.Month,1); $span=1
   if($meas -eq 'quarter'){ $qm=((([int][math]::Floor(($a.Month-1)/3))*3)+1); $curStart=New-Object DateTime($a.Year,$qm,1); $span=3 }
@@ -982,6 +1055,38 @@ $s = ($structRaw | ConvertFrom-Json).data.report
 if(-not $s){ throw "structure query returned no report: $structRaw" }
 $script:dr=$s.dateRange; $script:cp=$s.compareDateRange
 $script:drResolved = Resolve-ReportPeriod $s.dateRange (Get-Date)   # U8: anchor = structure-fetch moment
+# EXTR-aUniformLattice-1: compute OUR OWN compare window and pass it explicitly at the report fetch
+# site. $script:cp deliberately KEEPS the report's saved spec, because Probe-WidgetMonths, trend
+# discovery, the trend pull and the field probe all pass $null and INHERIT it -- mutating it here
+# would silently change every trend fetch, and the trend path reads a rejected fetch as proof that
+# history does not exist.
+$script:reportCp   = $null                       # the computed compare, or $null if we could not build one
+$script:compareBasis = 'untrusted'               # fail closed by default; earned, not assumed
+$script:periodResolved = $null
+$rp = $script:drResolved.primary
+if($rp -and $rp.startDate -and $rp.endDate){
+  $prevWin = Get-PreviousWindow $rp.startDate $rp.endDate
+  if($prevWin){
+    try {
+      $script:reportCp = New-ComparePeriodFrom $prevWin.start $rp.startDate
+      $script:compareBasis = 'computed'
+      $script:periodResolved = [ordered]@{
+        current  = [ordered]@{ start=[string]$rp.startDate; end=[string]$rp.endDate }
+        previous = [ordered]@{ start=[string]$prevWin.start; end=[string]$prevWin.end }
+        lengthDays = [int]$prevWin.lengthDays
+        basis = 'previous-period'
+        anchorDate = [string]$script:drResolved.anchorDate
+      }
+    } catch { $script:reportCp = $null; $script:compareBasis = 'untrusted' }
+  }
+}
+if($script:compareBasis -eq 'untrusted'){
+  $note = 'unresolved'
+  if($script:drResolved.note){ $note = [string]$script:drResolved.note }
+  $warnCompare = "period NOT proven ($note): the previous-period column comes from the report's own saved compare setting, which this tool cannot verify. Comparisons are suppressed downstream."
+} else {
+  $warnCompare = $null
+}
 if($script:drResolved.primary){ Write-Host ("period resolved: {0}..{1}" -f $script:drResolved.primary.startYm, $script:drResolved.primary.endYm) }
 $script:secMap=@{}; if($s.sections){ $s.sections | ForEach-Object { $script:secMap[$_.id]=$_.name } }
 # S6: isHidden was already requested by the structure query and discarded here. Parallel map rather than
@@ -1107,13 +1212,42 @@ if($Trend){
   return
 }
 
+# EXTR-aUniformLattice-1 D6: when the primary is RELATIVE, our resolved STATIC window is an ASSERTION
+# about Swydo's anchor and timezone. Prove it before trusting it: fetch one data widget both ways and
+# compare the current value. A mismatch means our anchor disagrees with theirs, so the compare window
+# we computed is wrong -- fail closed rather than ship a delta against it.
+if($script:compareBasis -eq 'computed' -and ([string]$s.dateRange.primary.type -eq 'RELATIVE')){
+  $pw = @($wids | Where-Object { $_.visual -notin @('TEXT','PAGE_BREAK') })
+  if(@($pw).Count -gt 0){
+    $pw0 = @($pw)[0]
+    $drStatic = [pscustomobject]@{ parent=$null
+      primary=[pscustomobject]@{ start=[string]$script:periodResolved.current.start; end=[string]$script:periodResolved.current.end; type='STATIC' }
+      comparison=$null; baseDate=$null; timeZone=$null }
+    $vSaved  = Get-ProbeCurrentValue (Fetch-Widget $pw0 $script:dr $script:reportCp $script:probeOpt)
+    $vStatic = Get-ProbeCurrentValue (Fetch-Widget $pw0 $drStatic $script:reportCp $script:probeOpt)
+    if($null -eq $vSaved -or $null -eq $vStatic -or ([string]$vSaved -ne [string]$vStatic)){
+      $script:compareBasis = 'untrusted'
+      $warnCompare = "period NOT proven: the report's relative range and our resolved window " + [string]$script:periodResolved.current.start + ".." + [string]$script:periodResolved.current.end + " returned different values (probe widget " + [string]$pw0.id + ": '" + [string]$vSaved + "' vs '" + [string]$vStatic + "'), so our anchor disagrees with Swydo's. Comparisons are suppressed downstream."
+      Write-Host ("period probe MISMATCH -> compareBasis=untrusted")
+    } else {
+      Write-Host ("period probe OK: relative and resolved static agree (" + [string]$vStatic + ")")
+    }
+  }
+}
+
 # 5. fetch all. The old reconcile loop is GONE: its job (wait, then ask again) now lives inside
 # Fetch-Widget's verdict wait, where it is bounded and where the outcome is recorded exactly once.
 # A second pass could otherwise overwrite a settled outcome and make publish depend on round timing.
 $fetched=@{}; $empty=@()
 try {
   foreach($w in $wids){
-    $o = Fetch-Widget $w $null $null $script:fetchOpt
+    # EXTR-aUniformLattice-1: explicit compare. $null would INHERIT $script:cp (the saved spec), which
+    # is the defect this unit exists to remove. When we could not build one, we fall back to the saved
+    # spec because ComparePeriod! is required -- and compareBasis='untrusted' makes the analyzer
+    # suppress every comparative field.
+    $cpForFetch = $script:reportCp
+    if($null -eq $cpForFetch){ $cpForFetch = $script:cp }
+    $o = Fetch-Widget $w $null $cpForFetch $script:fetchOpt
     $fetched[$w.id]=$o
     $rec = $script:lastFetchOutcome
     if($rec){ [void]$script:outcomes.Add($rec) }
@@ -1159,6 +1293,21 @@ $warnings=@(); if($empty.Count -gt 0){ $warnings += ("no rows returned for: " + 
 $unitBasis = @('google-adwords','facebook-ads')
 $provIds = @(); foreach($wd in $widgetsOut){ if($wd.kind -eq 'data' -and $wd.metrics){ foreach($m in $wd.metrics){ $provIds += (($m.id -split ':')[0]) } } }
 $provIds = @($provIds | Sort-Object -Unique)
+# EXTR-aUniformLattice-1 D7: disclose when the report's own compare setting is not the window we used.
+if($warnCompare){ $warnings += $warnCompare }
+elseif(-not (Test-SameComparePeriod $s.compareDateRange $script:reportCp)){
+  # Client-READABLE: this becomes a force-surfaced GAP_WARNINGS finding, so it must name the windows
+  # in plain language rather than dumping the raw spec. The saved shape is still in
+  # meta.savedComparePeriod for an operator who needs it.
+  $savedDesc = 'a different setting'
+  try {
+    $scp = $s.compareDateRange.comparePeriod
+    if([string]$scp.type -eq 'DISABLED'){ $savedDesc = 'comparison turned off' }
+    elseif([string]$scp.type -eq 'PERIOD' -and $scp.period){ $savedDesc = ("'" + [string]$scp.period + "'") }
+    elseif([string]$scp.type -eq 'FROM' -and $scp.start){ $savedDesc = ('a window starting ' + [string]$scp.start) }
+  } catch {}
+  $warnings += ("comparison basis: this report compares " + [string]$script:periodResolved.current.start + " to " + [string]$script:periodResolved.current.end + " against the preceding " + [string]$script:periodResolved.previous.start + " to " + [string]$script:periodResolved.previous.end + ". The dashboard itself is set to " + $savedDesc + ", so figures here may not match a like-for-like view on screen.")
+}
 $unverified = @($provIds | Where-Object { $_ -notin $unitBasis })
 if($unverified.Count -gt 0){ $warnings += ("units not inferred for unverified provider(s): " + ($unverified -join ', ') + " -- values are raw; confirm scale/currency downstream") }
 
@@ -1168,6 +1317,7 @@ $doc = [ordered]@{
     shareUrl=$ShareUrl; shareKey=$script:key; reportId=$reportId; clientId=$s.client.id
     widgetCount=$wids.Count; dataWidgets=@($widgetsOut|Where-Object{$_.kind -eq 'data'}).Count
     unitBasis=$unitBasis; warnings=$warnings; providerInventory=$providerInventory; providerFilter=$platFilter
+    periodResolved=$script:periodResolved; compareBasis=$script:compareBasis; savedComparePeriod=$s.compareDateRange
     extractionComplete=$completeness.extractionComplete; incompleteWidgets=@($completeness.incompleteWidgets)
     fetchBudget=$completeness.fetchBudget
   }
