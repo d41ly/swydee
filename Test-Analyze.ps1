@@ -1487,6 +1487,133 @@ $supA = @($idxA.byPlatform['google-adwords'] | Where-Object { $_.value -eq 100 }
 A (@($supA).Count -le 1) "AC14 100 is a candidate only as metric 1's own legitimate value"
 A (@($idxA.byPlatform['google-adwords'] | Where-Object { $_.value -eq 250 }).Count -ge 1) "AC14 the repaired value 250 IS traceable"
 
+
+Write-Host "== ANLZ-aCandidTally-1: matrix, conflict and breakdown fixtures =="
+# Every fixture below is built so its assertions FAIL on the pre-repair analyzer. A collided display
+# name is the lever: before the repair the second metric borrowed the first holder's cell, which made
+# it rank, agree, or publish a number it did not own.
+$ckEcho = [pscustomobject]@{ campaign_name='Alpha' }   # a non-numeric echo cell, as Swydo returns
+
+# --- AC5: a contribution that cannot resolve its OWN cell becomes a reason cell, not a value cell ---
+# Metric 2 shares metric 1's display name and its own column is an echo. Pre-repair it read metric 1's
+# numeric cell, ranked, and published a fully provenanced value with no reason token.
+$ac5W = DW 'w-ac5' 'google-adwords' 'Google Ads' @('Campaign') @((MetCk 'Cost' 'google-adwords:cost_micros' 'Cost' 'micros'),(MetCk 'Cost' 'google-adwords:campaign' 'Cost [google-adwords:campaign]')) @(
+  (CkRow 'total' $null 'Campaign' @{ 'Cost'=@(100,$null); 'Cost [google-adwords:campaign]'=@($ckEcho,$null) }),
+  (CkRow 'data' 'A' 'Campaign' @{ 'Cost'=@(100,$null); 'Cost [google-adwords:campaign]'=@($ckEcho,$null) }))
+$rAc5 = RunAnalyze (MkDoc @($ac5W))
+$c5 = Mx $rAc5.facts 'google-adwords' 'google-adwords:campaign'
+A ($c5.reason -eq 'no-usable-cell') "AC5 a metric whose own cell is an echo => reason=no-usable-cell"
+A ($null -eq $c5.current -and $null -eq $c5.displayCurrent) "AC5 and it carries no value keys at all"
+A ((Mx $rAc5.facts 'google-adwords' 'google-adwords:cost_micros').current -eq 100) "AC5 the metric that DOES own a cell is unaffected"
+
+# --- AC6: the rank contest itself moves when a borrowed cell stops ranking ---
+# The KPI card's second metric is an echo under a shared name. Pre-repair it borrowed 500, ranked 1,
+# and won as account/kpi-widget/USD. Post-repair it does not rank, so the EUR table total wins.
+$ac6Kpi = DW 'w-ac6-kpi' 'google-adwords' 'Google Ads' @() @((MetCk 'Clicks' 'google-adwords:clicks' 'Clicks'),(MetCk 'Clicks' 'google-adwords:link_clicks' 'Clicks [google-adwords:link_clicks]')) @(
+  (CkRow 'data' $null $null @{ 'Clicks'=@(500,$null); 'Clicks [google-adwords:link_clicks]'=@($ckEcho,$null) })) $null 'USD'
+$ac6Tab = DW 'w-ac6-tab' 'google-adwords' 'Google Ads' @('Campaign') @((MetCk 'Link clicks' 'google-adwords:link_clicks' 'Link clicks')) @(
+  (CkRow 'total' $null 'Campaign' @{ 'Link clicks'=@(42,$null) }),
+  (CkRow 'data' 'A' 'Campaign' @{ 'Link clicks'=@(42,$null) })) $null 'EUR'
+$rAc6 = RunAnalyze (MkDoc @($ac6Kpi,$ac6Tab))
+$c6b = Mx $rAc6.facts 'google-adwords' 'google-adwords:link_clicks'
+A ($c6b.scope -eq 'table-total:Campaign' -and $c6b.method -eq 'total-row') "AC6 the rank-2 table wins once the rank-1 borrowed cell stops ranking"
+A ($c6b.current -eq 42) "AC6 the winning value is the table's own, not the borrowed 500"
+A ($c6b.currency -eq 'EUR') "AC6 currency follows the winner"
+A (@($c6b.contributingWidgetIds) -contains 'w-ac6-tab' -and @($c6b.contributingWidgetIds) -notcontains 'w-ac6-kpi') "AC6 contributingWidgetIds names only the widget that supplied a cell"
+A ($null -ne $c6b.basis.basisVersion) "AC6 the winner's basis is the cell's basis"
+
+# --- AC7: a FALSE basis-mismatch conflict disappears ---
+# Pre-repair the EUR card's second metric borrowed a numeric EUR cell, ranked, and manufactured a
+# basis-mismatch against the USD card. Post-repair it resolves its own echo and drops out.
+$ac7Usd = DW 'w-ac7-usd' 'google-adwords' 'Google Ads' @() @((MetCk 'Cost' 'google-adwords:cost_micros' 'Cost' 'micros')) @(
+  (CkRow 'data' $null $null @{ 'Cost'=@(100000000,$null) })) $null 'USD'
+$ac7Eur = DW 'w-ac7-eur' 'google-adwords' 'Google Ads' @() @((MetCk 'Cost' 'google-adwords:clicks' 'Cost'),(MetCk 'Cost' 'google-adwords:cost_micros' 'Cost [google-adwords:cost_micros]' 'micros')) @(
+  (CkRow 'data' $null $null @{ 'Cost'=@(7,$null); 'Cost [google-adwords:cost_micros]'=@($ckEcho,$null) })) $null 'EUR'
+$rAc7 = RunAnalyze (MkDoc @($ac7Usd,$ac7Eur))
+$c7b = Mx $rAc7.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($null -eq $c7b.conflict) "AC7 a conflict manufactured by a borrowed cell DISAPPEARS"
+A ($c7b.current -eq 100000000 -and $c7b.currency -eq 'USD') "AC7 the surviving cell is the one that owns its number"
+
+# --- AC25: a REAL same-rank disagreement appears ---
+# Pre-repair both cards resolved 500 by name and agreed, so no conflict was recorded. Post-repair the
+# first card's cost_micros reads its own 900 and the disagreement is real.
+$ac25A = DW 'w-ac25-a' 'google-adwords' 'Google Ads' @() @((MetCk 'Cost' 'google-adwords:clicks' 'Cost'),(MetCk 'Cost' 'google-adwords:cost_micros' 'Cost [google-adwords:cost_micros]' 'micros')) @(
+  (CkRow 'data' $null $null @{ 'Cost'=@(500,$null); 'Cost [google-adwords:cost_micros]'=@(900,$null) })) $null 'USD'
+$ac25B = DW 'w-ac25-b' 'google-adwords' 'Google Ads' @() @((MetCk 'Cost' 'google-adwords:cost_micros' 'Cost' 'micros')) @(
+  (CkRow 'data' $null $null @{ 'Cost'=@(500,$null) })) $null 'USD'
+$rAc25 = RunAnalyze (MkDoc @($ac25A,$ac25B))
+$c25 = Mx $rAc25.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($c25.current -eq 900) "AC25 the first card publishes its OWN 900, not the borrowed 500"
+A ($c25.conflict.reason -eq 'same-rank-disagreement') "AC25 a real disagreement the borrowed cell had masked now APPEARS"
+A (@($c25.conflict.losingWidgetIds) -contains 'w-ac25-b') "AC25 the loser is named"
+A ((($c25 | ConvertTo-Json -Depth 10) -notmatch '500')) "AC25 the losing value is still never echoed into the cell"
+
+# --- AC8: the cell label comes from the WINNER, on a fixture where the winner is not $g[0] ---
+# The table is document-first, so $g[0] is the table; the KPI card outranks it. Pre-repair the label
+# was written from $g[0] before the winner was chosen, so it read 'Clicks' over the KPI's number.
+$ac8Tab = DW 'w-ac8-tab' 'google-adwords' 'Google Ads' @('Campaign') @((MetCk 'Clicks' 'google-adwords:clicks' 'Clicks')) @(
+  (CkRow 'total' $null 'Campaign' @{ 'Clicks'=@(40,$null) }),
+  (CkRow 'data' 'A' 'Campaign' @{ 'Clicks'=@(40,$null) }))
+$ac8Kpi = DW 'w-ac8-kpi' 'google-adwords' 'Google Ads' @() @((MetCk 'Clicks (all)' 'google-adwords:clicks' 'Clicks (all)')) @(
+  (CkRow 'data' $null $null @{ 'Clicks (all)'=@(99,$null) }))
+$rAc8 = RunAnalyze (MkDoc @($ac8Tab,$ac8Kpi))
+$c8b = Mx $rAc8.facts 'google-adwords' 'google-adwords:clicks'
+A ($c8b.current -eq 99 -and $c8b.method -eq 'kpi-widget') "AC8 the rank-1 KPI wins over the document-earlier table"
+A ($c8b.metric -eq 'Clicks (all)') "AC8 the label comes from the winner, not from `$g[0] (got '$($c8b.metric)')"
+
+# --- AC9: a micros/count collision leaves ONE metric owning display, unit and type together ---
+# Pre-repair the surviving cell carried the count metric's 500 formatted and typed as currency.
+$ac9W = DW 'w-ac9' 'google-adwords' 'Google Ads' @('Campaign') @((MetCk 'Cost' 'google-adwords:clicks' 'Cost'),(MetCk 'Cost' 'google-adwords:cost_micros' 'Cost [google-adwords:cost_micros]' 'micros')) @(
+  (CkRow 'total' $null 'Campaign' @{ 'Cost'=@(500,$null); 'Cost [google-adwords:cost_micros]'=@(10864723050,$null) }),
+  (CkRow 'data' 'A' 'Campaign' @{ 'Cost'=@(500,$null); 'Cost [google-adwords:cost_micros]'=@(10864723050,$null) }))
+$rAc9 = RunAnalyze (MkDoc @($ac9W))
+$bd9 = @((Plat $rAc9.facts 'google-adwords').breakdowns)[0]
+$row9 = @($bd9.rows | Where-Object { $_.label -eq 'A' })[0]
+A ($row9.values.'Cost'.display -eq '500') "AC9 the surviving values cell carries the FIRST holder's own number"
+A ($row9.values.'Cost'.type -ne 'currency') "AC9 and its type describes that same metric, not the micros sibling"
+A ($null -ne $row9.valuesById.'google-adwords:cost_micros') "AC9 the micros metric is still addressable by id"
+A ($row9.valuesById.'google-adwords:cost_micros'.display -match '10,864') "AC9 with its own number, formatted as currency"
+
+# --- AC15: the same-widget residual is asserted, not latent ---
+# One widget declaring one metric id twice under two names: the second column is DROPPED, with no
+# conflict entry and no trace of its number. Widening the conflict predicate was declined; this pins it.
+$ac15Mets = @((MetCk 'Spend' 'google-adwords:cost_micros' 'Spend' 'micros'),(MetCk 'Cost' 'google-adwords:cost_micros' 'Cost' 'micros'))
+$ac15W = DW 'w-ac15' 'google-adwords' 'Google Ads' @() $ac15Mets @((CkRow 'data' $null $null @{ 'Spend'=@(1000000,$null); 'Cost'=@(7000000,$null) }))
+$rAc15 = RunAnalyze (MkDoc @($ac15W))
+$c15 = Mx $rAc15.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($c15.current -eq 1000000 -and $c15.metric -eq 'Spend') "AC15 the first column wins, name and number from the same contribution"
+A ($null -eq $c15.conflict) "AC15 the dropped second column records NO conflict (accepted residual)"
+A ((($c15 | ConvertTo-Json -Depth 10) -notmatch '7000000')) "AC15 and its number appears nowhere in the cell"
+
+# --- AC18: a breakdown-only flip moves no marker, which is the accepted OD-3 residual ---
+# A dimensioned widget with NO total row feeds neither the headline nor a ranked matrix cell, so the
+# only thing that changes is the breakdown - under an unchanged marker set.
+$ac18W = DW 'w-ac18' 'google-adwords' 'Google Ads' @('Campaign') @((MetCk 'Cost' 'google-adwords:clicks' 'Cost'),(MetCk 'Cost' 'google-adwords:cost_micros' 'Cost [google-adwords:cost_micros]' 'micros')) @(
+  (CkRow 'data' 'A' 'Campaign' @{ 'Cost'=@(500,$null); 'Cost [google-adwords:cost_micros]'=@(10864723050,$null) }),
+  (CkRow 'data' 'B' 'Campaign' @{ 'Cost'=@(300,$null); 'Cost [google-adwords:cost_micros]'=@(2000000,$null) }))
+$rAc18 = RunAnalyze (MkDoc @($ac18W))
+$pf18 = Plat $rAc18.facts 'google-adwords'
+A (@($pf18.headline.PSObject.Properties.Name | Where-Object { $_ -and $_ -ne 'hasComparison' }).Count -eq 0) "AC18 a no-total widget contributes no headline value, so no headline cell can flip"
+A ($null -eq (Mx $rAc18.facts 'google-adwords' 'google-adwords:cost_micros').current) "AC18 and no matrix VALUE either - the matrix cell is a reason cell"
+$bd18 = @($pf18.breakdowns)[0]
+$row18 = @($bd18.rows | Where-Object { $_.label -eq 'A' })[0]
+A ($row18.values.'Cost'.display -eq '500' -and $null -ne $row18.valuesById.'google-adwords:cost_micros') "AC18 the breakdown IS what changed owner"
+A ($rAc18.facts.meta.canonicalVersion -eq 4 -and $rAc18.facts.meta.matrixVersion -eq 2) "AC18 the two markers carry their global values"
+A ($rAc18.text -notmatch 'breakdownVersion') "AC18 no marker names the breakdown layer - the residual is unmarked BY DECISION (OD-3)"
+
+# --- AC21: a schemaVersion-2 collided document is disambiguated end to end ---
+# The shipped omit-rather-than-guess branch is retired: Resolve-CellKeys replays the extractor's own
+# key, so both ids become addressable instead of both being dropped.
+$ac21W = DW 'w-ac21' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Clicks' 'google-adwords:clicks'),(Met 'Clicks' 'facebook-ads:clicks')) @(
+  (CkRow 'total' $null 'Campaign' @{ 'Clicks'=@(100,$null); 'Clicks [facebook-ads:clicks]'=@(250,$null) }),
+  (CkRow 'data' 'A' 'Campaign' @{ 'Clicks'=@(60,$null); 'Clicks [facebook-ads:clicks]'=@(150,$null) }))
+$rAc21 = RunAnalyze (MkDoc @($ac21W))
+$bd21 = @((Plat $rAc21.facts 'google-adwords').breakdowns)[0]
+$row21 = @($bd21.rows | Where-Object { $_.label -eq 'A' })[0]
+A (@($row21.valuesById.PSObject.Properties.Name).Count -eq 2) "AC21 a v2 collided pair yields TWO valuesById entries, where it used to yield none"
+A ($row21.valuesById.'google-adwords:clicks'.display -ne $row21.valuesById.'facebook-ads:clicks'.display) "AC21 and the two carry different numbers, each its own"
+A ($row21.valuesById.'facebook-ads:clicks'.display -eq '150') "AC21 the second metric's own row value, not the first's"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

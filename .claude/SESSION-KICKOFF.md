@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T13:53:30+03:00 @ 39def66ff1b952851da8245ac4e5ea0a37d65f99
+last-audit: 2026-08-05T14:05:50+03:00 @ 39def66ff1b952851da8245ac4e5ea0a37d65f99
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -102,8 +102,8 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1327 assertions across the 8 suites after ANLZ-aCandidTally-1 -- the total is the SUM of the
-per-suite figures, so an arithmetic slip is self-evident: Extractor 296, Analyze 654, Closer 129,
+1358 assertions across the 8 suites after ANLZ-aCandidTally-1 -- the total is the SUM of the
+per-suite figures, so an arithmetic slip is self-evident: Extractor 296, Analyze 685, Closer 129,
 TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4. Was 1276 after
 ANLZ-aUniformLattice-8, and 1064 at adoption.
 
