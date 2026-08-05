@@ -38,17 +38,11 @@ $myInFile=$InFile; $myArchiveRoot=$ArchiveRoot; $myClient=$Client; $myNowIso=$No
 # ---------- pure month arithmetic (local; trivial, kept identical to the extractor's) ----------
 function MonthKeyToOrdinal($mk){ if([string]$mk -match '^(\d{4})-(\d{2})$'){ return ([int]$Matches[1])*12 + ([int]$Matches[2] - 1) } return $null }
 
-# ---------- pure: per-metric basis version (unit/currency change => new series, never coerced) ----------
-function Get-BasisVersion($metricId,$unit,$currency){
-  $u = if($null -eq $unit){ '~' } else { [string]$unit }
-  $c = if($null -eq $currency){ '~' } else { [string]$currency }
-  $s = ([string]$metricId) + ([char]0x1F) + $u + ([char]0x1F) + $c
-  $sha=[Security.Cryptography.SHA256]::Create()
-  try { $bytes=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($s)) } finally { $sha.Dispose() }
-  $sb=New-Object Text.StringBuilder
-  foreach($b in $bytes){ [void]$sb.Append($b.ToString('x2')) }   # 'x2' = culture-invariant lowercase hex
-  return $sb.ToString().Substring(0,12)
-}
+# ---------- pure: per-metric basis version ----------
+# MOVED to Analyze-SwydoReport.ps1 by ANLZ-aUniformLattice-3 (P2) and reached through the -DefineOnly
+# dot-source above. Exactly one definition may exist: this hash keys every ledger cell, so a second
+# copy that drifted would silently re-key the whole ledger. Test-Ledger asserts the single definition
+# mechanically via (Get-Command Get-BasisVersion).ScriptBlock.File.
 # ---------- pure: freeze classifier (month arithmetic on the newest complete month; K months provisional) ----------
 function Test-IsFinal($monthKey,$maxLabel,$Horizon){    # $Horizon (not $K): $k is a common loop var and PS names are case-insensitive
   $m=MonthKeyToOrdinal $monthKey; $x=MonthKeyToOrdinal $maxLabel

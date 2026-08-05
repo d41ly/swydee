@@ -249,7 +249,7 @@ Verified by internal consistency (e.g. `cost_micros/1e6 ÷ clicks == average_cpc
 
 **Other providers (GA4, LinkedIn, Microsoft/Bing, TikTok, Pinterest, Snapchat, … ~30 total) — UNVERIFIED.** The test report used only the two above. Do **not** assume micros for a provider not in this table — Microsoft/Bing, LinkedIn, TikTok, Pinterest, Snapchat and GA4 report spend/cost in **actual account currency**, so a blind ÷1e6 turns $152.34 into $0.00015. To infer units for a new provider: enumerate it via `source.parts.provider.id`, then cross-check a rendered KPI tile's value (from the browser, if available) against the raw `cell`, or reason from the metric's nature.
 
-**Unit contract emitted by the extractor (schemaVersion 2).** `metric.unit` is a **scale hint, not a money flag**:
+**Unit contract emitted by the extractor (schemaVersion 2 and 3).** `metric.unit` is a **scale hint, not a money flag**:
 - `"micros"` → divide by 1e6 to reach the **base unit** (currency **or** e.g. GA4 `engagement_time_micros` → seconds). Use `currencyCode` (surfaced per data widget) to know whether the base unit is money.
 - `"fraction"` → multiply by 100 for a percentage.
 - **absent** → render raw, never convert.
@@ -272,13 +272,13 @@ Seen live: `KPI`, `TABLE`, `PIE_CHART`, `LINE_CHART`, `COLUMN_CHART`, `TEXT` (Pr
 .\Get-SwydoReport.ps1 -ShareUrl https://swy.do/shares/<KEY> -OutDir .\extractions [-Secret <password>] [-PageSize 500]
 ```
 
-### 9.1 Output — one timestamped file per run (schemaVersion 2)
+### 9.1 Output — one timestamped file per run (schemaVersion 3)
 
 Discipline: **one extraction = one file**, never a pile of per-widget fragments. Filename is `<OutDir>\YYYY-MM-DD-HH-MM-SS-<report-name-slug>.json` (local time; slug = report name lowercased, non-alphanumerics → `-`). BOM-less UTF-8. Fixed top-level keys `meta` / `report` / `widgets`; every widget has the same shape:
 
 ```jsonc
 {
-  "meta":   { "tool","schemaVersion":2,"extractedAt"(ISO-8601),"shareUrl","shareKey",
+  "meta":   { "tool","schemaVersion":3,"extractedAt"(ISO-8601),"shareUrl","shareKey",
               "reportId","widgetCount","dataWidgets",
               "unitBasis":["google-adwords","facebook-ads"],  // providers whose units were inferred
               "warnings":[] },

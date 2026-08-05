@@ -346,7 +346,11 @@ function Assert-NoCredential($text){ if($text -match $script:KeyPattern){ throw 
 # --platform (U2): a major dataGap forcing the report to disclose which platforms were excluded. $null if no
 # filter or nothing excluded. Pure so it is unit-testable via -DefineOnly.
 function Get-ProviderFilterFinding($providerFilter,$providerInventory){
-  $pf=@(@($providerFilter) | Where-Object { $_ }); if($pf.Count -eq 0){ return $null }   # null/[]/[null] => no filter
+  # ANLZ-aUniformLattice-7: only non-empty STRINGS count as a filter entry. A bare truthiness test also
+  # accepted the empty PSCustomObject that `"providerFilter": {}` deserializes to, so an UNFILTERED report
+  # fired this major finding and told the client every platform had been excluded. Verified live
+  # 2026-08-05; the extractor now emits `[]`, and this guard also repairs already-archived extractions.
+  $pf=@(@($providerFilter) | Where-Object { ($_ -is [string]) -and $_ }); if($pf.Count -eq 0){ return $null }
   $excluded=@(@($providerInventory) | Where-Object { $_ -and ($_ -notin $pf) })
   if($excluded.Count -eq 0){ return $null }
   return [ordered]@{ ruleId='PROVIDER_FILTERED'; severity='major'; statement=("Report limited to platform(s) " + ($pf -join ', ') + "; excluded (not pulled): " + ($excluded -join ', ') + " - this is a partial view of the account.") }
@@ -385,9 +389,16 @@ function Get-Breakdown($w, $cap, $mustLabels){
   else { $sorted=@($detail) }
   $top=@($sorted | Select-Object -First $cap)
   if($mustLabels){ foreach($r in $sorted){ $lbl=[string](Row-Label $r); if(($mustLabels -contains $lbl) -and -not @($top | Where-Object { [string](Row-Label $_) -eq $lbl })){ $top+=$r } } }
+  # ANLZ-aUniformLattice-5 (P4): how many metrics share each DISPLAY NAME in this widget. A collided
+  # name is the one case where reading a row cell by name returns the wrong metric's number, so it
+  # decides whether valuesById can be trusted for that metric on a schemaVersion-2 document.
+  $nameCount=@{}
+  foreach($m in $mets){ $nk=[string]$m.name; if($nameCount.ContainsKey($nk)){ $nameCount[$nk]=[int]$nameCount[$nk]+1 } else { $nameCount[$nk]=1 } }
   $rows=@()
+  $sawRowKey=$false
   foreach($r in $top){
     $vals=[ordered]@{}
+    $valsById=[ordered]@{}
     foreach($m in $mets){
       $cur=Row-Cur $r $m.name
       if($null -eq $cur){ continue }   # scalar-guard (echo objects)
@@ -395,10 +406,33 @@ function Get-Breakdown($w, $cap, $mustLabels){
       $cmp=Row-Cmp $r $m.name
       if($null -ne $cmp){ $cell.hasComparison=$true; $cell.displayPrevious=(Format-Metric $m.id $m.unit $cmp $cc); $d=Get-DeltaPct $cur $cmp; if($null -ne $d){ $cell.delta=(Format-Delta $d) } } else { $cell.hasComparison=$false }
       $vals[[string]$m.name]=$cell
+      # valuesById reads by P1's cellKey -- the exact key the extractor wrote into rows[].metrics --
+      # so a duplicate display name resolves to each metric's OWN column. `values` above keeps the name
+      # read byte-for-byte, so the two maps DELIBERATELY diverge on a collided name: that divergence is
+      # the whole point of the id map. With no cellKey (schemaVersion 2) and a collided name there is no
+      # way to disambiguate, so the metric is OMITTED rather than given a confidently wrong number.
+      $ck=$null
+      if($m.PSObject.Properties['cellKey'] -and $m.cellKey){ $ck=[string]$m.cellKey }
+      if($null -eq $ck){ if([int]$nameCount[[string]$m.name] -eq 1){ $ck=[string]$m.name } }
+      if($null -ne $ck){
+        $curById=Row-Cur $r $ck
+        if($null -ne $curById){
+          $cellById=[ordered]@{ display=(Format-Metric $m.id $m.unit $curById $cc); type=(Metric-Type $m.id $m.unit $cc) }
+          $cmpById=Row-Cmp $r $ck
+          if($null -ne $cmpById){ $cellById.hasComparison=$true; $cellById.displayPrevious=(Format-Metric $m.id $m.unit $cmpById $cc); $d2=Get-DeltaPct $curById $cmpById; if($null -ne $d2){ $cellById.delta=(Format-Delta $d2) } } else { $cellById.hasComparison=$false }
+          $valsById[[string]$m.id]=$cellById
+        }
+      }
     }
-    $rows+=[ordered]@{ label=[string](Row-Label $r); values=$vals }
+    $rowOut=[ordered]@{ label=[string](Row-Label $r); values=$vals; valuesById=$valsById }
+    # OMITTED, never null: an absent key means "this document predates row keys", which is different
+    # from "this row has no key".
+    if($r.PSObject.Properties['rowKey'] -and $r.rowKey){ $rowOut.rowKey=[string]$r.rowKey; $sawRowKey=$true }
+    $rows+=$rowOut
   }
-  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{$_.name}); rowCount=$detail.Count; shown=$rows.Count; rows=$rows }
+  # Derived from the EMITTED rows, not from meta.schemaVersion: Get-Breakdown never receives the
+  # document, and under -DefineOnly (how every unit test calls it) no $doc exists to read.
+  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{$_.name}); metricIds=@($mets|ForEach-Object{[string]$_.id}); rowCount=$detail.Count; shown=$rows.Count; rowKeyBasis=$(if($sawRowKey){'extractor'}else{'absent'}); rows=$rows }
   if($detail.Count -gt $rows.Count){ $out.note="showing top $($rows.Count) of $($detail.Count) rows" }
   return $out
 }
@@ -479,6 +513,57 @@ function Test-Summable($id){
 }
 # R5: two figures share a basis iff identical unit AND identical currency (null-safe equality).
 function Test-SameBasis($ua,$ca,$ub,$cb){ return (($ua -eq $ub) -and ($ca -eq $cb)) }
+# ===================== ANLZ-aUniformLattice-3 (P2): declared aggregation semantics =====================
+# ONE declared class per metric, so the reduce reads a single answer instead of re-deriving it from
+# three predicates that deliberately disagree. Composition only: every branch delegates to a shipped
+# predicate, or applies a veto term copied verbatim from one. The vetoes exist because review MEASURED
+# the naive ladder getting four real ids wrong -- see the sub-spec's D1 for each id and its evidence.
+function Get-AggregationClass($metricId,$unit){
+  if($null -eq $metricId -or [string]::IsNullOrEmpty([string]$metricId)){ return 'unknown' }
+  $p = Get-MetricPart $metricId
+  # V1: a target_* metric is a bid SETTING, not a measurement. Get-RatioSpec claims target_roas and
+  # target_cpa, so without this veto a bid setting would be classed as a derivable measurement.
+  # Same guard shape Test-ValueMetricId already applies first, and for the same reason.
+  if($p -match '(^|_)target'){ return 'account-asis' }
+  # R1 runs BEFORE the per-X veto, not after: `cost_per_conversion` and `cost_per_lead` both contain
+  # `per_` while being exactly the ratios Get-RatioSpec can recompute. Vetoing first would demote a
+  # derivable ratio to as-reported. Measured: the veto-first order misclassified cost_per_conversion.
+  if(Get-RatioSpec $metricId){ return 'ratio-recompute' }
+  # V2: Test-Summable's OWN first guard, applied to whatever R1 could NOT name. R2 copies terms from
+  # the middle of the same denylist, so the per-X guard has to run here or value_per_conversion reads
+  # as a deduplicated count.
+  if($p -match 'per[_a-z]'){ return 'account-asis' }
+  # V3: Test-Summable's allowlist matches SUBSTRINGS -- return_on_ad_spend contains 'spend' and so
+  # returns true, while its denylist and Get-RatioSpec both test only the bare token 'roas'.
+  if($p -match 'return_on_ad_spend'){ return 'account-asis' }
+  # R2: lifted verbatim from Test-Summable's denylist. A deduplicated count is not merely unsummable;
+  # the reduce must tell "no derivation exists" apart from "a recompute exists".
+  if($p -match 'reach|frequency|unique|users?$'){ return 'dedup-nonsummable' }
+  # R3: delegate the rate/share/ratio family to the shipped unit-aware classifier rather than inventing
+  # one. This is the only reader of $unit: a 'fraction' unit resolves to 'percent'.
+  $mt = Metric-Type $metricId $unit $null
+  if($mt -eq 'percent' -or $mt -eq 'ratio'){ return 'account-asis' }
+  if(Test-Summable $metricId){ return 'sum' }
+  return 'unknown'   # metadata only -- RANK decides whether a cell carries a value, never the class
+}
+# Per-metric basis version. MOVED here from Update-SwydoLedger.ps1 (which dot-sources this file) so
+# exactly one definition exists: the hash keys every ledger cell, and a second copy could drift and
+# silently re-key the whole ledger. U6's deferred-work contract makes a single shared define-only
+# helper a precondition for bringing basisVersion into report facts.
+function Get-BasisVersion($metricId,$unit,$currency){
+  $u = if($null -eq $unit){ '~' } else { [string]$unit }
+  $c = if($null -eq $currency){ '~' } else { [string]$currency }
+  $s = ([string]$metricId) + ([char]0x1F) + $u + ([char]0x1F) + $c
+  $sha=[Security.Cryptography.SHA256]::Create()
+  try { $bytes=$sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($s)) } finally { $sha.Dispose() }
+  $sb=New-Object Text.StringBuilder
+  foreach($b in $bytes){ [void]$sb.Append($b.ToString('x2')) }   # 'x2' = culture-invariant lowercase hex
+  return $sb.ToString().Substring(0,12)
+}
+# The basis tuple a matrix cell carries: one place to build it, one place to compare two.
+function Get-CellBasis($metricId,$unit,$currencyCode){
+  return [ordered]@{ unit=$unit; currencyCode=$currencyCode; basisVersion=(Get-BasisVersion $metricId $unit $currencyCode) }
+}
 # R16: a known-disjoint (partition) dimension where each row is a distinct bucket, so detail sums are
 # legitimately additive. Only these authorize the #4 major; overlap dims (action_type, ...) stay info.
 function Test-PartitionDim($dim){
@@ -666,6 +751,139 @@ function Get-SliceAccountFindings($w,$dataWidgets,$periods){
   return @($out)
 }
 
+# ===================== ANLZ-aUniformLattice-4 (P3): the uniform per-platform matrix =====================
+# platforms[].metrics{} is a TOTAL map: every observed (platform, metricId) pair gets exactly one cell,
+# carrying either a value with full provenance or one reason token explaining its absence. It is a
+# SIBLING of headline{}, which stays byte-identical -- that is what keeps Analyze-SwydoTrend's gate 2c
+# and the closer's existing index working untouched.
+
+# D2: the single definition of a widget that may contribute a VALUE. Blended binds at EVERY rank (U6 D6,
+# U7 R6, U9 D1), not just where a sum would happen. There is deliberately no -Platform test: that filter
+# runs at EXTRACTION, so every widget reaching the analyzer already passed it.
+function Test-MatrixEligible($w){
+  if([string]$w.kind -ne 'data'){ return $false }
+  if(Test-Blended $w){ return $false }
+  if($w.sectionHidden -eq $true){ return $false }   # absent on schemaVersion 2 => visible
+  return $true
+}
+# The metric's OWN provider, never the widget's. Get-WidgetProvider falls back to the FIRST metric's
+# prefix, so on a mixed-prefix widget it files every metric under one provider; the key space files each
+# under its own. The matrix follows the key space so the group key and the key space are one function.
+function Get-MetricProviderId($m){
+  if($m.PSObject.Properties['providerId'] -and $m.providerId){ return [string]$m.providerId }
+  return (([string]$m.id -split ':')[0])
+}
+# D3: every candidate contribution, metric-level. A widget that DECLARES a metric but whose total row
+# has no cell for it -- or whose cell is a non-numeric echo object -- is NOT a contribution: those are
+# the same two guards the headline applies, and without them a structurally-ranked widget could win and
+# then supply nothing.
+function Get-MatrixContributions($dataWidgets){
+  $out=@(); $idx=-1
+  foreach($w in @($dataWidgets)){
+    $idx=$idx+1
+    $docIdx=$idx
+    if($w.PSObject.Properties['documentIndex'] -and $null -ne $w.documentIndex){ $docIdx=[int]$w.documentIndex }
+    $eligible = Test-MatrixEligible $w
+    $dims=@($w.dimensions | Where-Object {$_})
+    $isKpi=($dims.Count -eq 0)
+    $tr=$null
+    if($eligible){ $tr = Total-Row $w }
+    foreach($m in @($w.metrics)){
+      $prov = Get-MetricProviderId $m
+      if(-not $prov){ continue }
+      $rec=[ordered]@{
+        providerId=$prov; metricId=[string]$m.id; metric=$m; widgetId=[string]$w.id; documentIndex=$docIdx
+        eligible=[bool]$eligible; blended=[bool](Test-Blended $w); hidden=[bool]($w.sectionHidden -eq $true)
+        dimensioned=[bool](-not $isKpi); dims=$dims; hasTotalRow=[bool]($null -ne $tr)
+        rank=0; cell=$null; currencyCode=$w.currencyCode; ord=0
+      }
+      if($eligible -and $tr){
+        $c = $tr.metrics.$($m.name)   # by display NAME, byte-identically to the headline (see D3)
+        if($c -and ($c.current -is [double] -or $c.current -is [int] -or $c.current -is [long] -or $c.current -is [decimal])){
+          $rec.cell=$c
+          $rec.rank=$(if($isKpi){1}else{2})
+        }
+      }
+      $out += ,$rec
+    }
+  }
+  return ,@($out)
+}
+# The ordered, exhaustive reason ladder. First matching rung wins; the last rung cannot fail.
+function Get-MatrixReason($group,$aggClass){
+  $g=@($group)
+  if(@($g | Where-Object { -not $_.blended }).Count -eq 0){ return 'blended-undecomposable' }
+  $nonBlended=@($g | Where-Object { -not $_.blended })
+  if(@($nonBlended | Where-Object { -not $_.hidden }).Count -eq 0){ return 'hidden-section' }
+  # A widget ranked structurally (eligible, had a total row) but supplied no usable cell.
+  if(@($g | Where-Object { $_.eligible -and $_.hasTotalRow }).Count -gt 0){ return 'no-usable-cell' }
+  if($aggClass -eq 'dedup-nonsummable' -or $aggClass -eq 'account-asis'){ return 'not-summable' }
+  if(@($g | Where-Object { $_.eligible -and $_.dimensioned -and -not $_.hasTotalRow }).Count -gt 0){ return 'incomplete-rows' }
+  if(@($g | Where-Object { $_.eligible }).Count -gt 0){ return 'no-total' }
+  return 'unclassified'   # total fallback: unreachable by construction, present so the reduce is provably total
+}
+# D3: reduce one (providerId, metricId) group to exactly one cell.
+function Reduce-MatrixCell($group,$periods,$coverageBasis){
+  $g=@($group)
+  if($g.Count -eq 0){ return $null }
+  $first=$g[0]; $m=$first.metric
+  $aggClass = Get-AggregationClass $m.id $m.unit
+  $observedOn=@(@($g | ForEach-Object { $_.widgetId }) | Select-Object -Unique)
+  # A THIRD sort key: PS 5.1's Sort-Object is not stable, so two contributions with equal (rank,
+  # documentIndex) -- which one widget declaring the same metric id twice produces -- would otherwise
+  # pick an arbitrary winner that can differ between runs on identical input.
+  $ci=-1
+  foreach($gc in $g){ $ci=$ci+1; $gc.ord=$ci }
+  $ranked=@($g | Where-Object { $_.rank -gt 0 } | Sort-Object @{Expression={[int]$_.rank}}, @{Expression={[int]$_.documentIndex}}, @{Expression={[int]$_.ord}})
+  $out=[ordered]@{ id=[string]$m.id; metric=[string]$m.name }
+  if($ranked.Count -eq 0){
+    $basis = Get-CellBasis $m.id $m.unit $first.currencyCode
+    $out.type=(Metric-Type $m.id $m.unit $first.currencyCode); $out.direction=(Get-Direction $m.id)
+    $out.unit=$m.unit; $out.currency=$first.currencyCode
+    $out.aggClass=$aggClass; $out.basis=$basis
+    $out.contributingWidgetIds=@(); $out.observedOnWidgetIds=$observedOn
+    $out.coverageBasis=$coverageBasis; $out.period=$periods.current
+    $out.reason=(Get-MatrixReason $g $aggClass)
+    return $out
+  }
+  # Identity comes from the WINNER, not from $g[0]: when one widget declares the same metric id twice
+  # under different display names, taking the name from $g[0] and the value from the winner labels the
+  # cell with one column's name and the other column's number.
+  $win=$ranked[0]; $c=$win.cell; $cc=$win.currencyCode; $m=$win.metric
+  $delta = Get-DeltaPct $c.current $c.compare
+  $dispCur = Format-Metric $m.id $m.unit $c.current $cc
+  $out.current=$c.current; $out.previous=$c.compare; $out.deltaPct=$delta
+  $out.displayCurrent=$dispCur
+  $out.displayPrevious=(Format-Metric $m.id $m.unit $c.compare $cc)
+  $out.displayDelta=(Format-Delta $delta)
+  $out.type=(Metric-Type $m.id $m.unit $cc); $out.direction=(Get-Direction $m.id)
+  $out.unit=$m.unit; $out.currency=$cc
+  $out.hasComparison=[bool]($null -ne $c.compare)
+  $out.scope=$(if($win.dimensioned){ "table-total:$($win.dims[0])" }else{ 'account' })
+  $out.method=$(if($win.dimensioned){ 'total-row' }else{ 'kpi-widget' })
+  $out.aggClass=$aggClass
+  $out.basis=(Get-CellBasis $m.id $m.unit $cc)
+  $out.contributingWidgetIds=@(@($ranked | ForEach-Object { $_.widgetId }) | Select-Object -Unique)
+  $out.observedOnWidgetIds=$observedOn
+  $out.coverageBasis=$coverageBasis; $out.period=$periods.current
+  # A disagreement keeps the winner's VALUE and records the losers by id only -- never a losing display
+  # string (U9 D4/FP-3). Basis mismatch is reported ahead of same-rank because it is the stronger claim.
+  # A conflict is only recorded when there is something to disagree ABOUT. Two cloned KPI cards carrying
+  # the SAME number are an ordinary report layout, not a discrepancy, and claiming otherwise in facts is
+  # the kind of false signal U9 D4 warns teaches readers to discount the channel.
+  $losers=@($ranked | Select-Object -Skip 1 | Where-Object { $_.widgetId -ne $win.widgetId })
+  if($losers.Count -gt 0){
+    $offBasis=@($losers | Where-Object { (Get-BasisVersion $m.id $m.unit $_.currencyCode) -ne $out.basis.basisVersion })
+    $sameRankDiff=@($losers | Where-Object { ([int]$_.rank -eq [int]$win.rank) -and ($null -ne $_.cell) -and ([double]$_.cell.current -ne [double]$c.current) })
+    $why=$null; $pool=@()
+    if($offBasis.Count -gt 0){ $why='basis-mismatch'; $pool=$offBasis }
+    elseif($sameRankDiff.Count -gt 0){ $why='same-rank-disagreement'; $pool=$sameRankDiff }
+    if($why -and @($pool).Count -gt 0){
+      $out.conflict=[ordered]@{ losingWidgetIds=@(@($pool | ForEach-Object { $_.widgetId }) | Select-Object -Unique); reason=$why }
+    }
+  }
+  return $out
+}
 if($DefineOnly){ return }   # dot-source stops here
 
 # ============================ run ============================
@@ -675,7 +893,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 $doc = [IO.File]::ReadAllText($InFile) | ConvertFrom-Json   # .NET UTF-8 (Get-Content -Raw mis-reads BOM-less UTF-8 as ANSI in PS 5.1)
 # schema gate
-if($doc.meta.schemaVersion -ne 2){ throw "unsupported schemaVersion (need 2, got '$($doc.meta.schemaVersion)') - re-extract with the current tool" }
+if($doc.meta.schemaVersion -notin @(2,3)){ throw "unsupported schemaVersion (need 2 or 3, got '$($doc.meta.schemaVersion)') - re-extract with the current tool" }
 if(-not $doc.report -or -not $doc.report.name -or -not $doc.widgets){ throw "not a valid v2 extraction (missing report/widgets)" }
 $doc = Scrub-Credential $doc
 
@@ -717,14 +935,14 @@ foreach($w in $dataWidgets){
   foreach($pe in @($w.providers)){
     if($pe.id -and -not $platforms.ContainsKey($pe.id)){
       $pn = if($pe.name){ $pe.name } else { $pe.id }
-      $platforms[$pe.id]=[ordered]@{ id=$pe.id; name=$pn; category=(Get-Category $pe.id); headline=[ordered]@{}; hasComparison=$false }
+      $platforms[$pe.id]=[ordered]@{ id=$pe.id; name=$pn; category=(Get-Category $pe.id); headline=[ordered]@{}; hasComparison=$false; metrics=[ordered]@{} }
     }
   }
   $prov = Get-WidgetProvider $w
   if(-not $prov){ continue }
   if(-not $platforms.ContainsKey($prov)){   # metric-prefix-only widget (no providers[]) discovered here
     $pname = if($w.providers -and @($w.providers).Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $prov }
-    $platforms[$prov]=[ordered]@{ id=$prov; name=$pname; category=(Get-Category $prov); headline=[ordered]@{}; hasComparison=$false }
+    $platforms[$prov]=[ordered]@{ id=$prov; name=$pname; category=(Get-Category $prov); headline=[ordered]@{}; hasComparison=$false; metrics=[ordered]@{} }
   }
   if(Test-Blended $w){ continue }             # D6: never a headline source (discovery above still counted it)
   $tr = Total-Row $w
@@ -814,16 +1032,67 @@ foreach($w in $dataWidgets){
     [void]$observed[$mp].Add($m.id)
   }
 }
+# ANLZ-aUniformLattice-4 (P3): populate the uniform matrix from the SAME key space $observed just built.
+# One cell per observed (platform, metricId) -- a value with provenance, or one reason token. Nothing
+# reads it yet; P5 is the first consumer. headline{} above is untouched.
+$matrixContribs = Get-MatrixContributions $dataWidgets
+$contribByKey=@{}
+foreach($rc in @($matrixContribs)){
+  $ck = ([string]$rc.providerId) + '|' + ([string]$rc.metricId)
+  if(-not $contribByKey.ContainsKey($ck)){ $contribByKey[$ck]=[System.Collections.ArrayList]@() }
+  [void]$contribByKey[$ck].Add($rc)
+}
+$anyHidden = [bool](@($doc.widgets | Where-Object { $_.sectionHidden -eq $true }).Count -gt 0)
+$provFiltered = [bool](@(@($doc.meta.providerFilter) | Where-Object { ($_ -is [string]) -and $_ }).Count -gt 0)
+$covBasis = [ordered]@{ providerFiltered=$provFiltered; hiddenSectionExcluded=$anyHidden }
+foreach($prov in @($observed.Keys)){
+  if(-not $platforms.ContainsKey($prov)){ continue }
+  # $observed is a case-SENSITIVE HashSet while the emitted map is a case-INsensitive ordered dict, so two
+  # ids differing only in case would be two entries and one key. Dedupe on the dict's own comparer first.
+  $seenCi=@{}
+  foreach($mid in @($observed[$prov] | Sort-Object)){
+    if($seenCi.ContainsKey([string]$mid)){ continue }
+    $seenCi[[string]$mid]=$true
+    $grp=$null
+    $gk=([string]$prov)+'|'+([string]$mid)
+    if($contribByKey.ContainsKey($gk)){ $grp=@($contribByKey[$gk]) }
+    if(-not $grp -or @($grp).Count -eq 0){ continue }
+    $cellOut = Reduce-MatrixCell $grp $periods $covBasis
+    if($cellOut){ $platforms[$prov].metrics[[string]$mid] = $cellOut }
+  }
+}
+
 foreach($prov in @($observed.Keys)){
   if(-not $platforms.ContainsKey($prov)){ continue }   # only discovered platforms
   $pf=$platforms[$prov]
+  # ANLZ-aUniformLattice-6 (P5). MEMBERSHIP IS UNCHANGED: still observed-minus-HEADLINE. Review
+  # disproved the premise that matrix coverage equals headline coverage, in BOTH directions, with
+  # reproduced fixtures. The matrix refuses hidden-section widgets and the headline does not, so
+  # repointing membership would list a metric the headline still publishes; and the headline attributes
+  # by Get-WidgetProvider while the matrix attributes by metric prefix, so on a mixed-prefix widget
+  # repointing would silently DELETE a correct warning. Only the REASON comes from the matrix.
   $missing=@($observed[$prov] | Where-Object { -not $pf.headline.Contains($_) } | Sort-Object)
   if($missing.Count -eq 0){ continue }
   $shown = if($missing.Count -gt 20){ (@($missing[0..19]) + @("+$($missing.Count-20) more")) } else { $missing }
+  # Per-metric cause, from the matrix cell. Today the statement guesses one undifferentiated cause for
+  # every metric; the matrix knows the real one. A metric the matrix DID value is one the headline filed
+  # under a different platform, which is its own honest answer rather than a missing total.
+  $reasonCount=[ordered]@{}
+  foreach($mm in $missing){
+    $rk='no-matrix-cell'
+    $mc=$null
+    if($pf.metrics -and $pf.metrics.Contains([string]$mm)){ $mc=$pf.metrics[[string]$mm] }
+    if($mc){
+      if($mc.Contains('reason')){ $rk=[string]$mc['reason'] } else { $rk='attributed-to-other-platform' }
+    }
+    if($reasonCount.Contains($rk)){ $reasonCount[$rk]=[int]$reasonCount[$rk]+1 } else { $reasonCount[$rk]=1 }
+  }
+  # FLAT STRING per U10 D5: the closer stringifies every evidence value, so an object renders as garbage.
+  $byReason=(@($reasonCount.Keys | ForEach-Object { $_ + '=' + [string]$reasonCount[$_] }) -join ', ')
   [void]$gaps.Add([ordered]@{
     ruleId='GAP_NO_ACCOUNT_TOTAL'; severity='info'; platform=$pf.name
-    statement="no account-level total available for $($missing.Count) metric(s) of $($pf.name): only dimensioned rows with no total row (or blended widgets); metrics: $($shown -join ', ')"
-    evidence=[ordered]@{ metrics=@($shown); count="$($missing.Count)" }
+    statement="no account-level total available for $($missing.Count) metric(s) of $($pf.name): $byReason; metrics: $($shown -join ', ')"
+    evidence=[ordered]@{ metrics=@($shown); count="$($missing.Count)"; byReason=$byReason }
   })
 }
 # U9/D4: GAP_HEADLINE_SOURCE_CHANGED - one info finding per provider with >= 1 rank displacement (a later zero-dim
@@ -993,7 +1262,7 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 }
 $facts=[ordered]@{
   meta=[ordered]@{
-    tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=2; computedFrom=$doc.meta.tool
+    tool='Analyze-SwydoReport.ps1'; factsVersion=1; canonicalVersion=3; matrixVersion=1; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence; period=$periodMeta

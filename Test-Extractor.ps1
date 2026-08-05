@@ -81,6 +81,114 @@ $dd = $r.rows[0].dimensions
 Assert ($dd.Keys.Count -eq 2) "dup Campaign dims => 2 keys (got $($dd.Keys.Count))"
 Assert ($dd['Campaign'] -eq 'Alpha' -and $dd['Campaign [f:campaign]'] -eq 'Beta') "both Campaign dim labels survive"
 
+Write-Host "== ANLZ-aUniformLattice-2 P1: additive schema-v3 keys =="
+# Get-UniqKeySeq must reproduce the sequence the untouched row loop writes.
+$seqDup = Get-UniqKeySeq @([pscustomobject]@{name='Clicks';id='google-adwords:clicks'}, [pscustomobject]@{name='Clicks';id='facebook-ads:clicks'})
+Assert ($seqDup.Count -eq 2) "P1 Get-UniqKeySeq returns one key per item"
+Assert ($seqDup[0] -eq 'Clicks' -and $seqDup[1] -eq 'Clicks [facebook-ads:clicks]') "P1 dup display name => two DIFFERENT cellKeys"
+$seqEmpty = Get-UniqKeySeq @([pscustomobject]@{name=$null;id=$null})
+Assert ($seqEmpty[0] -eq 'col0') "P1 empty name+id => Uniq-Key col<idx> fallback"
+
+# AC1/AC2: the emitted cellKey is the key the row map actually uses.
+$r = Normalize-Widget @{id='w5b';visual='TABLE';section='s1'} $bl $null 0
+Assert ($r.metrics[0].cellKey -eq 'Clicks' -and $r.metrics[1].cellKey -eq 'Clicks [facebook-ads:clicks]') "P1 AC1 cellKey emitted per metric"
+Assert ($r.rows[0].metrics.Contains($r.metrics[0].cellKey) -and $r.rows[0].metrics.Contains($r.metrics[1].cellKey)) "P1 AC1 every cellKey addresses a real row-map key"
+Assert ($r.metrics[0].providerId -eq 'google-adwords' -and $r.metrics[1].providerId -eq 'facebook-ads') "P1 metrics[].providerId is the id prefix"
+Assert ($r.rows[0].metrics[$r.metrics[1].cellKey].current -eq 250) "P1 cellKey reads the SECOND metric's own value (the wrong-value path)"
+
+# AC9: dimensions[] stays a plain string array; dimensionRefs carries the ids.
+$r6 = Normalize-Widget @{id='w6b';visual='TABLE';section='s1'} $dc $null 0
+Assert (@($r6.dimensions).Count -eq 2 -and ($r6.dimensions[0] -is [string]) -and ($r6.dimensions[1] -is [string])) "P1 AC9 dimensions[] is still a string array"
+Assert ($r6.dimensions[0] -eq 'Campaign' -and $r6.dimensions[1] -eq 'Campaign') "P1 AC9 dimensions[] values byte-identical"
+Assert ($r6.dimensionRefs[0].id -eq 'g:campaign' -and $r6.dimensionRefs[1].id -eq 'f:campaign') "P1 AC9 dimensionRefs carries both ids"
+
+# AC3: rowKey is exact, ordinal-first, pipe-escaped, and '0' for a zero-dimension widget.
+Assert ((Get-RowKey 2 @('Alpha','Brand | Search')) -eq '2|Alpha|Brand / Search') "P1 AC3 rowKey exact incl. literal-pipe escape"
+Assert ((Get-RowKey 0 @()) -eq '0') "P1 AC3 zero-dimension rowKey is '0', not '0|'"
+Assert ((Get-RowKey 5 @($null)) -eq '5|') "P1 AC3 null dim value does not throw"
+Assert ($r6.rows[0].rowKey -eq '0|Alpha|Beta') "P1 AC3 rowKey emitted on the row"
+
+# AC4: Build-WidgetInputs pairs each widget with ITS OWN outcome, by id, never positionally.
+$wA=@{id='wa';visual='TABLE';section='s1'}; $wB=@{id='wb';visual='TABLE';section='s1'}; $wC=@{id='wc';visual='TABLE';section='s1'}
+$ocs=@([ordered]@{id='wb';outcome='incomplete';reason='partial-pages';pagesFetched=3;endCursor='cur';truncated=$true;hasNextPage=$true},
+       [ordered]@{id='wa';outcome='filled';reason=$null;pagesFetched=1;endCursor=$null;truncated=$false;hasNextPage=$false})
+$inp = Build-WidgetInputs @($wA,$wB,$wC) @{} $ocs
+Assert (@($inp).Count -eq 3) "P1 AC4 one input per pulled widget"
+Assert ($inp[0].wmeta.id -eq 'wa' -and $inp[0].outcome.outcome -eq 'filled') "P1 AC4 pairing is by id, not by position"
+Assert ($inp[1].wmeta.id -eq 'wb' -and $inp[1].outcome.reason -eq 'partial-pages') "P1 AC4 the out-of-order record still lands on its own widget"
+Assert ($null -eq $inp[2].outcome) "P1 AC4 a widget with no record gets null, never a guess"
+Assert ($inp[0].index -eq 0 -and $inp[2].index -eq 2) "P1 AC4/AC10 documentIndex is the ordinal in the pulled set"
+
+# AC4 continued + AC5: completeness rides fetch INTENT, so kind='unknown' still reports.
+$okOut=[ordered]@{id='w7';outcome='filled';reason=$null;pagesFetched=1;endCursor=$null;truncated=$false;hasNextPage=$false}
+$badOut=[ordered]@{id='w8';outcome='incomplete';reason='partial-pages';pagesFetched=2;endCursor='c9';truncated=$true;hasNextPage=$true}
+$rok = Normalize-Widget @{id='w7';visual='TABLE';section='s1'} $bl $okOut 0
+$rbad = Normalize-Widget @{id='w8';visual='TABLE';section='s1'} (W $null) $badOut 1
+Assert ($rok.pagesComplete -eq $true -and $rok.pageInfo.truncated -eq $false) "P1 AC4 clean fetch => pagesComplete true"
+Assert ($rbad.pagesComplete -eq $false -and $rbad.pageInfo.endCursor -eq 'c9') "P1 AC4 partial-pages => pagesComplete false + endCursor"
+Assert ($rbad.kind -eq 'unknown' -and $rbad.fetchOutcome -eq 'incomplete') "P1 AC5 a failed data widget degrades to kind=unknown but STILL reports completeness"
+$emptyOut=[ordered]@{id='w9';outcome='empty-resolved';reason=$null;pagesFetched=1;endCursor=$null;truncated=$false;hasNextPage=$false}
+$rem = Normalize-Widget @{id='w9';visual='TABLE';section='s1'} $bl $emptyOut 0
+Assert ($rem.pagesComplete -eq $true) "P1 empty-resolved is an honest zero-row answer, not an incomplete one"
+$rtxt = Normalize-Widget @{id='w10';visual='TEXT';section='s1'} (W ([pscustomobject]@{visual=@{id='TEXT'};displayOptions=[pscustomobject]@{title=$null};source=$null;manualKpiOptions=$null;content=$null;target=$null})) $okOut 0
+Assert (-not $rtxt.Contains('pagesComplete')) "P1 a TEXT widget carries no completeness block"
+
+# AC6: sectionHidden must not throw when the parallel map is unseeded.
+Assert ($rok.sectionHidden -eq $false) "P1 AC6 unseeded secHidden => false, no throw"
+$script:secHidden = @{ s1 = $true }
+$rh = Normalize-Widget @{id='w11';visual='TABLE';section='s1'} $bl $okOut 0
+Assert ($rh.sectionHidden -eq $true) "P1 AC6 hidden section => sectionHidden true"
+$script:secHidden = @{}
+
+# AC7/AC8: row-kind counts and the encounter-order currency set.
+$nT = Node @(5) $null @{t=$true;s=$false}; $nS = Node @(3) $null @{t=$false;s=$true}; $nD = Node @(2) $null $null
+$nD.node.meta = [pscustomobject]@{ currencyCode='USD' }; $nT.node.meta = [pscustomobject]@{ currencyCode='EUR' }
+$mixed = W ([pscustomobject]@{ visual=@{id='TABLE'}; displayOptions=[pscustomobject]@{title=$null}; source=$src; manualKpiOptions=$null; comparisonFormat='ABSOLUTE'; content=$null; target=$null; dims=$null; metrics=(FieldsConn @([pscustomobject]@{name='Clicks';id='google-adwords:clicks'})); data=[pscustomobject]@{edges=@($nD,$nS,$nT)} })
+$rm2 = Normalize-Widget @{id='w12';visual='TABLE';section='s1'} $mixed $okOut 0
+Assert ($rm2.hasTotalRow -eq $true) "P1 AC7 hasTotalRow true when a total row is present"
+Assert ($rm2.rowKindCounts.data -eq 1 -and $rm2.rowKindCounts.subtotal -eq 1 -and $rm2.rowKindCounts.total -eq 1) "P1 AC7 rowKindCounts sums to the row count"
+Assert ($rm2.currencyCode -eq 'USD') "P1 AC8 currencyCode keeps its first-wins value"
+Assert ($rm2.currencyCodes[0] -eq 'USD' -and $rm2.currencyCodes[1] -eq 'EUR') "P1 AC8 currencyCodes is encounter order, not sorted"
+Assert ($rm2.currencyBasis -eq 'row-meta') "P1 AC8 currencyBasis row-meta when a row carried a code"
+
+# AC12: both schemaVersion writers say 3, and there are exactly two of them.
+$srcP1 = Get-Content (Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1') -Raw
+$svWrites = @([regex]::Matches($srcP1,'schemaVersion=\d+'))
+Assert ($svWrites.Count -eq 2) "P1 AC12 exactly two schemaVersion writers (got $($svWrites.Count))"
+Assert (@($svWrites | Where-Object { $_.Value -eq 'schemaVersion=3' }).Count -eq 2) "P1 AC12 both writers emit schemaVersion=3"
+
+# AC13: the field probe classifies on positive evidence, three-state, and bounds its detail.
+$vAbsent = Get-FieldProbeVerdict 400 '{"errors":[{"message":"errors:Cannot query field \"serverRowTotal\" on type \"Widget\".","extensions":{"code":"GRAPHQL_VALIDATION_FAILED"}}]}' 'serverRowTotal'
+Assert ($vAbsent.present -eq $false) "P1 AC13 validation error naming the field => present false"
+$vPresent = Get-FieldProbeVerdict 200 '{"data":{"widget":{"dateRange":{"primary":{"type":"PARENT"}}}}}' 'dateRange'
+Assert ($vPresent.present -eq $true) "P1 AC13 200 with data and no errors => present true"
+$v401 = Get-FieldProbeVerdict 401 '' 'filters'
+Assert ($v401.present -eq 'unknown') "P1 AC13 a 401 is NOT evidence the field exists"
+$vOther = Get-FieldProbeVerdict 400 '{"errors":[{"message":"errors:Cannot query field \"somethingElse\" on type \"Widget\".","extensions":{"code":"GRAPHQL_VALIDATION_FAILED"}}]}' 'filters'
+Assert ($vOther.present -eq 'unknown') "P1 AC13 a validation error naming ANOTHER field says nothing about this one"
+$vLong = Get-FieldProbeVerdict 500 ('x' * 900) 'filters'
+Assert ($vLong.detail.Length -le 300) "P1 AC13 probe detail is bounded to 300 chars"
+Assert ((Limit-ProbeDetail 'see https://swy.do/shares/AbC123_x-9 now') -notmatch 'AbC123_x-9') "P1 AC13 probe detail scrubs a share link"
+$cands = @(Get-FieldProbeCandidates)
+Assert ($cands.Count -eq 7) "P1 AC13 seven GraphQL probe candidates"
+foreach($need in @('widget.serverRowTotal','widget.dateRange','widget.filters','widget.segments','metrics[].aggregation','dims[].isPartition')){
+  Assert (@($cands | Where-Object { $_.field -eq $need }).Count -eq 1) "P1 AC13 probe covers the parent (c3) candidate $need"
+}
+# Blob-keys probe: node is a GraphQL leaf, so a row-level field is answered from the deserialized blob.
+$bkNode = [pscustomobject]@{ node = [pscustomobject]@{ cells=@(1); isTotals=$true; meta=$null } }
+$bk = Get-BlobKeyProbe ([pscustomobject]@{ data=[pscustomobject]@{ widget=[pscustomobject]@{ data=[pscustomobject]@{ edges=@($bkNode) } } } })
+Assert ($bk.present -eq $false -and ($bk.observedKeys -contains 'isTotals')) "P1 AC13 blob-keys probe reports the observed node key set"
+
+Write-Host "== ANLZ-aUniformLattice-7: an unfiltered report must not claim it was filtered =="
+$pfEmpty = Parse-PlatformFilter $null
+Assert ($null -ne $pfEmpty) "ANLZ-7 Parse-PlatformFilter never collapses to null (the unary-comma return)"
+Assert (@($pfEmpty).Count -eq 0) "ANLZ-7 no filter => an EMPTY array, not null"
+$jsonRt = ([ordered]@{ providerFilter=$pfEmpty } | ConvertTo-Json -Depth 100 -Compress)
+Assert ($jsonRt -eq '{"providerFilter":[]}') "ANLZ-7 an empty filter serializes as [] and never as {} (got $jsonRt)"
+$pfReal = Parse-PlatformFilter 'Google-Adwords, facebook-ads'
+Assert ($pfReal.Count -eq 2) "ANLZ-7 a real filter still parses and lowercases"
+Assert (($pfReal -join ',') -eq 'facebook-ads,google-adwords') "ANLZ-7 a real filter is still lowercased and sorted-unique"
+
 Write-Host "== trend: Test-TrendTimeWidget =="
 Assert (Test-TrendTimeWidget @('Month')) "Month => time"
 Assert (Test-TrendTimeWidget @('Date')) "Date => time"
@@ -587,6 +695,14 @@ $unbounded = @($callSites | Where-Object { $_.Value -notmatch '-TimeoutSec' })
 Assert ($unbounded.Count -eq 0) ("AC22 every HTTP call passes -TimeoutSec (unbounded: " + (@($unbounded | ForEach-Object { $_.Value.Trim() }) -join ' | ') + ")")
 Assert (@([regex]::Matches($srcG,'\.Wait\(\s*\)')).Count -eq 0) "AC22 no .Wait() is called without a bound"
 
+Write-Host "== V5: the GraphQL query surface the normalizer depends on =="
+# Normalize-Widget reads fields that must actually be REQUESTED. A dropped selection would fail only
+# against the live API, which no offline suite exercises -- so pin the query text itself.
+$srcQ = Get-Content (Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1') -Raw
+foreach($need in @('dateRange','widgetTemplate{id linked}','parts{id provider{id name} dataSource{id}}','sections{id name isHidden}')){
+  Assert ($srcQ -match [regex]::Escape($need)) "V5 the GraphQL query still requests '$need' (Normalize-Widget reads it)"
+}
+Assert ($srcQ -match 'data\(first:__N__,after:\$after,socketId:\$sid') "V5 the data selection keeps its pagination + socket args"
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

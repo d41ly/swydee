@@ -105,6 +105,77 @@ $redacted = 'Latest view: https://swy.do/shares/ABCdef123 weekly' -replace $scri
 A ($redacted -notmatch 'swy\.do/shares/ABCdef') "note redaction strips the share link (KeyPattern)"
 $rthrew=$false; try{ Assert-NoCredential $redacted }catch{ $rthrew=$true }; A (-not $rthrew) "redacted note passes Assert-NoCredential (no pipeline abort)"
 
+Write-Host "== ANLZ-aUniformLattice-3 (P2): declared aggregation semantics =="
+# AC1: plain summable counts and money.
+A ((Get-AggregationClass 'google-adwords:clicks' $null) -eq 'sum') "P2 AC1 clicks => sum"
+A ((Get-AggregationClass 'google-adwords:cost_micros' 'micros') -eq 'sum') "P2 AC1 cost_micros => sum"
+A ((Get-AggregationClass 'google-adwords:impressions' $null) -eq 'sum') "P2 AC1 impressions => sum"
+A ((Get-AggregationClass 'facebook-ads:spend' 'micros') -eq 'sum') "P2 AC1 spend => sum"
+
+# AC2: anything Get-RatioSpec claims is recomputable.
+A ((Get-AggregationClass 'google-adwords:ctr' 'fraction') -eq 'ratio-recompute') "P2 AC2 ctr => ratio-recompute"
+A ((Get-AggregationClass 'google-adwords:average_cpc' 'micros') -eq 'ratio-recompute') "P2 AC2 average_cpc => ratio-recompute"
+A ((Get-AggregationClass 'google-adwords:cost_per_conversion' 'micros') -eq 'ratio-recompute') "P2 AC2 cost_per_conversion => ratio-recompute"
+
+# AC3: deduplicated counts are their own class, not 'unknown'.
+A ((Get-AggregationClass 'facebook-ads:reach' $null) -eq 'dedup-nonsummable') "P2 AC3 reach => dedup-nonsummable"
+A ((Get-AggregationClass 'ga4:activeUsers' $null) -eq 'dedup-nonsummable') "P2 AC3 activeUsers => dedup-nonsummable"
+
+# AC4: reported rate/share families delegate to Metric-Type; unmatched ids stay unknown.
+A ((Get-AggregationClass 'google-adwords:search_impression_share' 'fraction') -eq 'account-asis') "P2 AC4 impression_share => account-asis"
+A ((Get-AggregationClass 'google-adwords:search_lost_is_budget' 'fraction') -eq 'account-asis') "P2 AC4 search_lost_is_budget => account-asis"
+A ((Get-AggregationClass 'x:some_unknown_metric' $null) -eq 'unknown') "P2 AC4 unmatched id => unknown"
+A ((Get-AggregationClass $null $null) -eq 'unknown') "P2 AC4 null id => unknown, no throw"
+A ((Get-AggregationClass '' $null) -eq 'unknown') "P2 AC4 empty id => unknown, no throw"
+
+# AC4b: THE VETOES. Each pins a misclassification measured during review of the naive ladder.
+A ((Get-AggregationClass 'google-adwords:target_roas' $null) -eq 'account-asis') "P2 AC4b V1 target_roas is a bid SETTING => account-asis, NOT ratio-recompute"
+A ((Get-AggregationClass 'google-adwords:target_cpa' $null) -eq 'account-asis') "P2 AC4b V1 target_cpa => account-asis, NOT ratio-recompute"
+A ((Get-AggregationClass 'bing-ads:return_on_ad_spend' $null) -eq 'account-asis') "P2 AC4b V3 return_on_ad_spend => account-asis, NOT sum (Test-Summable matches the 'spend' substring)"
+A ((Get-AggregationClass 'x:value_per_conversion' $null) -eq 'account-asis') "P2 AC4b V2 value_per_conversion => account-asis, NOT dedup and NOT sum"
+A ((Get-AggregationClass 'ga4:screenPageViewsPerSession' $null) -eq 'account-asis') "P2 AC4b V2 screenPageViewsPerSession => account-asis"
+# The vetoes must not swallow the real ratio family they sit above.
+A ((Get-AggregationClass 'x:websitePurchaseRoas' $null) -eq 'ratio-recompute') "P2 AC4b a real roas still reaches R1"
+
+# AC4c: the ladder is TOTAL over both shipped corpora, and R2's terms stay a subset of the denylist.
+$corpus = @('google-adwords:cost_micros','google-adwords:average_cpc','google-adwords:average_cpm',
+  'google-adwords:cost_per_conversion','facebook-ads:spend','facebook-ads:cpc',
+  'facebook-ads:costPerActionType::link_click','facebook-ads:ctrLink','facebook-ads:ctr',
+  'google-adwords:ctr','google-adwords:conversion_rate','google-adwords:interaction_rate',
+  'google-adwords:video_view_rate','google-adwords:search_impression_share','google-adwords:search_lost_is_budget',
+  'google-adwords:impressions','google-adwords:clicks','facebook-ads:reach','bing-ads:spend',
+  'linkedin-ads:cpc','tiktok-ads:spend','google-analytics-4:cpc','pinterest:cpm','x:exchange_rate',
+  'ga4:events_per_session_rate','google-analytics-4:engagement_time_micros',
+  'google-adwords:conversions_value_micros','shopify:total_sales_micros','google-analytics-4:sessions',
+  'google-adwords:conversions','x:value','google-adwords:ad_group')
+$valid = @('sum','ratio-recompute','dedup-nonsummable','account-asis','unknown')
+$bad = @()
+foreach($cid in $corpus){ $cl = Get-AggregationClass $cid $null; if($cl -notin $valid){ $bad += ($cid + '=>' + $cl) } }
+A ($bad.Count -eq 0) ("P2 AC4c every corpus id resolves to a valid class (bad: " + ($bad -join ', ') + ")")
+# R2's four terms must remain a strict subset of Test-Summable's own denylist, or the copy has desynced.
+$sumSrc = (Get-Command Test-Summable).ScriptBlock.ToString()
+foreach($term in @('reach','frequency','unique','users?$')){
+  A ($sumSrc -match [regex]::Escape($term)) "P2 AC4c R2 term '$term' is still present in Test-Summable's denylist"
+}
+# Divergence pin: P2 must not have unified the two predicates it composes.
+A ((Test-Additive 'x:value') -ne (Test-Summable 'x:value')) "P2 S4 Test-Additive / Test-Summable divergence is untouched"
+
+# AC5: the moved hash returns literals captured from the PRE-MOVE definition, so the test cannot
+# compare the function against itself.
+A ((Get-BasisVersion 'g:cost' 'micros' 'USD') -eq '840fe173e2ff') "P2 AC5 basis hash pinned (micros/USD)"
+A ((Get-BasisVersion 'g:clicks' $null $null) -eq '38651fdc0b49') "P2 AC5 basis hash pinned (null/null)"
+A ((Get-BasisVersion 'g:cost' 'micros' 'EUR') -eq 'd26f76203c7f') "P2 AC5 basis hash pinned (micros/EUR)"
+A ((Get-BasisVersion 'x:y' $null 'USD') -eq '9aa1c4d052bd') "P2 AC5 basis hash pinned (null/USD)"
+A ((Get-BasisVersion 'g:cost' 'micros' 'USD') -ne (Get-BasisVersion 'g:cost' 'micros' 'EUR')) "P2 AC8 currency alone forks the basis"
+A ((Get-BasisVersion 'g:cost' 'micros' 'USD') -ne (Get-BasisVersion 'g:cost' $null 'USD')) "P2 AC8 unit alone forks the basis"
+
+# AC7: Get-CellBasis is the cell-shaped tuple and delegates the hash.
+$cb = Get-CellBasis 'google-adwords:cost_micros' 'micros' 'USD'
+A ($cb.unit -eq 'micros' -and $cb.currencyCode -eq 'USD') "P2 AC7 Get-CellBasis carries unit and currency"
+A ($cb.basisVersion -eq (Get-BasisVersion 'google-adwords:cost_micros' 'micros' 'USD')) "P2 AC7 Get-CellBasis delegates the hash"
+$cbn = Get-CellBasis 'x:y' $null $null
+A ($cbn.basisVersion.Length -eq 12) "P2 AC7 a null basis still hashes to 12 chars"
+
 Write-Host "== Get-ProviderFilterFinding (--platform, U2) =="
 A ($null -eq (Get-ProviderFilterFinding @() @('google-adwords','facebook-ads'))) "no filter => no finding"
 A ($null -eq (Get-ProviderFilterFinding $null @('google-adwords','facebook-ads'))) "null filter (absent/[] deserialized) => no finding (no @(null) trap)"
@@ -112,6 +183,16 @@ $pff = Get-ProviderFilterFinding @('google-adwords') @('google-adwords','faceboo
 A ($null -ne $pff -and $pff.ruleId -eq 'PROVIDER_FILTERED' -and $pff.severity -eq 'major') "filter with exclusion => major PROVIDER_FILTERED finding"
 A ($pff.statement -match 'facebook-ads') "finding names the excluded platform"
 A ($null -eq (Get-ProviderFilterFinding @('google-adwords','facebook-ads') @('google-adwords','facebook-ads'))) "filter covers all => no finding"
+# ANLZ-aUniformLattice-7: an UNFILTERED extraction round-trips providerFilter through JSON as `{}`
+# (PowerShell renders a returned-empty-array $null that way), which a truthiness test counted as ONE
+# filter entry -- firing a force-surfaced major that told the client every platform was excluded.
+$pfObj = ('{"providerFilter":{}}' | ConvertFrom-Json).providerFilter
+A ($null -eq (Get-ProviderFilterFinding $pfObj @('google-adwords','facebook-ads'))) "ANLZ-7 an empty PSCustomObject filter is NOT a filter"
+A ($null -eq (Get-ProviderFilterFinding @($pfObj) @('google-adwords','facebook-ads'))) "ANLZ-7 same, array-wrapped"
+A ($null -eq (Get-ProviderFilterFinding @('') @('google-adwords','facebook-ads'))) "ANLZ-7 an empty string is NOT a filter"
+A ($null -eq (Get-ProviderFilterFinding @(@{}) @('google-adwords','facebook-ads'))) "ANLZ-7 an empty hashtable is NOT a filter"
+$pfStill = Get-ProviderFilterFinding @('google-adwords') @('google-adwords','facebook-ads')
+A ($null -ne $pfStill -and $pfStill.severity -eq 'major') "ANLZ-7 a REAL filter still fires the major finding"
 
 Write-Host "== Test-IsAnnotation (U3) =="
 A (Test-IsAnnotation 'Account notes: - Creatives were updated both on Google Ads and Facebook on June 8th, 2026.' @('Google Ads','Facebook Ads')) "real note kept"
@@ -370,7 +451,11 @@ A ($h9.canonical.display -eq $h9.displayCurrent) "e2e12: canonical.display == di
 foreach($kk in 'display','sourceWidgetId','scope','period','source'){ A ($h9.canonical.PSObject.Properties.Name -contains $kk) "e2e12: canonical carries '$kk'" }
 foreach($bad in 'value','basisVersion','synthesizedFrom'){ A (-not ($h9.canonical.PSObject.Properties.Name -contains $bad)) "e2e13: canonical has NO '$bad'" }
 # 14. meta versions
-A ($r9.facts.meta.canonicalVersion -eq 2 -and $r9.facts.meta.factsVersion -eq 1) "e2e14/U9: meta.canonicalVersion=2 (D6 global bump), factsVersion=1"
+# ANLZ-aUniformLattice-6 (P5) bumped this 2 -> 3 under its disclosed waiver. U9 D6's rule is that the
+# marker names WHICH canonical algorithm produced the facts and moves on ANY algorithm change, global
+# and non-flip-conditional -- so the pin follows the bump rather than the bump breaking the pin.
+A ($r9.facts.meta.canonicalVersion -eq 3 -and $r9.facts.meta.factsVersion -eq 1) "e2e14/U9: meta.canonicalVersion=3 after the P5 waiver (D6 global bump), factsVersion=1"
+A ($r9.facts.meta.matrixVersion -eq 1) "e2e14: meta.matrixVersion=1 names the matrix algorithm separately"
 # 15. GAP_NO_ACCOUNT_TOTAL shape: info + fid + evidence.metrics
 $g15 = GetFind $r8.facts 'GAP_NO_ACCOUNT_TOTAL'
 A ($g15.severity -eq 'info' -and $g15.fid -and @($g15.evidence.metrics).Count -ge 1) "e2e15: GAP_NO_ACCOUNT_TOTAL severity=info, has fid, evidence.metrics listed"
@@ -638,7 +723,7 @@ $h2 = Hl $t2.facts 'google-adwords' 'google-adwords:cost_micros'
 A ($h2.canonical.sourceWidgetId -eq 'w2-kpi' -and $h2.canonical.source -eq 'kpi-widget') "U9-T2: KPI-first wins at first encounter (no displacement)"
 A ($t2.text -notmatch 'supersededWidgetId') "U9-T2: no supersededWidgetId anywhere in non-flip facts"
 A (-not (HasFind $t2.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T2: no precedence finding on non-flip"
-A ($t2.facts.meta.canonicalVersion -eq 2) "U9-T2: canonicalVersion=2 even on non-flip (D6 global)"
+A ($t2.facts.meta.canonicalVersion -eq 3) "U9-T2: canonicalVersion=3 even on non-flip (D6 global)"
 A ($t2.text -match '"current":9999000000,') "U9-T2: legacy current field byte-pinned unchanged"
 A ($t2.text -match [regex]::Escape('"displayCurrent":"$9,999.00"')) "U9-T2: legacy displayCurrent string byte-pinned unchanged"
 
@@ -675,7 +760,21 @@ $t5 = RunAnalyze (MkDoc @(
 ))
 A ((Hl $t5.facts 'google-adwords' 'google-adwords:cost_micros').canonical.sourceWidgetId -eq 'w5-tab') "U9-T5: blended zero-dim widget never displaces (table stays)"
 A (-not (HasFind $t5.facts 'GAP_HEADLINE_SOURCE_CHANGED')) "U9-T5: blended non-displacement => no finding"
-A ($t5.text -notmatch 'w5-blend') "U9-T5: blended widget absent from any canonical.sourceWidgetId"
+# ANLZ-aUniformLattice-4 (P3) narrowed this from a whole-document regex to its STATED intent. P3 adds
+# platforms[].metrics[].observedOnWidgetIds, which names a blended widget deliberately: it is the CAUSE
+# of a blended-undecomposable cell. The U9 guarantee is about SOURCING, so assert sourcing directly --
+# no canonical source, no superseded source, and no matrix contribution may ever be a blended widget.
+$t5srcIds = @()
+foreach($pl5 in @($t5.facts.platforms)){
+  foreach($hk5 in @($pl5.headline.PSObject.Properties.Name)){
+    if($hk5 -eq 'hasComparison'){ continue }
+    $hc5 = $pl5.headline.$hk5
+    if($hc5.canonical){ $t5srcIds += [string]$hc5.canonical.sourceWidgetId; $t5srcIds += [string]$hc5.canonical.supersededWidgetId }
+  }
+  foreach($mk5 in @($pl5.metrics.PSObject.Properties.Name)){ $t5srcIds += @($pl5.metrics.$mk5.contributingWidgetIds) }
+}
+A (@($t5srcIds | Where-Object { $_ -eq 'w5-blend' }).Count -eq 0) "U9-T5: blended widget is never a canonical source, a superseded source, or a matrix contributor"
+A (($t5.facts.platforms | Where-Object { $_.id -eq 'google-adwords' }).metrics.'google-adwords:cost_micros'.observedOnWidgetIds -contains 'w5-blend') "P3 AC6: the blended widget IS recorded as an observer, so a valueless cell still points at its cause"
 
 # U9-T6 (D9): #5 independence - the u5a layout (table 120 > KPI 100) flips headline to the KPI, #5 still fires,
 # and the headline winner + #5's ceiling now cite the same figure.
@@ -1026,6 +1125,242 @@ A (@($rBad.facts.meta.incompleteWidgets).Count -eq 1) "ids only, one entry, no r
 # The pre-existing warnings path must be untouched by the new one.
 A (-not (HasFind $rBad.facts 'GAP_WARNINGS')) "GAP_WARNINGS is independent (no warnings here => none emitted)"
 
+Write-Host "== ANLZ-aUniformLattice-4 (P3): the uniform matrix =="
+function Mx($facts,$prov,$mid){ $pl=@($facts.platforms | Where-Object { $_.id -eq $prov }); if(@($pl).Count -eq 0){ return $null }; return $pl[0].metrics.$mid }
+function MxKeys($facts,$prov){ $pl=@($facts.platforms | Where-Object { $_.id -eq $prov }); if(@($pl).Count -eq 0){ return @() }; return @($pl[0].metrics.PSObject.Properties.Name) }
+
+# AC3/AC4: a zero-dim KPI is scope=account/kpi-widget; a dimensioned total row is table-total.
+$p3a = RunAnalyze (MkDoc @(
+  (DW 'p3-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100 80)}))),
+  (DW 'p3-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 5000000)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 5000000)})))
+))
+$c1 = Mx $p3a.facts 'google-adwords' 'google-adwords:clicks'
+A ($c1.method -eq 'kpi-widget' -and $c1.scope -eq 'account') "P3 AC3 zero-dim KPI => kpi-widget/account"
+A ($c1.current -eq 100 -and $c1.previous -eq 80) "P3 AC3 cell carries the raw numerics the repointed rules read"
+A ($c1.hasComparison -eq $true -and $c1.displayDelta) "P3 AC3 per-cell hasComparison and delta"
+A ($c1.aggClass -eq 'sum' -and $c1.basis.basisVersion) "P3 cell carries the P2 class and basis"
+$hl1 = Hl $p3a.facts 'google-adwords' 'google-adwords:clicks'
+A ($c1.displayCurrent -eq $hl1.displayCurrent) "P3 AC3 matrix and headline agree cell-for-cell"
+$c2 = Mx $p3a.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($c2.method -eq 'total-row' -and $c2.scope -eq 'table-total:Campaign') "P3 AC4 dimensioned total row => total-row/table-total"
+
+# AC1: headline is byte-identical to what it would be without the matrix (the key set is unchanged).
+$plA = @($p3a.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0]
+A (@($plA.PSObject.Properties.Name) -join ',' -eq 'id,name,category,headline,hasComparison,metrics,breakdowns') "P3 AC12 platform key order incl. hasComparison between headline and metrics"
+
+# AC5: a dimensioned SUMMABLE widget with no total row => the permanent rank-3 stub.
+$p3b = RunAnalyze (MkDoc @(
+  (DW 'p3-kpi2' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 10)}))),
+  (DW 'p3-nototal' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Impr' 'google-adwords:impressions' $null)) @((DRow 'data' 'A' 'Campaign' @{Impr=(Cell 7)}),(DRow 'data' 'B' 'Campaign' @{Impr=(Cell 9)})))
+))
+$c3 = Mx $p3b.facts 'google-adwords' 'google-adwords:impressions'
+A ($c3.reason -eq 'incomplete-rows') "P3 AC5 dimensioned no-total summable => incomplete-rows (the permanent rank-3 stub)"
+A ($null -eq $c3.current -and $null -eq $c3.displayCurrent -and $null -eq $c3.method) "P3 AC5 a reason cell carries no value and no method"
+A (@($c3.contributingWidgetIds).Count -eq 0 -and (@($c3.observedOnWidgetIds) -contains 'p3-nototal')) "P3 AC5 a valueless cell still points at its cause"
+A ($null -eq (Mx $p3b.facts 'google-adwords' 'google-adwords:impressions').current) "P3 AC5b no cell carries both a value and a reason"
+
+# AC5c: declared metric whose total-row cell is a non-numeric echo object => no-usable-cell.
+$echo = [pscustomobject]@{ campaign_name='Alpha' }
+$p3c = RunAnalyze (MkDoc @(
+  (DW 'p3-echo' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Camp' 'google-adwords:campaign' $null)) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 100);Camp=(Cell $echo)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 100);Camp=(Cell $echo)})))
+))
+$c4 = Mx $p3c.facts 'google-adwords' 'google-adwords:campaign'
+A ($c4.reason -eq 'no-usable-cell') "P3 AC5c a declared metric with a non-numeric total-row cell => no-usable-cell"
+A ($null -ne (Mx $p3c.facts 'google-adwords' 'google-adwords:cost_micros').current) "P3 AC5c its sibling metric on the same widget still gets a value"
+
+# AC6: blended-only observation.
+$p3d = RunAnalyze (MkDoc @(
+  (DW 'p3-solo' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 5)}))),
+  (DW 'p3-blend' $null $null @() @((Met 'BLeads' 'provb:leads' $null)) @((KRow @{BLeads=(Cell 42)})) @([pscustomobject]@{id='google-adwords';name='Google Ads'},[pscustomobject]@{id='provb';name='Provider B'}))
+))
+$c5 = Mx $p3d.facts 'provb' 'provb:leads'
+A ($c5.reason -eq 'blended-undecomposable') "P3 AC6 a metric seen only on a blended widget => blended-undecomposable"
+A (@($c5.contributingWidgetIds).Count -eq 0) "P3 AC6 a blended widget never contributes a value"
+A (@($c5.observedOnWidgetIds) -contains 'p3-blend') "P3 AC6 but it IS recorded as an observer"
+
+# AC7: two zero-dim widgets, same metric => one cell, document-order winner, conflict names the loser.
+$p3e = RunAnalyze (MkDoc @(
+  (DW 'p3-k1' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100)}))),
+  (DW 'p3-k2' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 250)})))
+))
+$c6 = Mx $p3e.facts 'google-adwords' 'google-adwords:clicks'
+A (@(MxKeys $p3e.facts 'google-adwords' | Where-Object { $_ -eq 'google-adwords:clicks' }).Count -eq 1) "P3 AC7 two offerers => exactly ONE cell"
+A ($c6.current -eq 100) "P3 AC7 the document-order winner supplies the value"
+A ($c6.conflict.reason -eq 'same-rank-disagreement' -and (@($c6.conflict.losingWidgetIds) -contains 'p3-k2')) "P3 AC7 the loser is named by id"
+A (($c6 | ConvertTo-Json -Depth 10) -notmatch '250') "P3 AC7 no losing VALUE is echoed anywhere in the cell (U9 D4/FP-3)"
+
+# AC8: a basis disagreement keeps the winner's VALUE and records conflict; it is never a valueless cell.
+$p3f = RunAnalyze (MkDoc @(
+  (DW 'p3-usd' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 100000000)})) $null 'USD'),
+  (DW 'p3-eur' 'google-adwords' 'Google Ads' @() @((Met 'Cost' 'google-adwords:cost_micros' 'micros')) @((KRow @{Cost=(Cell 120000000)})) $null 'EUR')
+))
+$c7 = Mx $p3f.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($null -ne $c7.current) "P3 AC8 a basis disagreement is a VALUE cell, never a reason cell"
+A ($c7.conflict.reason -eq 'basis-mismatch') "P3 AC8 conflict.reason is basis-mismatch"
+A ($null -eq $c7.reason) "P3 AC8 and it carries no reason token"
+
+# AC9: a hidden-section widget contributes no value; sole offerer => hidden-section token.
+$hidW = (DW 'p3-hid' 'google-adwords' 'Google Ads' @() @((Met 'Impr' 'google-adwords:impressions' $null)) @((KRow @{Impr=(Cell 55)})))
+$hidW | Add-Member -NotePropertyName sectionHidden -NotePropertyValue $true -Force
+$p3g = RunAnalyze (MkDoc @(
+  (DW 'p3-vis' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 3)}))),
+  $hidW
+))
+$c8 = Mx $p3g.facts 'google-adwords' 'google-adwords:impressions'
+A ($c8.reason -eq 'hidden-section') "P3 AC9 a hidden-section sole offerer => hidden-section token"
+A ($c8.coverageBasis.hiddenSectionExcluded -eq $true) "P3 AC9 coverageBasis records that a hidden section was excluded"
+
+# AC2: totality - every observed pair has exactly one cell, and no cell has both a value and a reason.
+foreach($tf in @($p3a,$p3b,$p3c,$p3d,$p3e,$p3f,$p3g)){
+  foreach($pl in @($tf.facts.platforms)){
+    foreach($mk in @($pl.metrics.PSObject.Properties.Name)){
+      $cc3 = $pl.metrics.$mk
+      $hasVal = ($null -ne $cc3.current)
+      $hasRe  = ($null -ne $cc3.reason)
+      A ($hasVal -ne $hasRe) "P3 AC5b cell '$mk' has exactly one of value / reason"
+      A ($null -ne $cc3.aggClass -and $null -ne $cc3.basis -and $null -ne $cc3.period) "P3 AC2 cell '$mk' always carries class, basis and period"
+    }
+  }
+}
+
+# AC12: the facts-schema shape gate. Nothing in tools/gate-legs.json checks the contract, so this is it.
+$shape = $p3a.facts
+A (@($shape.PSObject.Properties.Name) -join ',' -eq 'meta,platforms,findings') "P3 AC12 facts top-level shape is meta,platforms,findings"
+A (@($shape.findings.PSObject.Properties.Name) -join ',' -eq 'wins,losses,anomalies,discrepancies,dataGaps') "P3 AC12 findings channel order is pinned"
+foreach($needKey in @('id','name','category','headline','hasComparison','metrics')){
+  A (@($plA.PSObject.Properties.Name) -contains $needKey) "P3 AC12 platform carries '$needKey'"
+}
+
+
+Write-Host "== ANLZ-aUniformLattice-5 (P4): the addressable second layer =="
+$p4a = RunAnalyze (MkDoc @(
+  (DW 'p4-tab' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Cost' 'google-adwords:cost_micros' 'micros'),(Met 'Clicks' 'google-adwords:clicks' $null)) @((DRow 'total' $null 'Campaign' @{Cost=(Cell 900);Clicks=(Cell 90)}),(DRow 'data' 'A' 'Campaign' @{Cost=(Cell 500);Clicks=(Cell 50)}),(DRow 'data' 'B' 'Campaign' @{Cost=(Cell 400);Clicks=(Cell 40)})))
+))
+$bd = @($p4a.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+A (@($bd.PSObject.Properties.Name) -join ',' -eq 'widgetId,dimensions,metricNames,metricIds,rowCount,shown,rowKeyBasis,rows') "P4 AC7 breakdown key order pinned, metricIds adjacent to metricNames"
+A (@($bd.metricIds).Count -eq @($bd.metricNames).Count) "P4 AC2 metricIds is index-aligned with metricNames"
+A ($bd.metricIds[0] -eq 'google-adwords:cost_micros' -and $bd.metricIds[1] -eq 'google-adwords:clicks') "P4 AC2 metricIds holds the ids in metric order"
+$r0 = $bd.rows[0]
+A (@($r0.PSObject.Properties.Name) -join ',' -eq 'label,values,valuesById') "P4 AC7 row key order: label,values,valuesById (no null rowKey)"
+A ($r0.values.'Cost'.display -eq $r0.valuesById.'google-adwords:cost_micros'.display) "P4 AC3 the two maps agree for a unique display name"
+A (@($r0.valuesById.PSObject.Properties.Name).Count -eq @($r0.values.PSObject.Properties.Name).Count) "P4 AC3 same entry count when no name collides"
+A ($bd.rowKeyBasis -eq 'absent') "P4 AC5 a fixture without extractor rowKeys reports rowKeyBasis=absent"
+A ($null -eq $r0.rowKey) "P4 AC5/F4 rowKey is OMITTED, never emitted as null"
+
+# AC4: the duplicate-display-name case is exactly what valuesById exists for. Build the row map the way
+# the real extractor does -- Uniq-Key renames the collider -- so the fixture can express two columns.
+$dupMets = @((Met 'Clicks' 'google-adwords:clicks' $null),(Met 'Clicks' 'facebook-ads:clicks' $null))
+$dupMets[0] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Clicks' -Force
+$dupMets[1] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Clicks [facebook-ads:clicks]' -Force
+function DupRow($kind,$label,$v1,$v2){
+  $dm=[ordered]@{}; $dm['Campaign']=$label
+  $mm=[ordered]@{}; $mm['Clicks']=(Cell $v1); $mm['Clicks [facebook-ads:clicks]']=(Cell $v2)
+  $o=[pscustomobject]@{ kind=$kind; dimensions=[pscustomobject]$dm; metrics=[pscustomobject]$mm }
+  $o | Add-Member -NotePropertyName rowKey -NotePropertyValue ("rk-" + $label) -Force
+  return $o
+}
+$p4b = RunAnalyze (MkDoc @(
+  (DW 'p4-dup' 'google-adwords' 'Google Ads' @('Campaign') $dupMets @((DupRow 'total' 'T' 300 700),(DupRow 'data' 'A' 100 250),(DupRow 'data' 'B' 200 450)))
+))
+$bd2 = @($p4b.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+$rd = @($bd2.rows | Where-Object { $_.label -eq 'A' })[0]   # Get-Breakdown sorts DESC by the ordering metric, so rows[0] is not 'A'
+A (@($rd.values.PSObject.Properties.Name).Count -eq 1) "P4 AC4 values still COLLAPSES a duplicate display name to one entry (unchanged defect)"
+A (@($rd.valuesById.PSObject.Properties.Name).Count -eq 2) "P4 AC4 valuesById does NOT collapse: two ids, two entries"
+A ($rd.valuesById.'google-adwords:clicks'.display -ne $rd.valuesById.'facebook-ads:clicks'.display) "P4 AC4 each id carries its OWN number, not the first metric's"
+A ($rd.valuesById.'facebook-ads:clicks'.display -eq '250') "P4 AC4 the second metric's value is recoverable ONLY from valuesById"
+A ($rd.rowKey -eq 'rk-A') "P4 AC5 rowKey is copied verbatim from the extraction row"
+A ($bd2.rowKeyBasis -eq 'extractor') "P4 AC5 rowKeyBasis reports extractor when the rows carry keys"
+A (@($bd2.rows | Where-Object { $_.rowKey }).Count -eq @($bd2.rows).Count) "P4 AC5 every emitted row carries its key"
+
+# AC4/P4-5: with NO cellKey and a collided name there is no way to disambiguate, so the metric is
+# OMITTED rather than given a confidently wrong number.
+$dupNoKey = @((Met 'Clicks' 'google-adwords:clicks' $null),(Met 'Clicks' 'facebook-ads:clicks' $null))
+$p4c = RunAnalyze (MkDoc @(
+  (DW 'p4-dup2' 'google-adwords' 'Google Ads' @('Campaign') $dupNoKey @((DupRow 'total' 'T' 300 700),(DupRow 'data' 'A' 100 250)))
+))
+$bd3 = @($p4c.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].breakdowns[0]
+$rd3 = @($bd3.rows | Where-Object { $_.label -eq 'A' })[0]
+A (@($rd3.PSObject.Properties.Name) -contains 'valuesById') "P4 AC4 v2 valuesById is EMITTED (an omitted key would pass the emptiness test vacuously)"
+A (@($rd3.valuesById.PSObject.Properties.Name | Where-Object { $_ }).Count -eq 0) "P4 AC4 v2 + collided name => the metric is OMITTED from valuesById, never guessed"
+A ($null -eq $rd3.valuesById.'google-adwords:clicks' -and $null -eq $rd3.valuesById.'facebook-ads:clicks') "P4 AC4 v2 neither colliding id is addressable, so no wrong number is published"
+A (@($rd3.values.PSObject.Properties.Name).Count -eq 1) "P4 AC4 v2 values still carries the collapsed single entry"
+Write-Host "== ANLZ-aUniformLattice-6 (P5): coverage reasons, membership invariant =="
+# AC5: the waiver markers.
+$p5a = RunAnalyze (MkDoc @(
+  (DW 'p5-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 10)}))),
+  (DW 'p5-nototal' 'google-adwords' 'Google Ads' @('Campaign') @((Met 'Impr' 'google-adwords:impressions' $null)) @((DRow 'data' 'A' 'Campaign' @{Impr=(Cell 7)})))
+))
+A ($p5a.facts.meta.canonicalVersion -eq 3) "P5 AC5 canonicalVersion is 3"
+A ($p5a.facts.meta.matrixVersion -eq 1) "P5 AC5 matrixVersion is 1"
+$g5 = GetFind $p5a.facts 'GAP_NO_ACCOUNT_TOTAL'
+A ($null -ne $g5) "P5 AC1 the gap still fires for a metric with no headline cell"
+A ($g5.severity -eq 'info') "P5 AC4 severity is still info"
+A ($g5.evidence.byReason -is [string]) "P5 AC3 byReason is a FLAT STRING (U10 D5)"
+A ($g5.evidence.byReason -match 'incomplete-rows') "P5 AC2 the reason is the matrix's, not a guess"
+A ($g5.statement -notmatch 'only dimensioned rows with no total row') "P5 AC2 the old undifferentiated guess is gone"
+
+# F1 COUNTEREXAMPLE (review-reproduced): the matrix refuses a hidden-section widget, the headline does
+# NOT. Membership must stay keyed on the HEADLINE, or the gap would list a metric the report still
+# publishes -- a self-contradicting facts document.
+$hid5 = (DW 'p5-hid' 'google-adwords' 'Google Ads' @() @((Met 'Impr' 'google-adwords:impressions' $null)) @((KRow @{Impr=(Cell 55000)})))
+$hid5 | Add-Member -NotePropertyName sectionHidden -NotePropertyValue $true -Force
+$p5b = RunAnalyze (MkDoc @(
+  (DW 'p5-vis' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 3000)}))),
+  $hid5
+))
+$hlHid = Hl $p5b.facts 'google-adwords' 'google-adwords:impressions'
+A ($null -ne $hlHid) "P5 F1 the headline DOES carry a hidden-section metric (the matrix does not)"
+A (-not (HasFind $p5b.facts 'GAP_NO_ACCOUNT_TOTAL')) "P5 F1 membership is headline-keyed, so no gap is invented for a metric the report publishes"
+$mxHid = @($p5b.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].metrics.'google-adwords:impressions'
+A ($mxHid.reason -eq 'hidden-section') "P5 F1 the matrix still records the honest reason beside it"
+
+# F2 COUNTEREXAMPLE (review-reproduced): headline attributes by widget provider, the matrix by metric
+# prefix. Repointing membership to the matrix would DELETE this correct warning.
+$p5c = RunAnalyze (MkDoc @(
+  (DW 'p5-ga4' 'google-analytics-4' 'GA4' @() @((Met 'Users' 'google-analytics-4:users' $null)) @((KRow @{Users=(Cell 1200)}))),
+  (DW 'p5-mixed' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null),(Met 'Sessions' 'google-analytics-4:sessions' $null)) @((KRow @{Clicks=(Cell 500);Sessions=(Cell 9000)})))
+))
+$g5c = @($p5c.facts.findings.dataGaps | Where-Object { $_.ruleId -eq 'GAP_NO_ACCOUNT_TOTAL' -and $_.platform -eq 'GA4' })
+A (@($g5c).Count -eq 1) "P5 F2 a mixed-prefix widget still raises the gap for the metric's true platform"
+A ($g5c[0].evidence.byReason -match 'attributed-to-other-platform') "P5 F2 and names the real cause: the headline filed it under another platform"
+
+# AC6: the flip set is bounded. Nothing but the statement, byReason and the two version keys moves.
+$p5d = RunAnalyze (MkDoc @(
+  (DW 'p5-x' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 42 40)})))
+))
+A (-not (HasFind $p5d.facts 'GAP_NO_ACCOUNT_TOTAL')) "P5 AC6 a fully-covered platform emits no gap, exactly as before"
+A ((Hl $p5d.facts 'google-adwords' 'google-adwords:clicks').displayCurrent -eq '42') "P5 AC6 headline values are untouched by the waiver"
+Write-Host "== final-review fixes: matrix conflict honesty and classifier coverage =="
+# UL-3: two cloned KPI cards carrying the SAME number are an ordinary layout, not a discrepancy.
+$fx1 = RunAnalyze (MkDoc @(
+  (DW 'clone-a' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100 80)}))),
+  (DW 'clone-b' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100 80)})))
+))
+$fc1 = Mx $fx1.facts 'google-adwords' 'google-adwords:clicks'
+A ($fc1.current -eq 100) "UL-3 cloned agreeing KPI cards still yield the winner's value"
+A ($null -eq $fc1.conflict) "UL-3 agreeing sources record NO conflict (a false disagreement is a false signal)"
+# and a real disagreement still does
+$fx2 = RunAnalyze (MkDoc @(
+  (DW 'dis-a' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100)}))),
+  (DW 'dis-b' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 250)})))
+))
+A ((Mx $fx2.facts 'google-adwords' 'google-adwords:clicks').conflict.reason -eq 'same-rank-disagreement') "UL-3 a REAL value disagreement still records the conflict"
+
+# UL-2: one widget declaring the same metric id twice must not label the cell with one column's name
+# and the other column's number, and must never name itself as its own loser.
+$dupIdMets = @((Met 'Spend' 'google-adwords:cost_micros' 'micros'),(Met 'Cost' 'google-adwords:cost_micros' 'micros'))
+$dupIdMets[0] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Spend' -Force
+$dupIdMets[1] | Add-Member -NotePropertyName cellKey -NotePropertyValue 'Cost' -Force
+$dupRow=[pscustomobject]@{ kind='data'; metrics=[pscustomobject]([ordered]@{ Spend=(Cell 1000000); Cost=(Cell 7000000) }) }
+$fx3 = RunAnalyze (MkDoc @((DW 'w-dup-id' 'google-adwords' 'Google Ads' @() $dupIdMets @($dupRow))))
+$fc3 = Mx $fx3.facts 'google-adwords' 'google-adwords:cost_micros'
+A ($null -ne $fc3) "UL-2 a widget declaring one metric id twice still yields exactly one cell"
+A (($fc3.metric -eq 'Spend' -and $fc3.current -eq 1000000) -or ($fc3.metric -eq 'Cost' -and $fc3.current -eq 7000000)) "UL-2 the cell's NAME and VALUE come from the same contribution"
+A ($null -eq $fc3.conflict -or (@($fc3.conflict.losingWidgetIds) -notcontains 'w-dup-id')) "UL-2 a widget is never recorded as its own loser"
+
+# V2: the two dedup terms that had no behavioural pin.
+A ((Get-AggregationClass 'x:frequency' $null) -eq 'dedup-nonsummable') "V2 frequency => dedup-nonsummable"
+A ((Get-AggregationClass 'x:unique_visitors' $null) -eq 'dedup-nonsummable') "V2 unique_visitors => dedup-nonsummable"
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

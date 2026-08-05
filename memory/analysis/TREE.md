@@ -11,3 +11,4 @@ memory/analysis/
     2026-07-07-ANLZ-aCrossWidget/
     2026-07-13-ANLZ-aGappedRanking/
     2026-07-13-ANLZ-aHeadlineRank/
+    2026-08-04-ANLZ-aUniformLattice/

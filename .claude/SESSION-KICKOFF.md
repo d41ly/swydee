@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-04T21:32:59+03:00 @ 3e5bd931291315cf1078a0f49c89ef8dd1e9a6e8
+last-audit: 2026-08-05T03:42:22+03:00 @ 8e1e5294f3d7cac81bedd0495ae5ee89eaa1960c
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -66,8 +66,9 @@ completes.
   `main`. **Nothing mechanically enforces this** — the branch-guard hook was declined at adoption.
 - **Governing docs:** `AGENTS.md` is the ruleset. The **units index** (inside
   `memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md`)
-  is authoritative for what is shipped/deferred. Inside each spec, the v2 AMENDMENTS/review-override
-  block at the top OVERRIDES the unit bodies below it. `SKILL_BUILD_SPEC.md` §13 (hardened design)
+  is authoritative for what is shipped/deferred. Inside a GRANDFATHERED 2026-07 spec, the v2
+  AMENDMENTS/review-override block at the top OVERRIDES the unit bodies below it; a post-cutoff spec
+  has no such block and its body is already the folded text. `SKILL_BUILD_SPEC.md` §13 (hardened design)
   supersedes its §1–12 on any conflict. `data_gaps.md` = candidate analyzer rules, not ratified spec.
 - **Governance playbook:** `AGENTS.md` (template v2.3), with its activity-scoped companion
   `parallel-coding-governance.domain-rules.md`. `CLAUDE.md` is a `@AGENTS.md` import.
@@ -101,14 +102,17 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1064 assertions across the 8 suites (was 933 before EXTR-aPatientHarvest-1).
+1264 assertions across the 8 suites after ANLZ-aUniformLattice-6 -- the total is the SUM of the
+per-suite figures, so an arithmetic slip is self-evident: Extractor 288, Analyze 607, Closer 129,
+TrendAnalyze 68, TrendFacts 24, Archive 94, Ledger 50, Sync 4. Was 1064 at adoption.
 
 ### Tier rule
 
 Any change touching the extractor, a credential path, the closer contract, the facts schema, or
 the default report surface is **design-pass**: a written spec (goal · scope · non-goals ·
 acceptance) under `memory/<discipline>/builds/<YYYY-MM-DD>-<FAMILY>-<slug>/spec/`, adversarially
-reviewed, with the review verdict folded in as an AMENDMENTS block BEFORE building — one
+reviewed, with the review verdict folded in BEFORE building — into the BODY with a `rev-N` bump for a
+post-cutoff spec, as a top AMENDMENTS block only for the grandfathered 2026-07 ones — one
 commit/review boundary per unit. Docs, additive tests, and template wording are **direct**.
 
 Specs dated on/after **2026-08-04** must follow `memory/TEMPLATE-SPEC.md` (hygiene check 12); the
@@ -165,9 +169,12 @@ true. Keep each to one line; link out for detail.*
   `raw` (which carries per-query node ids). Verified 2026-08-04 by running the pre-change extractor
   twice. Prune when a run-to-run diff of unchanged code comes back empty.
 - The default single-report output path must stay **byte-for-byte unchanged** — every change is
-  additive-in-facts (new `meta` fields / findings only). Sole exception: the reviewed, disclosed U9
-  flip-set waiver (D1/D3) — a zero-dim KPI superseding a doc-earlier table total changes the flipped
-  cells (always disclosed in-facts) and bumps `meta.canonicalVersion` 1->2.
+  additive-in-facts (new `meta` fields / findings only). TWO reviewed, disclosed waivers now exist, and
+  `meta.canonicalVersion` names which algorithm produced an artifact. **1->2** is the U9 flip-set
+  waiver (D1/D3), where a zero-dim KPI superseding a doc-earlier table total changes the flipped cells.
+  **2->3** is ANLZ-aUniformLattice-6, whose entire flip set is the `GAP_NO_ACCOUNT_TOTAL` statement
+  wording plus its new `evidence.byReason`, with membership provably unchanged. Both disclose
+  in-facts. A third waiver needs its own MEASURED flip set before it lands.
 - Every write path keeps its **fail-closed credential gate**; only `ConvertTo-SwydoTrendFacts`
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the
@@ -181,8 +188,21 @@ true. Keep each to one line; link out for detail.*
   pre-existing blobs are already LF in the index and a repo-wide rule risks renormalizing them.
 - The gate runner's canary rejects any leg whose `argv[0]` is not `bash`/`python`/`python3`, so the
   PowerShell suites run through `tools/run-ps-suite.sh` rather than invoking `powershell.exe` direct.
+- PowerShell collapses a **returned empty array to `$null`** and a **returned one-element array to a
+  scalar**. `ConvertTo-Json` then renders that `$null` as `{}` rather than `[]`, and a truthiness test
+  counts the deserialized empty object as one real entry. Return `,@(...)` from any function whose
+  result is a collection, and do NOT re-wrap such a result in `@()` at the call site - that nests it.
+  This shipped as a false PROVIDER_FILTERED major (ANLZ-aUniformLattice-7).
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
+- Filing a new record costs three hygiene legs beyond writing it: a `DECISIONS.md` index line has a
+  **300-char cap** (check 7), any new `builds/` folder makes `TREE.md` stale (check 9), and inside a
+  build folder only `README.md STATUS.md prompts/ spec/ build/ reviews/` are allowed - `reviews/` is
+  PLURAL and its files must be `<date>-review-<slug>-<seq>.md` (checks 4 and 5). Regenerate the tree
+  with `memory-tree/gen-memory-tree.sh --write` before re-running the gate.
+- A spec dated on/after the `SPEC_FORMAT_CUTOFF` may NOT carry a top-level `## AMENDMENTS` block:
+  check 12 demands exactly the ten canonical `##` sections, so a review folds into the body with a
+  `rev-N` bump logged in §9. The grandfathered 2026-07 specs use the older top-block convention.
 - A fresh worktree can check out `.claude/skills/memory-recall/SKILL.md` with **CRLF despite the
   `eol=lf` pin**, which reds the recall skill-drift leg on an otherwise-clean tree. The committed
   blob is LF and `git check-attr` is correct, so this is a checkout artifact, not drift: fix with

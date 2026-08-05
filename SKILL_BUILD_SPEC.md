@@ -29,7 +29,7 @@
 ## 3. Mode B schema validation
 
 A file is a valid input iff, after `ConvertFrom-Json`:
-- `meta.schemaVersion == 2` (reject v1 with "re-extract with the current tool"; reject missing/other with a clear message).
+- `meta.schemaVersion` is 2 or 3 (reject v1 with "re-extract with the current tool"; reject missing/other with a clear message). v3 adds identity and completeness keys additively (ANLZ-aUniformLattice-2).
 - Required keys present: `meta{tool,extractedAt,reportId}`, `report{name,dateRange}`, `widgets[]` (array).
 - At least one widget with `kind=="data"` and `rows` (else "no data to analyze — all text/empty").
 Reject foreign JSON (no `meta.schemaVersion`) explicitly. Never attempt to analyze an unrecognized shape.
@@ -160,7 +160,7 @@ After the report is drafted:
 
 ## 10. Dependencies & compatibility
 
-- Depends on `Get-SwydoReport.ps1` v2 (schemaVersion 2). Windows PowerShell 5.1 / .NET. No jq/node/python.
+- Depends on `Get-SwydoReport.ps1` (schemaVersion 2 or 3). Windows PowerShell 5.1 / .NET. No jq/node/python.
 - `Analyze-SwydoReport.ps1` is pure/offline and independently testable (functions-first + `-DefineOnly`, mirroring the extractor, so its rules get unit tests).
 
 ## 11. Build plan & test plan (after review)
