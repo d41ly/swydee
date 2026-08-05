@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T23:35:20+03:00 @ 6213a2392b47d9e26c78d892ea27c6397518908c
+last-audit: 2026-08-05T23:41:58+03:00 @ 6213a2392b47d9e26c78d892ea27c6397518908c
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
