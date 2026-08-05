@@ -2,8 +2,8 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T15:13:28+03:00 @ 4a1341d5952cf5c5a9cbe3a03e3e61d1b3c94122
-watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
+last-audit: 2026-08-05T17:15:37+03:00 @ 3bf65010cfc8cc8caaf52e3e620d09a4573a70ae
+watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
 -->
@@ -77,11 +77,11 @@ completes.
 
 | Area / stream | Governing doc(s) | First code entrypoints |
 |---|---|---|
-| Swydo extraction (API/JWT/GraphQL/WS) | `SWYDO_REPORT_EXTRACTION_SPEC.md` · `memory/extraction/` | `skill/scripts/Get-SwydoReport.ps1` · `Test-Extractor.ps1` |
-| Single-report analysis + facts | `SKILL_BUILD_SPEC.md` §13 · `memory/analysis/` (U6 canonical total, U7a/U7b reconciliation, U9 rank precedence, U10 data-gap rules) | `skill/scripts/Analyze-SwydoReport.ps1` · `Test-Analyze.ps1` |
-| Trend / ledger pipeline | `memory/trend/` (U1–U5 master spec + units index) · `memory/analysis/` (U7b) | `skill/scripts/Sync-SwydoTrend.ps1`, `ConvertTo-SwydoTrendFacts.ps1`, `Update-SwydoLedger.ps1`, `Analyze-SwydoTrend.ps1` · `Test-Sync.ps1`, `Test-TrendFacts.ps1`, `Test-Ledger.ps1`, `Test-TrendAnalyze.ps1` |
-| Closer (report number verification) | `SKILL_BUILD_SPEC.md` §13.1 | `skill/scripts/Test-ReportNumbers.ps1` · `Test-Closer.ps1` |
-| Archive / client registry | `memory/trend/` (U1) | `skill/scripts/Manage-SwydoArchive.ps1` · `Test-Archive.ps1` |
+| Swydo extraction (API/JWT/GraphQL/WS) | `SWYDO_REPORT_EXTRACTION_SPEC.md` · `memory/extraction/` | `skill/scripts/Get-SwydoReport.ps1` · `tests/Test-Extractor.ps1` |
+| Single-report analysis + facts | `SKILL_BUILD_SPEC.md` §13 · `memory/analysis/` (U6 canonical total, U7a/U7b reconciliation, U9 rank precedence, U10 data-gap rules) | `skill/scripts/Analyze-SwydoReport.ps1` · `tests/Test-Analyze.ps1` |
+| Trend / ledger pipeline | `memory/trend/` (U1–U5 master spec + units index) · `memory/analysis/` (U7b) | `skill/scripts/Sync-SwydoTrend.ps1`, `ConvertTo-SwydoTrendFacts.ps1`, `Update-SwydoLedger.ps1`, `Analyze-SwydoTrend.ps1` · `tests/Test-Sync.ps1`, `tests/Test-TrendFacts.ps1`, `tests/Test-Ledger.ps1`, `tests/Test-TrendAnalyze.ps1` |
+| Closer (report number verification) | `SKILL_BUILD_SPEC.md` §13.1 | `skill/scripts/Test-ReportNumbers.ps1` · `tests/Test-Closer.ps1` |
+| Archive / client registry | `memory/trend/` (U1) | `skill/scripts/Manage-SwydoArchive.ps1` · `tests/Test-Archive.ps1` |
 | Skill orchestration + report voice | `skill/SKILL.md` · `skill/report-template.md` · `memory/orchestration/` | `skill/SKILL.md` |
 | Governance chain itself | `AGENTS.md` · `memory/HYGIENE.md` | `tools/run-gates.sh` · `tools/gate-legs.json` |
 

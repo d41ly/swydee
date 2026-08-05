@@ -6,3 +6,5 @@ memory/orchestration/
   TREE.md
   DECISIONS.md
   BACKLOG.md
+  builds/
+    2026-08-05-ORCH-aUniformLattice/

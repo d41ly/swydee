@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
   Offline tests for Update-SwydoLedger.ps1: pure basis/freeze/merge helpers (via -DefineOnly) + an
-  integration run over a real trend-facts file with a deterministic injected clock. Run: .\Test-Ledger.ps1
+  integration run over a real trend-facts file with a deterministic injected clock. Run: .\tests\Test-Ledger.ps1
 #>
 $ErrorActionPreference = "Stop"
-$scripts = "$PSScriptRoot\skill\scripts"
+$scripts = "$PSScriptRoot\..\skill\scripts"
 . "$scripts\Update-SwydoLedger.ps1" -DefineOnly
 
 $pass=0; $fail=0

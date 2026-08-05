@@ -1,6 +1,13 @@
 # Offline unit tests for Test-ReportNumbers.ps1 (dot-source with -DefineOnly).
-# PS 5.1. Run: powershell -File Test-Closer.ps1
-. "$PSScriptRoot\skill\scripts\Test-ReportNumbers.ps1" -DefineOnly
+# PS 5.1. Run: powershell -File tests\Test-Closer.ps1
+#
+# EAP=Stop is load-bearing, not decoration (ORCH-aUniformLattice-1). This suite ends with
+# `if($script:fail -gt 0){ exit 1 }`, so a dot-source that silently fails leaves $fail at 0 and the
+# suite reports "0 passed, 0 failed" and EXITS 0 -- a green leg that ran nothing. Measured: without
+# this line a broken dot-source continues the body and exits 0; with it, exit 1. The other seven
+# suites already set it; this one did not, which is exactly why the tests/ move needed it.
+$ErrorActionPreference = 'Stop'
+. "$PSScriptRoot\..\skill\scripts\Test-ReportNumbers.ps1" -DefineOnly
 
 $script:pass = 0; $script:fail = 0
 function Ok($cond,$name){ if($cond){ $script:pass++ } else { $script:fail++; Write-Host "FAIL: $name" } }

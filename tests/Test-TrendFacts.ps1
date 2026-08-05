@@ -1,10 +1,10 @@
 <#
 .SYNOPSIS
   Offline tests for ConvertTo-SwydoTrendFacts.ps1: pure cell/coverage shaping (via -DefineOnly) plus a
-  self-contained integration test that plants a credential to prove the fail-closed gate. Run: .\Test-TrendFacts.ps1
+  self-contained integration test that plants a credential to prove the fail-closed gate. Run: .\tests\Test-TrendFacts.ps1
 #>
 $ErrorActionPreference = "Stop"
-$scripts = "$PSScriptRoot\skill\scripts"
+$scripts = "$PSScriptRoot\..\skill\scripts"
 . "$scripts\ConvertTo-SwydoTrendFacts.ps1" -DefineOnly   # loads its funcs + (transitively) Format-Metric etc.
 
 $pass=0; $fail=0

@@ -3,10 +3,10 @@
   Offline unit tests for Get-SwydoReport.ps1 - dot-sources the real functions via -DefineOnly
   (no network) and exercises the schema-v2 branches that a Google+Facebook report can't trigger:
   provider-scoped units, universal _micros$, collision-safe row keys, manual-KPI decoupling,
-  unknown-kind classification, null-safety. Run: .\Test-Extractor.ps1
+  unknown-kind classification, null-safety. Run: .\tests\Test-Extractor.ps1
 #>
 $ErrorActionPreference = "Stop"
-. "$PSScriptRoot\skill\scripts\Get-SwydoReport.ps1" -DefineOnly    # loads the REAL functions, runs nothing
+. "$PSScriptRoot\..\skill\scripts\Get-SwydoReport.ps1" -DefineOnly    # loads the REAL functions, runs nothing
 $script:secMap = @{ s1 = "Section 1" }
 
 $pass=0; $fail=0
@@ -152,7 +152,7 @@ Assert ($rm2.currencyCodes[0] -eq 'USD' -and $rm2.currencyCodes[1] -eq 'EUR') "P
 Assert ($rm2.currencyBasis -eq 'row-meta') "P1 AC8 currencyBasis row-meta when a row carried a code"
 
 # AC12: both schemaVersion writers say 3, and there are exactly two of them.
-$srcP1 = Get-Content (Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1') -Raw
+$srcP1 = Get-Content (Join-Path $PSScriptRoot '..\skill\scripts\Get-SwydoReport.ps1') -Raw
 $svWrites = @([regex]::Matches($srcP1,'schemaVersion=\d+'))
 Assert ($svWrites.Count -eq 2) "P1 AC12 exactly two schemaVersion writers (got $($svWrites.Count))"
 Assert (@($svWrites | Where-Object { $_.Value -eq 'schemaVersion=3' }).Count -eq 2) "P1 AC12 both writers emit schemaVersion=3"
@@ -464,7 +464,7 @@ function Setup-Fetch($plan){
   return @{ plan=$plan; maxWaitSec=$plan.maxWaitSec }
 }
 $W = @{ id='w'; visual='TABLE' }
-$srcPath = Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1'
+$srcPath = Join-Path $PSScriptRoot '..\skill\scripts\Get-SwydoReport.ps1'
 
 Write-Host "== AC1: a timed-out slice must not lose the frame that arrives next =="
 Reset-FetchState
@@ -709,7 +709,7 @@ Assert (@([regex]::Matches($srcG,'\.Wait\(\s*\)')).Count -eq 0) "AC22 no .Wait()
 Write-Host "== V5: the GraphQL query surface the normalizer depends on =="
 # Normalize-Widget reads fields that must actually be REQUESTED. A dropped selection would fail only
 # against the live API, which no offline suite exercises -- so pin the query text itself.
-$srcQ = Get-Content (Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1') -Raw
+$srcQ = Get-Content (Join-Path $PSScriptRoot '..\skill\scripts\Get-SwydoReport.ps1') -Raw
 foreach($need in @('dateRange','widgetTemplate{id linked}','parts{id provider{id name} dataSource{id}}','sections{id name isHidden}')){
   Assert ($srcQ -match [regex]::Escape($need)) "V5 the GraphQL query still requests '$need' (Normalize-Widget reads it)"
 }
@@ -720,7 +720,7 @@ Write-Host "== ANLZ-aCandidTally-1 S1/AC22: the key space has exactly ONE defini
 # re-added local copy would SHADOW globally rather than fail, and a sequence-equality assertion
 # would then compare one surviving definition against itself, so identity is asserted on the
 # defining FILE instead. Mirrors the in-tree precedent in Test-Ledger.ps1.
-. "$PSScriptRoot\skill\scripts\Analyze-SwydoReport.ps1" -DefineOnly
+. "$PSScriptRoot\..\skill\scripts\Analyze-SwydoReport.ps1" -DefineOnly
 foreach($fn in 'Uniq-Key','Get-UniqKeySeq'){
   $src = (Get-Command $fn).ScriptBlock.File
   Assert ($src -like '*_KeySpace.ps1') "AC22 $fn is defined in _KeySpace.ps1 and nowhere else (got '$src')"
@@ -797,7 +797,7 @@ Assert (-not (Test-SameComparePeriod ([pscustomobject]@{comparePeriod=[pscustomo
 Assert (-not (Test-SameComparePeriod ([pscustomobject]@{comparePeriod=[pscustomobject]@{start='2026-06-24';type='FROM'}}) (New-ComparePeriodFrom '2026-05-31' '2026-07-01'))) "D7 a different FROM start is NOT equivalent (the shipped defect)"
 Assert (-not (Test-SameComparePeriod $null (New-ComparePeriodFrom '2026-05-31' '2026-07-01'))) "D7 null saved spec is not equivalent"
 # AC11: $script:cp must stay the saved spec -- the trend path and field probe inherit it
-$srcP = Get-Content (Join-Path $PSScriptRoot 'skill\scripts\Get-SwydoReport.ps1') -Raw
+$srcP = Get-Content (Join-Path $PSScriptRoot '..\skill\scripts\Get-SwydoReport.ps1') -Raw
 Assert ($srcP -match '\$script:cp\s*=\s*\$s\.compareDateRange') "AC11 script:cp still holds the report's SAVED compare spec"
 Assert (-not ($srcP -match '\$script:cp\s*=\s*\$script:reportCp')) "AC11 the computed compare never overwrites script:cp"
 # NB: the patterns below avoid a literal dollar-w token, which ps-hygiene cannot tell apart
