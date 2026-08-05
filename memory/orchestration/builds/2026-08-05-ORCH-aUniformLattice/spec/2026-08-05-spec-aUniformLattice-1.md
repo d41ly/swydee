@@ -66,6 +66,21 @@ its cache and the corpus will keep answering with pre-move paths until a `memory
 This record IS that change, which refreshes the digest as a side effect. Anyone doing a future
 layout move outside `memory/` should land a decision line for the same reason.
 
+## A pre-existing bug the move exposed: the bar depended on its parent shell
+
+Documenting `.\tools\Run-Gates.ps1` in the AGENTS.md command catalog meant running it, which is how
+this surfaced. It was RED on `Test-Archive` (6 assertions) while `bash tools/run-gates.sh` was green
+on the identical tree. Confirmed pre-existing: `main`'s own `Run-Gates.ps1`, in the untouched primary
+tree, failed the same way.
+
+Cause: `PSModulePath` is inherited. Launched from PowerShell 7, the 5.1 children inherit pwsh's
+module path, never search their own `v1.0\Modules`, and `Get-FileHash` stops resolving. The suite
+result was therefore a property of the shell that started it, not of the code. `tools/run-ps-suite.sh`
+now `unset PSModulePath` before launching, so 5.1 rebuilds its own default. Green under both parents.
+
+This is the §11 "deterministic run modes" class, and it was invisible for as long as nobody ran the
+bar from pwsh.
+
 ## Verification
 
 All eight suites re-run from `tests/`: 1405 assertions, identical to the pre-move counts

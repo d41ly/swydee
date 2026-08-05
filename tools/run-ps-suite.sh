@@ -21,4 +21,13 @@ suite=${1:-}
 PS=${SWYDEE_PS:-powershell.exe}
 command -v "$PS" >/dev/null 2>&1 || { echo "run-ps-suite: launcher '$PS' not found on PATH"; exit 2; }
 
+# PSModulePath is INHERITED, and that makes the bar depend on who launched it (ORCH-aUniformLattice-1).
+# Launched from PowerShell 7 - `tools/Run-Gates.ps1` under pwsh, or any pwsh-parented harness - the
+# children inherit pwsh's module path, 5.1 never searches its OWN v1.0\Modules, and `Get-FileHash`
+# stops resolving. Measured: Test-Archive drops 6 assertions with "The term 'Get-FileHash' is not
+# recognized", while the identical suite passes when launched from a 5.1 parent. Unsetting the var
+# makes 5.1 rebuild its default, so the suite result is a property of the code and not of the shell
+# that happened to start it.
+unset PSModulePath
+
 "$PS" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$suite"
