@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T03:47:21+03:00 @ 9e0262dbe2ac73abfac80462eb095984ed40801b
+last-audit: 2026-08-05T10:37:47+03:00 @ 19e907fedcc52ba8125c65d5ab98df4489800b7e
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -102,8 +102,8 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1264 assertions across the 8 suites after ANLZ-aUniformLattice-6 -- the total is the SUM of the
-per-suite figures, so an arithmetic slip is self-evident: Extractor 288, Analyze 607, Closer 129,
+1276 assertions across the 8 suites after ANLZ-aUniformLattice-8 -- the total is the SUM of the
+per-suite figures, so an arithmetic slip is self-evident: Extractor 288, Analyze 619, Closer 129,
 TrendAnalyze 68, TrendFacts 24, Archive 94, Ledger 50, Sync 4. Was 1064 at adoption.
 
 ### Tier rule
@@ -173,8 +173,12 @@ true. Keep each to one line; link out for detail.*
   `meta.canonicalVersion` names which algorithm produced an artifact. **1->2** is the U9 flip-set
   waiver (D1/D3), where a zero-dim KPI superseding a doc-earlier table total changes the flipped cells.
   **2->3** is ANLZ-aUniformLattice-6, whose entire flip set is the `GAP_NO_ACCOUNT_TOTAL` statement
-  wording plus its new `evidence.byReason`, with membership provably unchanged. Both disclose
-  in-facts. A third waiver needs its own MEASURED flip set before it lands.
+  wording plus its new `evidence.byReason`, with membership provably unchanged. Both disclose in-facts.
+  A THIRD disclosed change is ANLZ-aUniformLattice-8, marked by **`meta.factsVersion` 1->2** rather
+  than by `canonicalVersion` (the headline algorithm is untouched): it is the first SUBTRACTIVE change
+  to the facts shape, making `breakdowns[].rows[].valuesById` collisions-only and reclaiming 37% of the
+  document. Its flip set is exactly those rows, the new `valuesByIdScope`, and the version marker.
+  A fourth disclosed change needs its own MEASURED flip set before it lands.
 - Every write path keeps its **fail-closed credential gate**; only `ConvertTo-SwydoTrendFacts`
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the
@@ -193,6 +197,10 @@ true. Keep each to one line; link out for detail.*
   counts the deserialized empty object as one real entry. Return `,@(...)` from any function whose
   result is a collection, and do NOT re-wrap such a result in `@()` at the call site - that nests it.
   This shipped as a false PROVIDER_FILTERED major (ANLZ-aUniformLattice-7).
+- The facts document IS the report model's context budget. `platforms[].metrics` and the breakdown
+  addressing keys are machine fields with no narrative content, and `skill/SKILL.md` carries an
+  explicit read/skip list so the model does not spend attention on them. Before adding a per-row key,
+  measure: `valuesById` reached 41% of the document (129,815 of 318,082 bytes) before being cut back.
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
 - Filing a new record costs three hygiene legs beyond writing it: a `DECISIONS.md` index line has a
