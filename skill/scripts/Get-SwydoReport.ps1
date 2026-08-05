@@ -50,6 +50,9 @@ param(
   [switch]$DefineOnly
 )
 $ErrorActionPreference = "Stop"
+# ANLZ-aCandidTally-1 S1/B3: the row-map key space is single-sourced. This dot-source sits ABOVE the
+# -DefineOnly guard below because the normalize pass consumes Get-UniqKeySeq and Uniq-Key.
+. "$PSScriptRoot\_KeySpace.ps1"
 
 # ============================ function definitions ============================
 $script:ct  = [Threading.CancellationToken]::None
@@ -356,22 +359,6 @@ function Unit-Of($id){
   }
   return $null
 }
-# ANLZ-aUniformLattice-2 S13/D5: the Uniq-Key SEQUENCE a metric or dimension list produces, derived once.
-# The per-row loops build the same sequence against a fresh map each row, so this reproduces it exactly
-# without touching them. Used ONLY to publish metrics[].cellKey, so a consumer can address rows[].metrics
-# by metric id instead of by display name (the duplicate-name wrong-value path). Pure; -DefineOnly testable.
-function Get-UniqKeySeq($items){
-  $probe=[ordered]@{}; $out=@()
-  $arr=@($items)
-  for($i=0;$i -lt $arr.Count;$i++){
-    $k = Uniq-Key $probe $arr[$i].name $arr[$i].id $i
-    $probe[$k]=1
-    $out += $k
-  }
-  # unary comma: `return @(x)` collapses a ONE-element array to a scalar, and the caller then
-  # indexes into a string. Same PowerShell trap as ANLZ-aUniformLattice-7.
-  return ,@($out)
-}
 # ANLZ-aUniformLattice-2 D1: pair every pulled widget with ITS OWN fetch outcome and its document
 # ordinal. $script:lastFetchOutcome is a single slot holding the LAST widget's record by the time the
 # normalize pass runs, and indexing $script:outcomes positionally aligns with $wids only by accident.
@@ -398,14 +385,6 @@ function Get-RowKey($ordinal,$dimValues){
   if($vals.Count -eq 0){ return [string]$ordinal }
   $esc=@($vals | ForEach-Object { ([string]$_).Replace('|','/') })
   return ([string]$ordinal + '|' + ($esc -join '|'))
-}
-# collision-proof, null-safe key for an OrderedDictionary map
-function Uniq-Key($map,$name,$id,$idx){
-  $base = if([string]::IsNullOrEmpty($name)){ if([string]::IsNullOrEmpty($id)){ "col$idx" } else { [string]$id } } else { [string]$name }
-  if(-not $map.Contains($base)){ return $base }
-  $k = "$base [$id]"
-  if(-not $map.Contains($k)){ return $k }
-  return "$base [$id #$idx]"
 }
 function Flatten-Text($node){
   if($null -eq $node){ return "" }

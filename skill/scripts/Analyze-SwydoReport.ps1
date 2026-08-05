@@ -26,6 +26,9 @@ param(
   [switch]$DefineOnly
 )
 $ErrorActionPreference = "Stop"
+# ANLZ-aCandidTally-1 S1/B3: the row-map key space is single-sourced with the extractor. Above the
+# -DefineOnly guard because Resolve-CellKeys consumes Get-UniqKeySeq.
+. "$PSScriptRoot\_KeySpace.ps1"
 
 # ============================ config ============================
 $script:CategoryMap = @{
@@ -191,6 +194,68 @@ function Get-WidgetProvider($w){
 function Test-Blended($w){ return [bool]($w.providers -and @($w.providers).Count -gt 1) }
 function Row-Cur($row,$name){ $c=$row.metrics.$name; if($c -and ($c.current -is [double] -or $c.current -is [int] -or $c.current -is [long] -or $c.current -is [decimal])){ return [double]$c.current } return $null }
 function Row-Cmp($row,$name){ $c=$row.metrics.$name; if($c -and ($c.compare -is [double] -or $c.compare -is [int] -or $c.compare -is [long] -or $c.compare -is [decimal])){ return [double]$c.compare } return $null }
+# ---- ANLZ-aCandidTally-1: metric cell identity ------------------------------------------------
+# Every rule below SELECTS a metric by its ID and then has to READ that metric's own cell. The
+# extractor keys rows[].metrics with Uniq-Key (_KeySpace.ps1), not with the display name, so the two
+# agree ONLY when the id-selected metric happens to be the first holder of its display name. Reading
+# by name published the first holder's number under the second metric's id.
+#
+# S2/B1: stamp cellKey onto every metric record that lacks one, ONCE over $dataWidgets, before any
+# pass runs. Idempotent, and a no-op on a schemaVersion-3 document, which already carries the key.
+# On a schemaVersion-2 document the stamped key is the extractor's OWN key, replayed through the
+# single-sourced Get-UniqKeySeq, not a guess - which is why B1 retires the shipped
+# omit-rather-than-guess branch in Get-Breakdown rather than working around it.
+# Tolerant of both record shapes: a PSCustomObject from the extraction JSON, an IDictionary from a
+# -DefineOnly fixture.
+function Resolve-CellKeys($w){
+  if($null -eq $w){ return }
+  $mets=@($w.metrics); if($mets.Count -eq 0){ return }
+  $keys=Get-UniqKeySeq $mets
+  for($i=0;$i -lt $mets.Count;$i++){
+    $m=$mets[$i]; if($null -eq $m){ continue }
+    $have=$m.cellKey
+    if($null -ne $have -and [string]$have -ne ''){ continue }
+    if($m -is [System.Collections.IDictionary]){ $m['cellKey']=$keys[$i] }
+    else { Add-Member -InputObject $m -NotePropertyName cellKey -NotePropertyValue $keys[$i] -Force }
+  }
+}
+# The row-map key for one metric. Falls back to the display name so a record that never passed
+# through Resolve-CellKeys degrades to pre-repair behaviour rather than resolving nothing at all.
+function Metric-Key($m){
+  $k=$m.cellKey
+  if($null -ne $k -and [string]$k -ne ''){ return [string]$k }
+  return [string]$m.name
+}
+# The LABEL for one metric. A display name is written into client-facing statements as well as used
+# as a lookup, and repairing the lookup makes an EMPTY display name reachable at those sites for the
+# first time, which would publish "Google Ads  900 vs 720 (+25.0%)". A no-op for every non-blank
+# display name, so byte-identity holds for an unambiguous report.
+function Metric-Label($m){
+  $n=[string]$m.name
+  if(-not [string]::IsNullOrWhiteSpace($n)){ return $n }
+  return (Metric-Key $m)
+}
+# S9/B5/B7: ambiguity is a per-WIDGET property. Get-UniqKeySeq allocates a fresh probe map per metric
+# list, so two single-metric widgets sharing a display name are NOT a collision. Returns the other
+# metric ids in THIS widget whose display name is comparer-equal to $m's, or an empty array.
+function Get-AmbiguousWith($w,$m){
+  $out=@()
+  $n=[string]$m.name
+  foreach($o in @($w.metrics)){
+    if($null -eq $o){ continue }
+    if([string]$o.id -eq [string]$m.id -and [string]$o.name -eq $n){ continue }
+    if([string]::Equals([string]$o.name,$n,[StringComparison]::OrdinalIgnoreCase)){ $out += [string]$o.id }
+  }
+  # NO unary comma: `,@()` on an empty array returns a ONE-element array holding an empty array, and
+  # every caller here @()-wraps anyway. Get-UniqKeySeq needs the comma because its caller indexes the
+  # result directly; this one does not.
+  return @($out)
+}
+# A cell is ambiguity-disclosed when its display name is blank or shared inside its own widget.
+function Test-AmbiguousMetric($w,$m){
+  if([string]::IsNullOrWhiteSpace([string]$m.name)){ return $true }
+  return (@(Get-AmbiguousWith $w $m).Count -gt 0)
+}
 function Row-Label($row){ $ps=@($row.dimensions.PSObject.Properties); if($ps.Count -gt 0){ return $ps[0].Value } return $null }
 function Total-Row($w){
   $t=@($w.rows | Where-Object { $_.kind -eq 'total' }); if($t.Count -gt 0){ return $t[0] }
@@ -206,6 +271,7 @@ function Total-Row($w){
 # effort->result, share-mismatch). Pure over the widget + $script:RuleCfg; returns a findings array.
 function Get-BreakdownFindings($w,$clientName){
   $out=[System.Collections.ArrayList]@()
+  Resolve-CellKeys $w
   $wdims=@($w.dimensions); if($wdims.Count -eq 0){ return @() }
   $tr=Total-Row $w; if(-not $tr){ return @() }
   $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
@@ -216,27 +282,28 @@ function Get-BreakdownFindings($w,$clientName){
   if($detail.Count -eq 0){ return @() }
   # ANOM_CONCENTRATION
   $primary=$null; foreach($m in @($w.metrics)){ if((Get-Direction $m.id) -eq 'higher-better' -and (Test-Additive $m.id)){ $primary=$m; break } }
-  if($primary){ $tot=Row-Cur $tr $primary.name
-    if($tot -and $tot -gt 0){ foreach($r in $detail){ $v=Row-Cur $r $primary.name; if($null -ne $v -and ($v/$tot) -ge 0.5){ $sh=[math]::Round(($v/$tot)*100,0)
-      [void]$out.Add([ordered]@{ ruleId='ANOM_CONCENTRATION'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is $sh% of $($primary.name) ($(Format-Metric $primary.id $primary.unit $v $cc) of $(Format-Metric $primary.id $primary.unit $tot $cc))"; evidence=[ordered]@{ share="$sh%" } }); break } } } }
+  $pkey=$null; $plabel=$null; if($primary){ $pkey=Metric-Key $primary; $plabel=Metric-Label $primary }
+  if($primary){ $tot=Row-Cur $tr $pkey
+    if($tot -and $tot -gt 0){ foreach($r in $detail){ $v=Row-Cur $r $pkey; if($null -ne $v -and ($v/$tot) -ge 0.5){ $sh=[math]::Round(($v/$tot)*100,0)
+      [void]$out.Add([ordered]@{ ruleId='ANOM_CONCENTRATION'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is $sh% of $plabel ($(Format-Metric $primary.id $primary.unit $v $cc) of $(Format-Metric $primary.id $primary.unit $tot $cc))"; evidence=[ordered]@{ share="$sh%" } }); break } } } }
   # ANOM_SEGMENT_DIVERGENCE + NEW/PAUSED (comparison-gated, grain-capped)
   if($primary){
-    $ptot=Row-Cur $tr $primary.name; $ptotPrev=Row-Cmp $tr $primary.name
+    $ptot=Row-Cur $tr $pkey; $ptotPrev=Row-Cmp $tr $pkey
     $totDelta=Get-DeltaPct $ptot $ptotPrev
     $nNP=0; $nDiv=0
     foreach($r in $detail){
-      $rv=Row-Cur $r $primary.name; $rp=Row-Cmp $r $primary.name
+      $rv=Row-Cur $r $pkey; $rp=Row-Cmp $r $pkey
       if($null -eq $rv -or $null -eq $rp){ continue }
       $share=if($ptot -and $ptot -gt 0){ $rv/$ptot } else { 0 }
       if($rv -gt 0 -and $rp -eq 0 -and $share -ge 0.05 -and $nNP -lt 5){ $nNP++
-        [void]$out.Add([ordered]@{ ruleId='ANOM_NEW'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is new this period ($($primary.name) $(Format-Metric $primary.id $primary.unit $rv $cc), was 0)" }) }
+        [void]$out.Add([ordered]@{ ruleId='ANOM_NEW'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is new this period ($plabel $(Format-Metric $primary.id $primary.unit $rv $cc), was 0)" }) }
       elseif($rv -eq 0 -and $rp -gt 0 -and $nNP -lt 5){ $nNP++
-        [void]$out.Add([ordered]@{ ruleId='ANOM_PAUSED'; severity='major'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' stopped ($($primary.name) 0 this period, was $(Format-Metric $primary.id $primary.unit $rp $cc))" }) }
+        [void]$out.Add([ordered]@{ ruleId='ANOM_PAUSED'; severity='major'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' stopped ($plabel 0 this period, was $(Format-Metric $primary.id $primary.unit $rp $cc))" }) }
       elseif($rv -gt 0 -and $rp -gt 0 -and $share -ge 0.15 -and $null -ne $totDelta -and $nDiv -lt 5){
         $rd=Get-DeltaPct $rv $rp
         if($null -ne $rd){ $diverges=(($rd -gt 0) -ne ($totDelta -gt 0)) -or ([math]::Abs($rd-$totDelta) -ge 50)
           if($diverges){ $nDiv++
-            [void]$out.Add([ordered]@{ ruleId='ANOM_SEGMENT_DIVERGENCE'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' $($primary.name) moved $(Format-Delta $rd) vs the $($primary.name) total $(Format-Delta $totDelta)"; evidence=[ordered]@{ rowDelta=(Format-Delta $rd); totalDelta=(Format-Delta $totDelta) } }) } } }
+            [void]$out.Add([ordered]@{ ruleId='ANOM_SEGMENT_DIVERGENCE'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' $plabel moved $(Format-Delta $rd) vs the $plabel total $(Format-Delta $totDelta)"; evidence=[ordered]@{ rowDelta=(Format-Delta $rd); totalDelta=(Format-Delta $totDelta) } }) } } }
     }
   }
   # config-driven effort->result + share-mismatch
@@ -245,19 +312,20 @@ function Get-BreakdownFindings($w,$clientName){
     foreach($pair in $cfg.effort){
       $em=Find-Metric $w $pair.e; $rm=Find-Metric $w $pair.r
       if(-not $em -or -not $rm -or $em.id -eq $rm.id){ continue }
-      $totE=Row-Cur $tr $em.name; $totR=Row-Cur $tr $rm.name
+      $ekey=Metric-Key $em; $rkey=Metric-Key $rm; $elabel=Metric-Label $em; $rlabel=Metric-Label $rm
+      $totE=Row-Cur $tr $ekey; $totR=Row-Cur $tr $rkey
       if(-not $totE -or $totE -le 0){ continue }
       $nEmpty=0
       foreach($r in $detail){
-        $re=Row-Cur $r $em.name; $rr=Row-Cur $r $rm.name
+        $re=Row-Cur $r $ekey; $rr=Row-Cur $r $rkey
         if($null -eq $re){ continue }
         $eShare=$re/$totE
         if($eShare -ge 0.02 -and $rr -eq 0){ if($nEmpty -lt 8){ $nEmpty++
-          [void]$out.Add([ordered]@{ ruleId='ANOM_EFFORT_NO_RESULT'; severity='major'; platform=$pname; widget=$dimName; requiresDownstreamData=$false; statement="${pname}: '$(Row-Label $r)' used $([math]::Round($eShare*100,0))% of $($em.name) ($(Format-Metric $em.id $em.unit $re $cc)) with 0 $($rm.name)"; evidence=[ordered]@{ effort=(Format-Metric $em.id $em.unit $re $cc); result='0'; effortShare="$([math]::Round($eShare*100,0))%" } }) } }
+          [void]$out.Add([ordered]@{ ruleId='ANOM_EFFORT_NO_RESULT'; severity='major'; platform=$pname; widget=$dimName; requiresDownstreamData=$false; statement="${pname}: '$(Row-Label $r)' used $([math]::Round($eShare*100,0))% of $elabel ($(Format-Metric $em.id $em.unit $re $cc)) with 0 $rlabel"; evidence=[ordered]@{ effort=(Format-Metric $em.id $em.unit $re $cc); result='0'; effortShare="$([math]::Round($eShare*100,0))%" } }) } }
         elseif($totR -and $totR -gt 0 -and $null -ne $rr -and $rr -gt 0 -and $eShare -ge 0.10){
           $rShare=$rr/$totR
           if(($eShare/$rShare) -ge 3){ $hint=([string](Row-Label $r)) -match '(?i)awareness|brand|video|launch|opening'; $sev=if($hint){'info'}else{'major'}
-            [void]$out.Add([ordered]@{ ruleId='ANOM_SHARE_MISMATCH'; severity=$sev; platform=$pname; widget=$dimName; requiresDownstreamData=$true; statement="${pname}: '$(Row-Label $r)' is $([math]::Round($eShare*100,0))% of $($em.name) but only $([math]::Round($rShare*100,1))% of $($rm.name)$(if($hint){' (looks upper-funnel/awareness)'})"; evidence=[ordered]@{ effortShare="$([math]::Round($eShare*100,0))%"; resultShare="$([math]::Round($rShare*100,1))%" } }) }
+            [void]$out.Add([ordered]@{ ruleId='ANOM_SHARE_MISMATCH'; severity=$sev; platform=$pname; widget=$dimName; requiresDownstreamData=$true; statement="${pname}: '$(Row-Label $r)' is $([math]::Round($eShare*100,0))% of $elabel but only $([math]::Round($rShare*100,1))% of $rlabel$(if($hint){' (looks upper-funnel/awareness)'})"; evidence=[ordered]@{ effortShare="$([math]::Round($eShare*100,0))%"; resultShare="$([math]::Round($rShare*100,1))%" } }) }
         }
       }
     }
@@ -270,7 +338,8 @@ function Get-BreakdownFindings($w,$clientName){
     $btok=Get-BrandTokens $clientName
     $om=Find-Metric $w '(^|:)conversions?$'; if(-not $om){ $om=Find-Metric $w '(^|_)lead|actions::lead' }
     if($om){
-      $btot=Row-Cur $tr $om.name
+      $okey=Metric-Key $om
+      $btot=Row-Cur $tr $okey
       if($btot -and $btot -gt 0){
         $bm=[System.Collections.ArrayList]@(); $bsum=0.0; $btk=$null
         foreach($r in $detail){
@@ -278,7 +347,7 @@ function Get-BreakdownFindings($w,$clientName){
           $sig=$null
           if(Test-PMaxLabel $lbl){ $sig='pmax' } elseif(Test-BrandLabel $lbl $btok){ $sig='brand-name' }
           if(-not $sig){ continue }
-          $v=Row-Cur $r $om.name
+          $v=Row-Cur $r $okey
           if($null -ne $v -and $v -gt 0){
             $bsum+=[double]$v; [void]$bm.Add($lbl)
             if(-not $btk){ $btk=Get-MatchedBrandToken $lbl $btok }
@@ -374,6 +443,7 @@ function Test-IsAnnotation($text,$knownNames){
 # any label in $mustLabels (finding-referenced). Row labels via Row-Label (NOT Get-DimLabel).
 function Get-Breakdown($w, $cap, $mustLabels){
   if(@($w.dimensions).Count -eq 0){ return $null }
+  Resolve-CellKeys $w
   $cc=$w.currencyCode; $wdims=@($w.dimensions); $dimName=$wdims[0]
   $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
   $wcat = Get-Category $wprov
@@ -385,7 +455,7 @@ function Get-Breakdown($w, $cap, $mustLabels){
   if($wcat -eq 'ads'){ foreach($m in $mets){ if((Get-MetricPart $m.id) -match '(cost_micros|(^|_)cost$|spend)'){ $orderMet=$m; break } } }
   if(-not $orderMet){ foreach($m in $mets){ if((Get-Direction $m.id) -eq 'higher-better' -and (Test-Additive $m.id)){ $orderMet=$m; break } } }
   if($isTime){ $sorted=@($detail | Sort-Object { [string](Row-Label $_) }) }
-  elseif($orderMet){ $sorted=@($detail | Sort-Object { $v=Row-Cur $_ $orderMet.name; if($null -eq $v){0}else{[double]$v} } -Descending) }
+  elseif($orderMet){ $omk=Metric-Key $orderMet; $sorted=@($detail | Sort-Object { $v=Row-Cur $_ $omk; if($null -eq $v){0}else{[double]$v} } -Descending) }
   else { $sorted=@($detail) }
   $top=@($sorted | Select-Object -First $cap)
   if($mustLabels){ foreach($r in $sorted){ $lbl=[string](Row-Label $r); if(($mustLabels -contains $lbl) -and -not @($top | Where-Object { [string](Row-Label $_) -eq $lbl })){ $top+=$r } } }
@@ -406,7 +476,12 @@ function Get-Breakdown($w, $cap, $mustLabels){
         $cell=[ordered]@{ display=(Format-Metric $m.id $m.unit $cur $cc); type=(Metric-Type $m.id $m.unit $cc) }
         $cmp=Row-Cmp $r $m.name
         if($null -ne $cmp){ $cell.hasComparison=$true; $cell.displayPrevious=(Format-Metric $m.id $m.unit $cmp $cc); $d=Get-DeltaPct $cur $cmp; if($null -ne $d){ $cell.delta=(Format-Delta $d) } } else { $cell.hasComparison=$false }
-        $vals[[string]$m.name]=$cell
+        # S7: FIRST-wins. The read above always resolves the FIRST holder's cell, while this cell
+        # was formatted and typed with the CURRENT metric's id and unit. Last-wins therefore published
+        # metric 1's number described as metric N, and `type` is what the closer matches on, so that
+        # wrong string was a legitimate tracing candidate. First-wins makes one metric own the whole
+        # cell and leaves every key COUNT identical.
+        if(-not $vals.Contains([string]$m.name)){ $vals[[string]$m.name]=$cell }
       }
       # --- valuesById: ANLZ-aUniformLattice-8, COLLISIONS ONLY ---
       # A metric whose display name is UNIQUE is already addressable by id without any per-row payload:
@@ -419,12 +494,16 @@ function Get-Breakdown($w, $cap, $mustLabels){
       # scalar guard on $cur (the display-NAME cell), so when the first colliding metric's column was
       # null the second metric's value was dropped even though its own cellKey resolved -- losing data in
       # exactly the case the map exists for.
-      if([int]$nameCount[[string]$m.name] -gt 1){
-        $ck=$null
-        if($m.PSObject.Properties['cellKey'] -and $m.cellKey){ $ck=[string]$m.cellKey }
-        # No cellKey (schemaVersion 2) and a collided name => no way to disambiguate. OMIT rather than
-        # publish a confidently wrong number under the right id.
-        if($null -ne $ck){
+      # S8: a BLANK display name is the second case `values` cannot express - Row-Cur on '' resolves
+      # nothing, so the metric vanished from the table while metricNames[] and metricIds[] still
+      # advertised it, breaking the index-aligned addressing contract above.
+      if([int]$nameCount[[string]$m.name] -gt 1 -or [string]::IsNullOrWhiteSpace([string]$m.name)){
+        $ck=Metric-Key $m
+        # ANLZ-aCandidTally-1 B1: the shipped "no cellKey => OMIT rather than guess" branch is
+        # RETIRED. Resolve-CellKeys stamps every metric record before any pass runs, and the stamped
+        # key is the extractor's OWN key replayed through the single-sourced Get-UniqKeySeq, not a
+        # guess. A collided schemaVersion-2 document therefore GAINS the entries it used to omit.
+        if(-not [string]::IsNullOrEmpty($ck)){
           $curById=Row-Cur $r $ck
           if($null -ne $curById){
             $cellById=[ordered]@{ display=(Format-Metric $m.id $m.unit $curById $cc); type=(Metric-Type $m.id $m.unit $cc) }
@@ -443,7 +522,7 @@ function Get-Breakdown($w, $cap, $mustLabels){
   }
   # Derived from the EMITTED rows, not from meta.schemaVersion: Get-Breakdown never receives the
   # document, and under -DefineOnly (how every unit test calls it) no $doc exists to read.
-  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{$_.name}); metricIds=@($mets|ForEach-Object{[string]$_.id}); rowCount=$detail.Count; shown=$rows.Count; rowKeyBasis=$(if($sawRowKey){'extractor'}else{'absent'}); valuesByIdScope=$(if(@($mets).Count -gt 0){'collisions-only'}else{'none'}); rows=$rows }
+  $out=[ordered]@{ widgetId=$w.id; dimensions=$wdims; metricNames=@($mets|ForEach-Object{ Metric-Label $_ }); metricIds=@($mets|ForEach-Object{[string]$_.id}); rowCount=$detail.Count; shown=$rows.Count; rowKeyBasis=$(if($sawRowKey){'extractor'}else{'absent'}); valuesByIdScope=$(if(@($mets).Count -gt 0){'collisions-and-blank-names'}else{'none'}); rows=$rows }
   if($detail.Count -gt $rows.Count){ $out.note="showing top $($rows.Count) of $($detail.Count) rows" }
   return $out
 }
@@ -452,6 +531,7 @@ function Format-Money($val,$currency){ if($null -eq $val){ return $null }; $sym=
 # Time-series derived metrics + pacing for a time-dimension widget. Derived = ONLY metrics with no
 # native equivalent (in practice CPL / cost-per-conv), category-gated. Pacing exposes the ordered series.
 function Get-TimeSeries($w){
+  Resolve-CellKeys $w
   $wdims=@($w.dimensions); if($wdims.Count -eq 0){ return $null }
   $dimName=$wdims[0]
   if($dimName -notmatch '(?i)^(day|week|month|date)$'){ return $null }
@@ -478,7 +558,7 @@ function Get-TimeSeries($w){
     if($derivedDefs.Count -gt 0){
       $der=[ordered]@{}; $gaps=@()
       foreach($dd in $derivedDefs){
-        $numv=Row-Cur $r $dd.num.name; $denv=Row-Cur $r $dd.den.name
+        $numv=Row-Cur $r (Metric-Key $dd.num); $denv=Row-Cur $r (Metric-Key $dd.den)
         if($null -eq $numv){ continue }
         if($null -eq $denv -or $denv -eq 0){ $der[$dd.name]=$null; $gaps+="$($dd.name): 0 $($dd.den.name)"; continue }
         $numBase = if($dd.num.unit -eq 'micros'){ [double]$numv/1e6 } else { [double]$numv }   # denominator RAW
@@ -495,8 +575,9 @@ function Get-TimeSeries($w){
   if(-not $primary -and @($w.metrics).Count -gt 0){ $primary=@($w.metrics)[0] }
   $out=[ordered]@{ widgetId=$w.id; dimension=$dimName; buckets=$buckets }
   if($primary){
-    $seq=@(); foreach($r in $sorted){ $v=Row-Cur $r $primary.name; $seq+=[ordered]@{ label=[string](Row-Label $r); display=(Format-Metric $primary.id $primary.unit $v $cc) } }
-    $nn=@($sorted | ForEach-Object { Row-Cur $_ $primary.name } | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ })
+    $pkey=Metric-Key $primary
+    $seq=@(); foreach($r in $sorted){ $v=Row-Cur $r $pkey; $seq+=[ordered]@{ label=[string](Row-Label $r); display=(Format-Metric $primary.id $primary.unit $v $cc) } }
+    $nn=@($sorted | ForEach-Object { Row-Cur $_ $pkey } | Where-Object { $null -ne $_ } | ForEach-Object { [double]$_ })
     $pacing=[ordered]@{ metric=$primary.name; series=$seq; orderConfidence=$orderConf }
     if($nn.Count -ge 2){
       $firstV=Row-Cur $sorted[0] $primary.name; $lastV=Row-Cur $sorted[-1] $primary.name
@@ -610,6 +691,7 @@ function Get-RatioSpec($id){
 # ~1e6 signature (a genuine provider arithmetic error); same-basis mismatch is info.
 function Get-RatioReconFindings($w,$periods){
   $out=[System.Collections.ArrayList]@()
+  Resolve-CellKeys $w
   $tr = Total-Row $w; if(-not $tr){ return @() }   # no total row (incl. time-dimensioned native ratio) => skip
   $cc = $w.currencyCode
   $prov = Get-WidgetProvider $w
@@ -621,7 +703,7 @@ function Get-RatioReconFindings($w,$periods){
     $unitOk = $false
     if($rk -eq 'percent'){ $unitOk = ($rm.unit -eq 'fraction') }
     elseif($rk -eq 'currency'){ $unitOk = ($rm.unit -eq 'micros') }
-    elseif($rk -eq 'ratio'){ $unitOk = ($null -ne (Row-Cur $tr $rm.name)) }   # roas: numeric reported cell (unit null OK)
+    elseif($rk -eq 'ratio'){ $unitOk = ($null -ne (Row-Cur $tr (Metric-Key $rm))) }   # roas: numeric reported cell (unit null OK)
     if(-not $unitOk){ continue }
     # components via R20; ambiguity (multiple same-role candidates) => skip
     $numCands=@(@($w.metrics) | Where-Object { (Get-MetricPart $_.id) -match $spec.numPat })
@@ -638,7 +720,7 @@ function Get-RatioReconFindings($w,$periods){
     # money/value components must have a CONFIRMED (non-null) unit before any unit-signature eval (R20)
     if($null -eq $num.unit -and ($num.id -match '(?i)cost|spend|revenue|value|amount_spent')){ continue }
     if((Test-Money $den.id $den.unit $cc) -and $null -eq $den.unit){ continue }
-    $numv=Row-Cur $tr $num.name; $denv=Row-Cur $tr $den.name; $repv=Row-Cur $tr $rm.name
+    $numv=Row-Cur $tr (Metric-Key $num); $denv=Row-Cur $tr (Metric-Key $den); $repv=Row-Cur $tr (Metric-Key $rm)
     if($null -eq $numv -or $null -eq $denv -or $null -eq $repv -or $denv -eq 0){ continue }
     $numBase = if($num.unit -eq 'micros'){ [double]$numv/1e6 } else { [double]$numv }
     $denBase = if($den.unit -eq 'micros'){ [double]$denv/1e6 } else { [double]$denv }
@@ -676,6 +758,7 @@ function Get-RatioReconFindings($w,$periods){
 # (other) remainder. Tolerance scales with row count (R15). Summable metrics only (R4).
 function Get-DetailSumFindings($w,$periods){
   $out=[System.Collections.ArrayList]@()
+  Resolve-CellKeys $w
   $dims=@($w.dimensions | Where-Object {$_}); if($dims.Count -eq 0){ return @() }
   $tr=Total-Row $w; if(-not $tr){ return @() }
   $cc=$w.currencyCode
@@ -686,9 +769,10 @@ function Get-DetailSumFindings($w,$periods){
   $isPartition = (($dims.Count -eq 1) -and (Test-PartitionDim $dims[0]))
   foreach($m in @($w.metrics)){
     if(-not (Test-Summable $m.id)){ continue }
-    $totalRaw=Row-Cur $tr $m.name; if($null -eq $totalRaw){ continue }
+    $mkey=Metric-Key $m; $mlabel=Metric-Label $m
+    $totalRaw=Row-Cur $tr $mkey; if($null -eq $totalRaw){ continue }
     $sumRaw=0.0; $k=0; $any=$false
-    foreach($rr in $detail){ $v=Row-Cur $rr $m.name; if($null -ne $v){ $sumRaw += [double]$v; $k++; $any=$true } }
+    foreach($rr in $detail){ $v=Row-Cur $rr $mkey; if($null -ne $v){ $sumRaw += [double]$v; $k++; $any=$true } }
     if(-not $any){ continue }
     $totalBase = if($m.unit -eq 'micros'){ [double]$totalRaw/1e6 } else { [double]$totalRaw }
     $sumBase   = if($m.unit -eq 'micros'){ $sumRaw/1e6 } else { $sumRaw }
@@ -698,12 +782,12 @@ function Get-DetailSumFindings($w,$periods){
     $dispTotal=Format-Metric $m.id $m.unit $totalRaw $cc
     if(($sumBase - $totalBase) -gt $tol){
       if($isPartition){
-        [void]$out.Add([ordered]@{ ruleId='DISC_DETAIL_EXCEEDS_TOTAL'; severity='major'; platform=$pname; metric=$m.name; widgetId=$w.id
-          statement="$pname '$($m.name)' detail rows sum to $dispSum, exceeding the widget total $dispTotal on the '$($dims[0])' partition - possible duplicated/double-counted rows"
+        [void]$out.Add([ordered]@{ ruleId='DISC_DETAIL_EXCEEDS_TOTAL'; severity='major'; platform=$pname; metric=$mlabel; widgetId=$w.id
+          statement="$pname '$mlabel' detail rows sum to $dispSum, exceeding the widget total $dispTotal on the '$($dims[0])' partition - possible duplicated/double-counted rows"
           evidence=[ordered]@{ shownSum=$dispSum; total=$dispTotal } })
       } else {
-        [void]$out.Add([ordered]@{ ruleId='RECON_ROW_OVERSUM'; severity='info'; platform=$pname; metric=$m.name; widgetId=$w.id
-          statement="$pname '$($m.name)' listed rows sum to $dispSum, above the widget total $dispTotal; the '$($dims[0])' dimension may double-count (overlapping/multi-attribution values)"
+        [void]$out.Add([ordered]@{ ruleId='RECON_ROW_OVERSUM'; severity='info'; platform=$pname; metric=$mlabel; widgetId=$w.id
+          statement="$pname '$mlabel' listed rows sum to $dispSum, above the widget total $dispTotal; the '$($dims[0])' dimension may double-count (overlapping/multi-attribution values)"
           evidence=[ordered]@{ shownSum=$dispSum; total=$dispTotal } })
       }
     }
@@ -711,8 +795,8 @@ function Get-DetailSumFindings($w,$periods){
       $remainderRaw=[double]$totalRaw - $sumRaw
       if($remainderRaw -ge 0){
         $dispOther=Format-Metric $m.id $m.unit $remainderRaw $cc
-        [void]$out.Add([ordered]@{ ruleId='RECON_ROW_REMAINDER'; severity='info'; platform=$pname; metric=$m.name; widgetId=$w.id
-          statement="$pname '$($m.name)': listed rows sum to $dispSum of a $dispTotal total; $dispOther is in unshown rows (other)"
+        [void]$out.Add([ordered]@{ ruleId='RECON_ROW_REMAINDER'; severity='info'; platform=$pname; metric=$mlabel; widgetId=$w.id
+          statement="$pname '$mlabel': listed rows sum to $dispSum of a $dispTotal total; $dispOther is in unshown rows (other)"
           evidence=[ordered]@{ total=$dispTotal; shownSum=$dispSum; other=$dispOther } })
       }
     }
@@ -725,6 +809,7 @@ function Get-DetailSumFindings($w,$periods){
 # headline winner); ambiguous ceiling => skip. Summable metrics only (ratio/dedup slices can exceed the account).
 function Get-SliceAccountFindings($w,$dataWidgets,$periods){
   $out=[System.Collections.ArrayList]@()
+  Resolve-CellKeys $w
   $dims=@($w.dimensions | Where-Object {$_}); if($dims.Count -eq 0){ return @() }
   $tr=Total-Row $w; if(-not $tr){ return @() }
   $cc=$w.currencyCode
@@ -732,7 +817,7 @@ function Get-SliceAccountFindings($w,$dataWidgets,$periods){
   $pname=if($w.providers -and @($w.providers).Count -gt 0 -and $w.providers[0].name){ $w.providers[0].name } else { $prov }
   foreach($m in @($w.metrics)){
     if(-not (Test-Summable $m.id)){ continue }
-    $sliceRaw=Row-Cur $tr $m.name; if($null -eq $sliceRaw){ continue }
+    $sliceRaw=Row-Cur $tr (Metric-Key $m); if($null -eq $sliceRaw){ continue }
     $kpiCands=@()
     foreach($ow in @($dataWidgets)){
       if(Test-Blended $ow){ continue }
@@ -740,7 +825,8 @@ function Get-SliceAccountFindings($w,$dataWidgets,$periods){
       if((Get-WidgetProvider $ow) -ne $prov){ continue }
       $otr=Total-Row $ow; if(-not $otr){ continue }
       $om=@(@($ow.metrics) | Where-Object { $_.id -eq $m.id }); if($om.Count -eq 0){ continue }
-      $ov=Row-Cur $otr $om[0].name; if($null -eq $ov){ continue }
+      Resolve-CellKeys $ow   # $om[0] belongs to $ow, not to $w - it needs ITS widget's key space
+      $ov=Row-Cur $otr (Metric-Key $om[0]); if($null -eq $ov){ continue }
       $kpiCands += @{ unit=$om[0].unit; currency=$ow.currencyCode; value=[double]$ov }
     }
     if($kpiCands.Count -eq 0){ continue }
@@ -754,8 +840,8 @@ function Get-SliceAccountFindings($w,$dataWidgets,$periods){
     if(($sliceBase - $kpiBase) -gt (2*$ulp)){
       $dispSlice=Format-Metric $m.id $m.unit $sliceRaw $cc
       $dispKpi=Format-Metric $m.id $kpi.unit $kpi.value $kpi.currency
-      [void]$out.Add([ordered]@{ ruleId='RECON_SLICE_OVER_ACCOUNT'; severity='info'; platform=$pname; metric=$m.name; widgetId=$w.id
-        statement="$pname '$($m.name)' slice total $dispSlice exceeds the measured account KPI $dispKpi (dimension '$($dims[0])')"
+      [void]$out.Add([ordered]@{ ruleId='RECON_SLICE_OVER_ACCOUNT'; severity='info'; platform=$pname; metric=(Metric-Label $m); widgetId=$w.id
+        statement="$pname '$(Metric-Label $m)' slice total $dispSlice exceeds the measured account KPI $dispKpi (dimension '$($dims[0])')"
         evidence=[ordered]@{ slice=$dispSlice; account=$dispKpi; dimension=$dims[0]; note='slice exceeds measured account KPI; if the KPI card is filtered or the table spans a different period this is expected' } })
     }
   }
@@ -791,6 +877,7 @@ function Get-MetricProviderId($m){
 function Get-MatrixContributions($dataWidgets){
   $out=@(); $idx=-1
   foreach($w in @($dataWidgets)){
+    Resolve-CellKeys $w
     $idx=$idx+1
     $docIdx=$idx
     if($w.PSObject.Properties['documentIndex'] -and $null -ne $w.documentIndex){ $docIdx=[int]$w.documentIndex }
@@ -809,7 +896,8 @@ function Get-MatrixContributions($dataWidgets){
         rank=0; cell=$null; currencyCode=$w.currencyCode; ord=0
       }
       if($eligible -and $tr){
-        $c = $tr.metrics.$($m.name)   # by display NAME, byte-identically to the headline (see D3)
+        $c = $tr.metrics.$(Metric-Key $m)   # S5: by RESOLVED key; a borrowed cell used to rank and
+        # publish here with no reason token, which reads as a fully provenanced measured value.
         if($c -and ($c.current -is [double] -or $c.current -is [int] -or $c.current -is [long] -or $c.current -is [decimal])){
           $rec.cell=$c
           $rec.rank=$(if($isKpi){1}else{2})
@@ -838,7 +926,6 @@ function Reduce-MatrixCell($group,$periods,$coverageBasis){
   $g=@($group)
   if($g.Count -eq 0){ return $null }
   $first=$g[0]; $m=$first.metric
-  $aggClass = Get-AggregationClass $m.id $m.unit
   $observedOn=@(@($g | ForEach-Object { $_.widgetId }) | Select-Object -Unique)
   # A THIRD sort key: PS 5.1's Sort-Object is not stable, so two contributions with equal (rank,
   # documentIndex) -- which one widget declaring the same metric id twice produces -- would otherwise
@@ -846,7 +933,15 @@ function Reduce-MatrixCell($group,$periods,$coverageBasis){
   $ci=-1
   foreach($gc in $g){ $ci=$ci+1; $gc.ord=$ci }
   $ranked=@($g | Where-Object { $_.rank -gt 0 } | Sort-Object @{Expression={[int]$_.rank}}, @{Expression={[int]$_.documentIndex}}, @{Expression={[int]$_.ord}})
-  $out=[ordered]@{ id=[string]$m.id; metric=[string]$m.name }
+  # ANLZ-aCandidTally-1 S6/B8: `metric` and `aggClass` used to be written HERE, from $g[0], before
+  # the winner was known five lines below. When one widget declares the same metric id twice under
+  # two display names, that labelled the cell with one column's name over the other column's number -
+  # exactly what the comment below claims to prevent. Both now follow the winner. On the unranked
+  # path there is no winner, so $g[0] remains the only available identity.
+  $lblSrc = $first.metric
+  if($ranked.Count -gt 0){ $lblSrc = $ranked[0].metric }
+  $aggClass = Get-AggregationClass $lblSrc.id $lblSrc.unit
+  $out=[ordered]@{ id=[string]$m.id; metric=[string](Metric-Label $lblSrc) }
   if($ranked.Count -eq 0){
     $basis = Get-CellBasis $m.id $m.unit $first.currencyCode
     $out.type=(Metric-Type $m.id $m.unit $first.currencyCode); $out.direction=(Get-Direction $m.id)
@@ -912,6 +1007,9 @@ $periods = Derive-Periods $doc.meta.extractedAt $doc.report.dateRange
 $periodMeta = Get-PeriodMeta $doc.report.dateRange $doc.report.dateRangeResolved   # U8: D-period read-through
 $dataWidgets = @($doc.widgets | Where-Object { $_.kind -eq 'data' })
 if($dataWidgets.Count -eq 0){ throw "no data widgets to analyze (all text/empty)" }
+# S2/B1: ONE stamping pass, here, before the headline loop, the matrix pass and the breakdown pass.
+# All three read these same records, so a later pass never sees an unstamped metric.
+foreach($rw in $dataWidgets){ Resolve-CellKeys $rw }
 
 # U3: collect client-supplied CONTEXT annotations (text widgets that are real notes, not layout headers)
 # + optional -NotesFile. Verbatim, non-causal; each gets a stable aid the report anchors (<!-- annotation:aid -->)
@@ -938,6 +1036,7 @@ foreach($nf in @($NotesFile)){ if($nf -and (Test-Path -LiteralPath $nf)){ $ntext
 # (A1 -> $tr=$null) never SUPPLY a headline value. Every legacy field is populated byte-for-byte as before
 # (raw total-row cell, NOT Row-Cur's [double] cast); only the additive `canonical` provenance is new.
 $platforms=@{}
+$ambiguous=@{}   # S14: providerId -> metric ids whose display name was ambiguous inside its own widget
 $displaced=@{}   # U9/D2: per-provider list of rank displacements (a later zero-dim KPI supersedes a doc-earlier table total)
 foreach($w in $dataWidgets){
   # discovery: register EVERY provider present on the widget (each side of a blended widget included), so a
@@ -964,8 +1063,10 @@ foreach($w in $dataWidgets){
   $scope= if($isKpi){ 'account' } else { "table-total:$($dims[0])" }   # honest scope; never bare 'account' for a table total
   $src  = if($isKpi){ 'kpi-widget' } else { 'total-row' }
   foreach($m in $w.metrics){
-    $cell = $tr.metrics.$($m.name)
+    $cell = $tr.metrics.$(Metric-Key $m)
     if(-not $cell){ continue }
+    $amb = @(Get-AmbiguousWith $w $m)
+    $isAmb = (Test-AmbiguousMetric $w $m)
     if(-not ($cell.current -is [double] -or $cell.current -is [int] -or $cell.current -is [long] -or $cell.current -is [decimal])){ continue }  # scalar-guard: drop echo objects
     $key = $m.id  # role-qualified store key by metric id (dedup across widgets keeps first/total)
     $existing = $null
@@ -985,7 +1086,7 @@ foreach($w in $dataWidgets){
     if($hasCmp){ $platforms[$prov].headline.hasComparison=$true; $platforms[$prov].hasComparison=$true }
     $dispCur = (Format-Metric $m.id $m.unit $cell.current $cc)
     $platforms[$prov].headline[$key]=[ordered]@{
-      metric=$m.name; id=$m.id; unit=$m.unit; type=(Metric-Type $m.id $m.unit $cc); direction=$dir; currency=$cc
+      metric=(Metric-Label $m); id=$m.id; unit=$m.unit; type=(Metric-Type $m.id $m.unit $cc); direction=$dir; currency=$cc
       current=$cell.current; previous=$cell.compare; deltaPct=$delta; hasComparison=$hasCmp
       displayCurrent=$dispCur
       displayPrevious=(Format-Metric $m.id $m.unit $cell.compare $cc)
@@ -995,6 +1096,20 @@ foreach($w in $dataWidgets){
     }
     # U9/D5: a displaced cell records the widget it superseded (last canonical key; absent on non-flipped cells).
     if($null -ne $existing){ $platforms[$prov].headline[$key].canonical.supersededWidgetId = $existing.canonical.sourceWidgetId }
+    # ---- ANLZ-aCandidTally-1 S9/B5/B7: ambiguity disclosure ---------------------------------------
+    # Emitted ONLY on a cell whose display name is blank or shared INSIDE ITS OWN WIDGET, so an
+    # unambiguous report's canonical block is byte-identical to before (B5). Ambiguity is per-widget
+    # because Get-UniqKeySeq allocates a fresh probe map per metric list (B7).
+    # Ids only, never a value: the closer indexes findings, annotations and three named headline
+    # display properties, and never walks `canonical`, so a value here would still be the wrong thing
+    # to publish - the rule is NO METRIC VALUE IN AN INDEXED CONTAINER, and ids-only satisfies it
+    # everywhere at once.
+    if($isAmb){
+      $platforms[$prov].headline[$key].canonical.keyBasis = 'cell-key'
+      $platforms[$prov].headline[$key].canonical.ambiguousWith = @($amb)
+      if(-not $ambiguous.ContainsKey($prov)){ $ambiguous[$prov]=[System.Collections.ArrayList]@() }
+      if($ambiguous[$prov] -notcontains [string]$m.id){ [void]$ambiguous[$prov].Add([string]$m.id) }
+    }
   }
 }
 # U9/D7: platforms that had a displacement recompute comparison flags from the SURVIVING headline cells.
@@ -1122,6 +1237,21 @@ foreach($dpk in @($displaced.Keys)){
     evidence=[ordered]@{ metrics=@($dshown); count="$($dmet.Count)"; supersededWidgets=@($dwid) }
   })
 }
+# ANLZ-aCandidTally-1 S14: GAP_METRIC_NAME_AMBIGUOUS - one info finding per provider whose widget
+# declared two comparer-equal display names, or a blank one, for different metrics. S9's canonical
+# keys are the machine-readable record; this is the human-visible signal that the cell-key repair
+# fired at all. It copies GAP_HEADLINE_SOURCE_CHANGED exactly: ids and a count, never a metric value,
+# which is why that finding was ratified as safe to route through the closer-indexed findings channel.
+foreach($apk in @($ambiguous.Keys)){
+  $aids=@(@($ambiguous[$apk]) | Sort-Object -Unique); if($aids.Count -eq 0){ continue }
+  $ashown = if($aids.Count -gt 20){ (@($aids[0..19]) + @("+$($aids.Count-20) more")) } else { $aids }
+  $pnameA = if($platforms.ContainsKey($apk)){ $platforms[$apk].name } else { $apk }
+  [void]$gaps.Add([ordered]@{
+    ruleId='GAP_METRIC_NAME_AMBIGUOUS'; severity='info'; platform=$pnameA
+    statement="$($aids.Count) metric(s) of ${pnameA} share a display name with another metric on the same widget, or carry none; each cell is addressed by its extractor cell key rather than by that name: $($ashown -join ', ')"
+    evidence=[ordered]@{ metrics=@($ashown); count="$($aids.Count)" }
+  })
+}
 # U10 rule (a): cost-per-result rankings with no measured downstream value (data_gaps.md Tier 1.1).
 # ONE finding per report, listing every affected ads platform. Value attribution is by metric-id
 # prefix (blended widgets contribute value metrics to their true owner, like the $observed map).
@@ -1130,7 +1260,8 @@ foreach($w in $dataWidgets){
   foreach($m in @($w.metrics)){
     if(-not (Test-ValueMetricId $m.id)){ continue }
     $mp=($m.id -split ':')[0]; if(-not $mp -or $valueProv[$mp]){ continue }
-    foreach($r in @($w.rows)){ $v=Row-Cur $r $m.name; if($null -ne $v -and $v -gt 0){ $valueProv[$mp]=$true; break } }
+    $vmk=Metric-Key $m
+    foreach($r in @($w.rows)){ $v=Row-Cur $r $vmk; if($null -ne $v -and $v -gt 0){ $valueProv[$mp]=$true; break } }
   }
 }
 $rankProv=@{}    # providerId -> $true when it carries >= 1 rankable non-blended ads widget
@@ -1208,7 +1339,7 @@ foreach($w in $dataWidgets){
   $tr=Total-Row $w; if(-not $tr){continue}
   $dimSig = (@($w.dimensions) | Sort-Object) -join ','
   foreach($m in $w.metrics){
-    $cell=$tr.metrics.$($m.name); if(-not $cell){continue}
+    $cell=$tr.metrics.$(Metric-Key $m); if(-not $cell){continue}
     if(-not ($cell.current -is [double] -or $cell.current -is [int] -or $cell.current -is [long] -or $cell.current -is [decimal])){continue}
     $key="$($m.id)`t$dimSig"
     if(-not $byMetric.ContainsKey($key)){ $byMetric[$key]=@{ mid=$m.id; rows=@() } }
@@ -1273,7 +1404,7 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 }
 $facts=[ordered]@{
   meta=[ordered]@{
-    tool='Analyze-SwydoReport.ps1'; factsVersion=2; canonicalVersion=3; matrixVersion=1; computedFrom=$doc.meta.tool
+    tool='Analyze-SwydoReport.ps1'; factsVersion=2; canonicalVersion=4; matrixVersion=2; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence; period=$periodMeta

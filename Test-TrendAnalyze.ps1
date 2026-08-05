@@ -245,6 +245,30 @@ try {
   Assert (@(Recon $fa 'RECON_TREND_COVERAGE').Count -eq 1) "gate5 dedup: non-summable coverage info"
   Assert ((@($fa.findings.wins)+@($fa.findings.losses)+@($fa.findings.dataGaps) | Where-Object { $_ -and ($_.ruleId -like 'WIN_*' -or $_.ruleId -like 'LOSS_*' -or $_.ruleId -like 'GAP_NO_*') }).Count -ge 0) "gate5 dedup: Test-Additive trend path still runs (predicate split)"
 
+
+  # ANLZ-aCandidTally-1 AC16/AC20/S11: the RECON pass consumes the repaired headline, and the trend
+  # document records WHICH analyzer wrote its input. -PeriodKpiFacts is a file path, so that input
+  # can be a pre-repair archive.
+  $pkCk = New-Pk 'Acme Co' $MID $null $null 30000 'table-total:Device' $QP $null
+  $pkCk.platforms[0].headline[$MID].metric = $MID          # what Metric-Label emits for a blank name
+  $pkCk.meta.canonicalVersion = 4
+  $fa = Run-Trend (New-Led 'Acme Co' $months3 $null $null $null $null) $pkCk
+  $covCk = @(Recon $fa 'RECON_TREND_COVERAGE')
+  Assert ($covCk.Count -eq 1) "AC16 a repaired metric produces exactly one coverage info"
+  Assert ($covCk[0].statement -match [regex]::Escape("'$MID'")) "AC16 the RECON statement carries the resolved key as its label"
+  Assert ($fa.meta.sourceCanonicalVersion -eq 4) "AC20 trend facts echo the source canonicalVersion"
+  Assert ($fa.meta.factsVersion -eq 1) "AC20 the trend's own factsVersion is a separate line and does not move"
+  # S11: a facts document written BEFORE the repair can still carry a blank label; it must not render
+  # as "google-analytics-4 '': ".
+  $pkEmpty = New-Pk 'Acme Co' $MID $null $null 30000 'table-total:Device' $QP $null
+  $pkEmpty.platforms[0].headline[$MID].metric = ''
+  $fa = Run-Trend (New-Led 'Acme Co' $months3 $null $null $null $null) $pkEmpty
+  $covEmpty = @(Recon $fa 'RECON_TREND_COVERAGE')
+  Assert ($covEmpty.Count -eq 1) "S11 a stale blank-label document still reconciles"
+  Assert ($covEmpty[0].statement -notmatch "''") "S11 no blank-quoted label in the RECON statement"
+  Assert ($covEmpty[0].statement -match 'sessions') "S11 the label falls back to the metric part"
+  Assert ($null -eq $fa.meta.sourceCanonicalVersion) "AC20 a pre-marker source leaves the echo absent, never null-valued"
+
   # omitted -PeriodKpiFacts -> ZERO RECON_* findings (trend path unchanged)
   $fa=Run-Trend (New-Led 'Acme Co' $months3 $null $null $null $null) $null
   $anyRecon=@(); foreach($k in 'wins','losses','anomalies','discrepancies','dataGaps'){ foreach($f in @($fa.findings.$k)){ if($f -and $f.ruleId -like 'RECON_*'){ $anyRecon+=$f } } }

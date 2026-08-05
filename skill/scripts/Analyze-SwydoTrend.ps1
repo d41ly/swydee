@@ -209,6 +209,12 @@ if($myPeriodKpiFacts){
   $pkText=[IO.File]::ReadAllText($myPeriodKpiFacts)
   Assert-NoCredential $pkText                       # MF-9: fail-closed scrub of the raw input BEFORE parse (mirrors the ledger read above)
   $PK = $pkText | ConvertFrom-Json
+  # ANLZ-aCandidTally-1 S15/B15: record WHICH analyzer wrote the document we reconciled against.
+  # -PeriodKpiFacts is a FILE PATH, so a trend run can be handed a pre-repair archive and otherwise
+  # has no way to tell. Set ONLY when the switch was supplied, so the shipped "omitted =>
+  # byte-identical" invariant holds. The trend's own factsVersion is a SEPARATE numbering line from
+  # the report's canonicalVersion and the two must never be aligned.
+  $script:pkCanonicalVersion = $PK.meta.canonicalVersion
   $covMsg=$null                                     # report-global coverage reason; at most ONE emitted (MF-8)
   # ---- gate 1: machine-readable, calendar-aligned period (D-period). Key EXCLUSIVELY on the persisted
   #      meta.period fields (MF-7): a RESOLVED relative period (non-null startYm/endYm + calendarAligned) PASSES;
@@ -271,7 +277,10 @@ if($myPeriodKpiFacts){
         # only reconcile metrics the ledger actually has monthly data for; otherwise nothing to compare (not a gap)
         if(-not $series.ContainsKey($prov)){ continue }
         if(-not $series[$prov].ContainsKey($mid)){ continue }
-        $pkName=if($null -ne $cell.metric){ [string]$cell.metric } else { Get-MetricPart $mid }
+        # ANLZ-aCandidTally-1 S11: an EMPTY metric label passes a bare null check and renders as
+        # "google-adwords '': ". Analyze-SwydoReport no longer emits one, but -PeriodKpiFacts is a
+        # FILE PATH, so this analyzer can be handed a facts document written before that repair.
+        $pkName=if(-not [string]::IsNullOrWhiteSpace([string]$cell.metric)){ [string]$cell.metric } else { Get-MetricPart $mid }
         $covPre="$prov '$pkName': "
         # gate 2c: account scope (MF-3). Headline must carry canonical{} with scope=='account' (== source
         # 'kpi-widget'); a table-total winner (first-wins/rank shadowing) carries scope 'table-total:<dim>'.
@@ -334,6 +343,8 @@ $hasCmp=[bool](@($platforms.Values | Where-Object { $_.hasComparison }).Count)
 $caveats=@()
 if($hasCmp){ $caveats += [ordered]@{ id='seasonality'; text="Quarter-over-quarter comparisons can reflect seasonality (e.g. Q1 tax season, Q4 holidays), not just performance - validate against the same quarter a year earlier (the YoY figures) before attributing changes to the campaigns." } }
 
+# S15/B15: additive and CONDITIONAL. Absent when -PeriodKpiFacts was omitted, so that path stays
+# byte-identical; absent too when the source document predates the marker.
 $factsDoc=[ordered]@{
   meta=[ordered]@{
     tool='Analyze-SwydoTrend.ps1'; factsVersion=1; computedFrom=$L.client; reportName=$L.client; client=$L.client
@@ -350,6 +361,9 @@ $factsDoc=[ordered]@{
   platforms=@($platforms.Values)
   findings=[ordered]@{ wins=@($wins); losses=@($losses); anomalies=@($anoms); discrepancies=@($disc); dataGaps=@($gaps) }
 }
+# S15/B15: set only when -PeriodKpiFacts was supplied AND the source carried the marker, so the
+# omitted-switch path keeps its byte-identical guarantee and a pre-marker source stays silent.
+if($null -ne $script:pkCanonicalVersion){ $factsDoc.meta.sourceCanonicalVersion = $script:pkCanonicalVersion }
 $json = ConvertTo-Json -InputObject $factsDoc -Depth 40 -Compress
 Assert-NoCredential $json
 if(Test-HasCredProps ($json | ConvertFrom-Json)){ throw "CREDENTIAL LEAK: credential-shaped property in trend facts" }
