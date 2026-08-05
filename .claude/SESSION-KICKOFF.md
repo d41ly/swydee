@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T14:20:22+03:00 @ 238c2bf5608173112adeec746311ebefcbd55a0f
+last-audit: 2026-08-05T15:13:12+03:00 @ fad7e8c7cab28ea0dd2ae13f4cf3f08990b515b1
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -102,10 +102,10 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1358 assertions across the 8 suites after ANLZ-aCandidTally-1 -- the total is the SUM of the
-per-suite figures, so an arithmetic slip is self-evident: Extractor 296, Analyze 685, Closer 129,
-TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4. Was 1276 after
-ANLZ-aUniformLattice-8, and 1064 at adoption.
+1405 assertions across the 8 suites after EXTR-aUniformLattice-1 merged with ANLZ-aCandidTally-1 --
+the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 327,
+Analyze 701, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
+Was 1276 after ANLZ-aUniformLattice-8, and 1064 at adoption.
 
 ### Tier rule
 
@@ -184,13 +184,20 @@ true. Keep each to one line; link out for detail.*
   carrying two comparer-equal display names, or one blank, published the first holder's number under
   the second metric's id in BOTH layers. A key-resolution change under an unchanged reduce moves the
   marker of every layer whose published values it changes - that is the positive rule, ratified by
-  ANLZ-aCandidTally-2, and it is why two markers move here rather than one. `meta.factsVersion` stays
-  2 because every added key is additive. Disclosure is `canonical.keyBasis` plus
+  ANLZ-aCandidTally-2, and it is why two markers move here rather than one. `meta.factsVersion` was
+  left at 2 by that unit because every added key is additive; it moved to 3 in the FIFTH below. Disclosure is `canonical.keyBasis` plus
   `canonical.ambiguousWith`, ids only, and the info finding `GAP_METRIC_NAME_AMBIGUOUS`.
   One residual is deliberately UNMARKED: a breakdown-only flip on a dimensioned no-total widget moves
   no marker at all, because no marker names the breakdown layer. That was the owner's call and it is
   pinned rather than latent.
   A fifth disclosed change needs its own MEASURED flip set before it lands.
+  The FIFTH is EXTR-aUniformLattice-1, marked by **`meta.factsVersion` 2->3** and by
+  `meta.compareBasis`: the previous-period column used to come from the dashboard's saved compare
+  selector, unrecorded and volatile, so every delta was computed against an unknown baseline. The
+  extractor now COMPUTES the window, passes it explicitly as `{start,type:FROM}`, and records both in
+  `meta.periodResolved`. `referenceCompareDate` is `ComparePeriod!` and cannot be omitted, so the
+  fail-closed gate lives in the ANALYZER: `compareBasis='untrusted'` suppresses every comparative
+  field. A sixth disclosed change needs its own MEASURED flip set before it lands.
 - Every write path keeps its **fail-closed credential gate**; only `ConvertTo-SwydoTrendFacts`
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the
@@ -213,6 +220,19 @@ true. Keep each to one line; link out for detail.*
   addressing keys are machine fields with no narrative content, and `skill/SKILL.md` carries an
   explicit read/skip list so the model does not spend attention on them. Before adding a per-row key,
   measure: `valuesById` reached 41% of the document (129,815 of 318,082 bytes) before being cut back.
+- The previous-period column is NOT free. `referenceCompareDate` is `ComparePeriod!` - REQUIRED and
+  non-null, measured at HTTP 400 three ways - so the extractor can never decline to send one. The
+  window is computed by `Get-PreviousWindow` and passed explicitly at the ONE report fetch site;
+  `$script:cp` deliberately keeps the report's SAVED spec because the three trend fetches and the
+  field probe all pass `$null` and INHERIT it. Never assign the computed spec to `$script:cp`.
+- `ps-hygiene` cannot tell a `$name` token inside a QUOTED STRING from an identifier, so a
+  source-scanning assertion must not embed one; and it flags case-only collisions across the WHOLE
+  file, so a new `$w1` collides with an existing `$W`.
+- Two hygiene check-12 traps on a spec headed for `CLOSED`/`WONTDO`: the body must not contain the
+  literal date-skeleton token `Y`+`YYY-MM-DD` anywhere (it reads as an unfilled placeholder even in
+  prose), and §8's first non-blank line must START with `none` or `N/A`. `TEMPLATE-SPEC.md` says a
+  "fully RESOLVED" §8 also qualifies, but the SCRIPT does not implement that — write `none — <why>`
+  and record the resolution below it.
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
 - Filing a new record costs three hygiene legs beyond writing it: a `DECISIONS.md` index line has a

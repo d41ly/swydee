@@ -456,7 +456,10 @@ foreach($bad in 'value','basisVersion','synthesizedFrom'){ A (-not ($h9.canonica
 # and non-flip-conditional -- so the pin follows the bump rather than the bump breaking the pin.
 # factsVersion 1 -> 2 by ANLZ-aUniformLattice-8: the first SUBTRACTIVE change to the facts shape
 # (valuesById became collisions-only), so the marker that names the shape has to move.
-A ($r9.facts.meta.canonicalVersion -eq 4 -and $r9.facts.meta.factsVersion -eq 2) "e2e14/U9+aCandidTally: canonicalVersion=4 (the cell-key waiver), factsVersion=2 (the lean-facts subtraction is the last SHAPE change)"
+# MERGED PIN: four disclosed changes have now moved a marker. canonicalVersion 4 = P5 waiver then
+# the aCandidTally cell-key waiver; matrixVersion 2 = the matrix reads by resolved key;
+# factsVersion 3 = the lean-facts subtraction then EXTR-aUniformLattice-1's period strings.
+A ($r9.facts.meta.canonicalVersion -eq 4 -and $r9.facts.meta.factsVersion -eq 3) "e2e14: canonicalVersion=4 (P5 + cell-key waivers), factsVersion=3 (lean facts + proven periods)"
 A ($r9.facts.meta.matrixVersion -eq 2) "e2e14/aCandidTally: matrixVersion=2 - the matrix reads by resolved key now, so its own marker moves too"
 # 15. GAP_NO_ACCOUNT_TOTAL shape: info + fid + evidence.metrics
 $g15 = GetFind $r8.facts 'GAP_NO_ACCOUNT_TOTAL'
@@ -1406,7 +1409,6 @@ $rowsJson = ($b8c.rows | ConvertTo-Json -Depth 20 -Compress)
 foreach($mid in @($b8c.metricIds)){
   A ($rowsJson -notmatch [regex]::Escape('"' + $mid + '":{')) "L8 AC7 no-collision rows carry no id-keyed cell for '$mid' (re-inflation guard)"
 }
-A ($l8c.facts.meta.factsVersion -eq 2) "L8 AC5 factsVersion is 2"
 
 Write-Host "== ANLZ-aCandidTally-1: cell-key identity =="
 . "$PSScriptRoot\skill\scripts\Test-ReportNumbers.ps1" -DefineOnly
@@ -1473,7 +1475,10 @@ A ($rE.text -notmatch 'ambiguousWith') "AC13 no ambiguousWith key either"
 A (-not (HasFind $rE.facts 'GAP_METRIC_NAME_AMBIGUOUS')) "AC13 no roll-up finding on an unambiguous report"
 A ($rE.text -match '"current":15627,') "AC13 the legacy current field is byte-pinned"
 A ($rE.text -match [regex]::Escape('"displayCurrent":"$10,864.72"')) "AC13 the legacy displayCurrent string is byte-pinned"
-A ($rE.facts.meta.canonicalVersion -eq 4 -and $rE.facts.meta.matrixVersion -eq 2 -and $rE.facts.meta.factsVersion -eq 2) "AC13 only the two markers moved"
+# aCandidTally's AC13 pinned factsVersion at 2 to prove ITS change moved only two markers. That
+# still holds for that unit; factsVersion has since moved to 3 for an unrelated reason
+# (EXTR-aUniformLattice-1's period strings), so the pin now asserts the two it owns.
+A ($rE.facts.meta.canonicalVersion -eq 4 -and $rE.facts.meta.matrixVersion -eq 2) "AC13 the cell-key change moved exactly its two markers"
 
 # --- AC11: a schemaVersion-2 document with no cellKey at all is repaired by the stamping pass ---
 $ckF = DW 'wF' 'google-adwords' 'Google Ads' @() @((Met 'Conversions' 'google-adwords:conversions'),(Met 'Conversions' 'google-adwords:all_conversions')) @((CkRow 'data' $null $null @{ 'Conversions'=@(100,80); 'Conversions [google-adwords:all_conversions]'=@(250,200) }))
@@ -1613,6 +1618,52 @@ $row21 = @($bd21.rows | Where-Object { $_.label -eq 'A' })[0]
 A (@($row21.valuesById.PSObject.Properties.Name).Count -eq 2) "AC21 a v2 collided pair yields TWO valuesById entries, where it used to yield none"
 A ($row21.valuesById.'google-adwords:clicks'.display -ne $row21.valuesById.'facebook-ads:clicks'.display) "AC21 and the two carry different numbers, each its own"
 A ($row21.valuesById.'facebook-ads:clicks'.display -eq '150') "AC21 the second metric's own row value, not the first's"
+A ($l8c.facts.meta.factsVersion -eq 3) "L8 AC5 factsVersion is 3 (bumped again by EXTR-aUniformLattice-1)"
+Write-Host "== EXTR-aUniformLattice-1: fail closed on an unproven compare window =="
+# D5: the extractor CANNOT decline to send a compare (ComparePeriod! is required, measured at HTTP
+# 400 three ways), so the gate lives here. An untrusted basis must suppress EVERY comparative field.
+$prevSup = $script:compareUntrusted
+$row = [pscustomobject]@{ metrics=[pscustomobject]@{ Clicks=[pscustomobject]@{ current=10; compare=8 } } }
+A ($null -ne (Row-Cmp $row 'Clicks')) "AC9 trusted => Row-Cmp reads the compare cell normally"
+$script:compareUntrusted = $true
+try { A ($null -eq (Row-Cmp $row 'Clicks')) "AC9 untrusted => Row-Cmp returns null even though a compare cell exists" }
+finally { $script:compareUntrusted = $prevSup }
+
+# e2e: an extraction marked untrusted yields no previous, no delta, hasComparison false everywhere.
+$docU = MkDoc @( (DW 'u-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100 80)}))) )
+$docU.meta | Add-Member -NotePropertyName compareBasis -NotePropertyValue 'untrusted' -Force
+$rU = RunAnalyze $docU
+$hU = Hl $rU.facts 'google-adwords' 'google-adwords:clicks'
+A ($hU.current -eq 100) "AC9 the CURRENT value survives suppression"
+A ($null -eq $hU.previous -and $null -eq $hU.deltaPct -and $null -eq $hU.displayDelta) "AC9 untrusted => no previous, no deltaPct, no displayDelta"
+A ($hU.hasComparison -eq $false) "AC9 untrusted => hasComparison false"
+A ($rU.facts.meta.compareBasis -eq 'untrusted') "AC9 facts.meta records the basis"
+$mU = @($rU.facts.platforms | Where-Object { $_.id -eq 'google-adwords' })[0].metrics.'google-adwords:clicks'
+A ($null -eq $mU.previous -and $null -eq $mU.displayDelta) "AC9 the matrix cell is suppressed too"
+# and the trusted control still compares
+$docT = MkDoc @( (DW 't-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 100 80)}))) )
+$docT.meta | Add-Member -NotePropertyName compareBasis -NotePropertyValue 'computed' -Force
+$hT = Hl (RunAnalyze $docT).facts 'google-adwords' 'google-adwords:clicks'
+A ($hT.previous -eq 80 -and $hT.displayDelta -eq '+25.0%') "AC9 computed basis => the comparison is emitted normally"
+
+# S7: real date labels when the extractor proved both windows.
+$docP = MkDoc @( (DW 'p-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 5)}))) )
+$docP.meta | Add-Member -NotePropertyName compareBasis -NotePropertyValue 'computed' -Force
+$docP.meta | Add-Member -NotePropertyName periodResolved -NotePropertyValue ([pscustomobject]@{
+  current=[pscustomobject]@{start='2026-07-01';end='2026-07-31'}
+  previous=[pscustomobject]@{start='2026-05-31';end='2026-06-30'}
+  lengthDays=31; basis='previous-period'; anchorDate='2026-08-05' }) -Force
+$fP = (RunAnalyze $docP).facts
+A ($fP.meta.currentPeriod -eq '2026-07-01..2026-07-31') "S7 currentPeriod carries the real dates"
+A ($fP.meta.previousPeriod -eq '2026-05-31..2026-06-30') "S7 previousPeriod carries the real dates"
+A ($fP.meta.periodConfidence -eq 'resolved') "S7 periodConfidence is resolved"
+A ($fP.meta.periodLabel -eq '2026-07-01..2026-07-31 vs 2026-05-31..2026-06-30') "S7 periodLabel pairs them"
+# an older document without periodResolved keeps the legacy labels
+$fLegacy = (RunAnalyze (MkDoc @( (DW 'o-kpi' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks' $null)) @((KRow @{Clicks=(Cell 5)}))) ))).facts
+A ($fLegacy.meta.currentPeriod -notmatch '^\d{4}-\d{2}-\d{2}\.\.') "S7 a document without periodResolved does NOT get date labels"
+A ($fLegacy.meta.periodConfidence -ne 'resolved') "S7 and its confidence is never 'resolved'"
+A ($fLegacy.meta.compareBasis -eq 'unknown') "S7 an extraction with no compareBasis reads as 'unknown', not 'untrusted' (older artifacts keep comparing)"
+A ($null -ne (Hl $fLegacy 'google-adwords' 'google-adwords:clicks')) "S7 a legacy document still analyzes"
 
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
