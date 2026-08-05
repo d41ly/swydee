@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T18:40:43+03:00 @ 7f1bee1fe6279eebaa0ae3ba61306f13232b47f2
+last-audit: 2026-08-05T23:35:20+03:00 @ 6213a2392b47d9e26c78d892ea27c6397518908c
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -104,10 +104,11 @@ from the repo root).
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1405 assertions across the 8 suites after EXTR-aUniformLattice-1 merged with ANLZ-aCandidTally-1 --
+1413 assertions across the 8 suites after ANLZ-aUniformLattice-10 --
 the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 327,
 Analyze 701, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
-Was 1276 after ANLZ-aUniformLattice-8, and 1064 at adoption.
+Was 1405 after EXTR-aUniformLattice-1 + ANLZ-aCandidTally-1, 1276 after
+ANLZ-aUniformLattice-8, and 1064 at adoption.
 
 ### Tier rule
 

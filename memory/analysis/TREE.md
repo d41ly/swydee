@@ -13,3 +13,5 @@ memory/analysis/
     2026-07-13-ANLZ-aHeadlineRank/
     2026-08-04-ANLZ-aUniformLattice/
     2026-08-05-ANLZ-aCandidTally/
+    2026-08-05-ANLZ-aUniformLattice-cmpleak/
+    2026-08-05-ANLZ-aUniformLattice-rowlayer/

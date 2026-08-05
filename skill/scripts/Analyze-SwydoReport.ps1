@@ -1366,7 +1366,14 @@ foreach($w in $dataWidgets){
     if(-not ($cell.current -is [double] -or $cell.current -is [int] -or $cell.current -is [long] -or $cell.current -is [decimal])){continue}
     $key="$($m.id)`t$dimSig"
     if(-not $byMetric.ContainsKey($key)){ $byMetric[$key]=@{ mid=$m.id; rows=@() } }
-    $byMetric[$key].rows += @{ wid=$w.id; cur=$cell.current; prev=$cell.compare }
+    # ANLZ-aUniformLattice-10: the FOURTH consumer of the D5 gate, and the one that was missing.
+    # The loop below iterates 'cur','prev' symmetrically, so an ungated $cell.compare published
+    # previous-period numbers inside a force-surfaced discrepancy finding while every CELL-layer
+    # comparison was correctly suppressed. Gate at COLLECTION, not at emit: $vals drops $null and
+    # the -lt 2 continue then makes the 'prev' arm self-skip, keeping the loop period-agnostic.
+    $prevCell = $null
+    if(-not $script:compareUntrusted){ $prevCell = $cell.compare }
+    $byMetric[$key].rows += @{ wid=$w.id; cur=$cell.current; prev=$prevCell }
   }
 }
 foreach($key in $byMetric.Keys){

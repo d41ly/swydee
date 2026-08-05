@@ -1665,6 +1665,44 @@ A ($fLegacy.meta.periodConfidence -ne 'resolved') "S7 and its confidence is neve
 A ($fLegacy.meta.compareBasis -eq 'unknown') "S7 an extraction with no compareBasis reads as 'unknown', not 'untrusted' (older artifacts keep comparing)"
 A ($null -ne (Hl $fLegacy 'google-adwords' 'google-adwords:clicks')) "S7 a legacy document still analyzes"
 
+# ---- ANLZ-aUniformLattice-10: the discrepancy layer obeys the D5 gate too ----------------------
+# Two widgets over the SAME metric and the SAME dimension signature, agreeing on current and
+# disagreeing on previous. That is the exact shape the cross-widget reconciliation pass reports on,
+# and before this unit the 'prev' arm published those untrusted numbers in a force-surfaced finding
+# while every cell-layer comparison was correctly suppressed.
+function CmpFacts($basis,$curA,$curB,$prevA,$prevB){
+  $d = MkDoc @(
+    (DW 'x-a' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks')) @((KRow @{Clicks=(Cell $curA $prevA)}))),
+    (DW 'x-b' 'google-adwords' 'Google Ads' @() @((Met 'Clicks' 'google-adwords:clicks')) @((KRow @{Clicks=(Cell $curB $prevB)})))
+  )
+  if($basis){ $d.meta | Add-Member -NotePropertyName compareBasis -NotePropertyValue $basis -Force }
+  return (RunAnalyze $d).facts
+}
+# @(...) around a possibly-$null findings array first: an empty list round-trips to $null and
+# @($null).Count is 1, so filtering on truthiness is the only honest count here.
+function NDisc($facts,$word){ return @(@($facts.findings.discrepancies) | Where-Object { $_ -and $_.statement -match $word }).Count }
+
+# AC1: untrusted + a previous-only disagreement => the discrepancy is suppressed entirely.
+A ((NDisc (CmpFacts 'untrusted' 100 100 80 55) 'previous') -eq 0) "ANLZ-10 AC1 untrusted => no previous-period discrepancy finding"
+# AC2: the SAME fixture under a computed basis still reports it - suppressed, not deleted.
+$fdC = CmpFacts 'computed' 100 100 80 55
+A ((NDisc $fdC 'previous') -ge 1) "ANLZ-10 AC2 computed => the previous-period discrepancy is still reported"
+# AC3: the 'cur' arm is untouched by the gate.
+A ((NDisc (CmpFacts 'untrusted' 100 70 80 80) 'current') -ge 1) "ANLZ-10 AC3 untrusted still reports a CURRENT-value discrepancy"
+# AC4: 'unknown' is deliberately NOT suppressed - the gate at :1025 is an exact -eq 'untrusted', and
+# a pre-contract extraction never claimed its compare column was proven-or-suppressed.
+$fdUnk = CmpFacts $null 100 100 80 55
+A ($fdUnk.meta.compareBasis -eq 'unknown') "ANLZ-10 AC4 a pre-contract extraction reads as 'unknown'"
+A ((NDisc $fdUnk 'previous') -ge 1) "ANLZ-10 AC4 'unknown' compares like 'computed' and is NOT suppressed"
+# AC5: no marker moved - a bug fix inside an existing contract, not a new disclosed change.
+A ($fdC.meta.factsVersion -eq 3 -and $fdC.meta.canonicalVersion -eq 4 -and $fdC.meta.matrixVersion -eq 2) "ANLZ-10 AC5 no version marker moves"
+# AC6 (the left-shift): census the .compare reads. The defect existed for as long as it did because
+# nothing counted them. Count non-comment LINES, not tokens - line 198 alone carries five.
+$anzLines = Get-Content (Join-Path (Split-Path -Parent $PSScriptRoot) 'skill\scripts\Analyze-SwydoReport.ps1')
+$cmpLines = @($anzLines | Where-Object { $_ -match '\.compare\b' -and $_ -notmatch '^\s*#' }).Count
+A ($cmpLines -eq 4) "ANLZ-10 AC6 exactly 4 non-comment lines read .compare (got $cmpLines) - a new read must be gated by compareUntrusted before this pin moves"
+A (@($anzLines | Where-Object { $_ -match 'compareUntrusted' }).Count -ge 6) "ANLZ-10 AC6 the D5 gate has its assignment plus at least four consumers"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

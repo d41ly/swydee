@@ -8,3 +8,4 @@ memory/orchestration/
   BACKLOG.md
   builds/
     2026-08-05-ORCH-aUniformLattice/
+    2026-08-05-ORCH-aUniformLattice-docs/
