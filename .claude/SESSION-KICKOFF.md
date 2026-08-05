@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-05T10:42:27+03:00 @ e4a95a999b993a556219d6f7d6cb09b5c5d89e44
+last-audit: 2026-08-05T14:05:50+03:00 @ 39def66ff1b952851da8245ac4e5ea0a37d65f99
 watch: AGENTS.md; skill; tools; scripts; memory-tree; memory-recall; .memory-tree.conf; Test-*.ps1
 verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -102,9 +102,10 @@ spell it out: `& "C:/Program Files/Git/bin/bash.exe" tools/run-gates.sh`.
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1276 assertions across the 8 suites after ANLZ-aUniformLattice-8 -- the total is the SUM of the
-per-suite figures, so an arithmetic slip is self-evident: Extractor 288, Analyze 619, Closer 129,
-TrendAnalyze 68, TrendFacts 24, Archive 94, Ledger 50, Sync 4. Was 1064 at adoption.
+1358 assertions across the 8 suites after ANLZ-aCandidTally-1 -- the total is the SUM of the
+per-suite figures, so an arithmetic slip is self-evident: Extractor 296, Analyze 685, Closer 129,
+TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4. Was 1276 after
+ANLZ-aUniformLattice-8, and 1064 at adoption.
 
 ### Tier rule
 
@@ -178,7 +179,18 @@ true. Keep each to one line; link out for detail.*
   than by `canonicalVersion` (the headline algorithm is untouched): it is the first SUBTRACTIVE change
   to the facts shape, making `breakdowns[].rows[].valuesById` collisions-only and reclaiming 37% of the
   document. Its flip set is exactly those rows, the new `valuesByIdScope`, and the version marker.
-  A fourth disclosed change needs its own MEASURED flip set before it lands.
+  The FOURTH is ANLZ-aCandidTally-1, marked by **`canonicalVersion` 3->4 AND `matrixVersion` 1->2**
+  together: every rule selected a metric by its ID and then read its cell by display NAME, so a widget
+  carrying two comparer-equal display names, or one blank, published the first holder's number under
+  the second metric's id in BOTH layers. A key-resolution change under an unchanged reduce moves the
+  marker of every layer whose published values it changes - that is the positive rule, ratified by
+  ANLZ-aCandidTally-2, and it is why two markers move here rather than one. `meta.factsVersion` stays
+  2 because every added key is additive. Disclosure is `canonical.keyBasis` plus
+  `canonical.ambiguousWith`, ids only, and the info finding `GAP_METRIC_NAME_AMBIGUOUS`.
+  One residual is deliberately UNMARKED: a breakdown-only flip on a dimensioned no-total widget moves
+  no marker at all, because no marker names the breakdown layer. That was the owner's call and it is
+  pinned rather than latent.
+  A fifth disclosed change needs its own MEASURED flip set before it lands.
 - Every write path keeps its **fail-closed credential gate**; only `ConvertTo-SwydoTrendFacts`
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the

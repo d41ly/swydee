@@ -37,7 +37,13 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 - **What to read, and what to skip (ANLZ-aUniformLattice-8).** The facts document carries machine
   addressing fields alongside the narrative ones. Read `platforms[].headline` and `findings` for
   numbers, `platforms[].metrics` for coverage, and `breakdowns[].rows[]` `label` + `values` for
-  per-row detail. SKIP `valuesById`, `rowKey`, `rowKeyBasis`, `valuesByIdScope`, `metricIds`,
+  per-row detail. When two metrics on one widget share a display name, `values[<name>]` belongs to
+  the FIRST holder and carries that metric's own number, unit and type together
+  (ANLZ-aCandidTally-1 S7), so it is internally consistent and safe to quote; the second metric's
+  number is NOT quotable at row level. A cell whose display name was ambiguous carries
+  `canonical.keyBasis` and is named in the info finding `GAP_METRIC_NAME_AMBIGUOUS`, which lists ids
+  and a count and no values.
+  SKIP `valuesById`, `rowKey`, `rowKeyBasis`, `valuesByIdScope`, `metricIds`,
   `basis`, `contributingWidgetIds`, `observedOnWidgetIds` and `coverageBasis` - they exist so a
   future tool can address a cell by id, and carry no narrative content. Spending attention on
   them costs context and buys nothing.

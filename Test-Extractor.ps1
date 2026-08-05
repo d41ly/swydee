@@ -703,6 +703,41 @@ foreach($need in @('dateRange','widgetTemplate{id linked}','parts{id provider{id
   Assert ($srcQ -match [regex]::Escape($need)) "V5 the GraphQL query still requests '$need' (Normalize-Widget reads it)"
 }
 Assert ($srcQ -match 'data\(first:__N__,after:\$after,socketId:\$sid') "V5 the data selection keeps its pagination + socket args"
+
+Write-Host "== ANLZ-aCandidTally-1 S1/AC22: the key space has exactly ONE definition =="
+# S1 moved Uniq-Key and Get-UniqKeySeq into _KeySpace.ps1 and deleted the extractor's copies. A
+# re-added local copy would SHADOW globally rather than fail, and a sequence-equality assertion
+# would then compare one surviving definition against itself, so identity is asserted on the
+# defining FILE instead. Mirrors the in-tree precedent in Test-Ledger.ps1.
+. "$PSScriptRoot\skill\scripts\Analyze-SwydoReport.ps1" -DefineOnly
+foreach($fn in 'Uniq-Key','Get-UniqKeySeq'){
+  $src = (Get-Command $fn).ScriptBlock.File
+  Assert ($src -like '*_KeySpace.ps1') "AC22 $fn is defined in _KeySpace.ps1 and nowhere else (got '$src')"
+}
+# And the analyzer's resolver derives the extractor's own key sequence, exercised through both tiers
+# of Uniq-Key plus the blank-name and blank-name-and-id fallbacks.
+$acMets = @(
+  [pscustomobject]@{name='Clicks';    id='google-adwords:clicks'},
+  [pscustomobject]@{name='Clicks';    id='facebook-ads:clicks'},
+  [pscustomobject]@{name='clicks';    id='bing-ads:clicks'},
+  [pscustomobject]@{name='';          id='google-adwords:impressions'},
+  [pscustomobject]@{name='';          id=''}
+)
+$acW = [pscustomobject]@{ metrics=$acMets }
+Resolve-CellKeys $acW
+# Get-UniqKeySeq returns a unary-comma-wrapped array for a caller that indexes it directly, so an
+# @()-wrap here would yield ONE element holding the array. Take it as-is, exactly as the resolver does.
+$acSeq = Get-UniqKeySeq $acMets
+$acStamped = @($acW.metrics | ForEach-Object { $_.cellKey })
+Assert (($acSeq -join '|') -eq ($acStamped -join '|')) "AC22 Resolve-CellKeys stamps exactly the extractor's key sequence (got '$($acStamped -join '|')')"
+Assert ($acStamped[1] -eq 'Clicks [facebook-ads:clicks]') "AC22 an exact duplicate name is id-suffixed"
+Assert ($acStamped[2] -eq 'clicks [bing-ads:clicks]') "AC22 a CASE-ONLY duplicate is a collision too ([ordered] compares case-insensitively)"
+Assert ($acStamped[3] -eq 'google-adwords:impressions') "AC22 a blank name falls back to the id"
+Assert ($acStamped[4] -eq 'col4') "AC22 blank name AND blank id falls back to col<idx>"
+# Idempotence: a second pass must not re-derive or double-suffix.
+Resolve-CellKeys $acW
+Assert ((@($acW.metrics | ForEach-Object { $_.cellKey }) -join '|') -eq ($acSeq -join '|')) "AC22 Resolve-CellKeys is idempotent"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
