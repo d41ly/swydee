@@ -22,6 +22,8 @@ param(
   [double]$WinLossPct = 10.0,   # |delta%| >= this on a directional metric => win/loss
   [int]$SmallN = 30,            # moved-side events below this => confidence:low
   [double]$BrandSharePct = 25.0,# U10/D11: rule (b) dominance gate - matched brand set must be >= this % of outcome total
+  [double]$ScopeFullPct = 0.95, # ANLZ-9 D2: widgetTotal/canonicalTotal at or above this => full scope, no disclosure
+  [double]$ScopeOverPct = 1.05, # ANLZ-9 D2: above this the widget total EXCEEDS the account total (a cross-tab), disclosed
   [string[]]$NotesFile,         # optional plain-text context/notes file(s) ingested as annotations (client-supplied)
   [switch]$DefineOnly
 )
@@ -128,6 +130,28 @@ function Get-DimLabel($c){
   return $cands[-1].v
 }
 function Test-GroupRow($label){ return ($null -eq $label -or $label -eq '(group)' -or $label -eq 'All') }
+# ANLZ-aUniformLattice-9 D3: the row label for STATEMENT TEXT only. Row-Label returns one dimension
+# value and has 21 call sites (the group-row filter, the published rows[].label, both time-series
+# sort keys, Get-DetailSumFindings) - changing it in place would flip published labels and alter
+# which rows survive filtering. So this WRAPS it instead of replacing it.
+# On a 2-dim widget Row-Label returns only the first value, which is how two widgets both emitted a
+# row called 'facebook' with different numbers. Sentinels are dropped rather than joined, so an
+# internal '(group)' never reaches a client, and an all-sentinel row falls back to Row-Label.
+function Row-LabelFull($row){
+  $vals=@()
+  if($row -and $row.dimensions){
+    foreach($p in @($row.dimensions.PSObject.Properties)){
+      $v=$p.Value
+      if($null -eq $v){ continue }
+      $sv=[string]$v
+      if([string]::IsNullOrWhiteSpace($sv)){ continue }
+      if(Test-GroupRow $sv){ continue }
+      $vals+=$sv
+    }
+  }
+  if($vals.Count -eq 0){ return [string](Row-Label $row) }
+  return ($vals -join ' / ')
+}
 # first metric in a widget whose metric-part matches a regex (for config-driven rules)
 function Find-Metric($w,$pat){ if($w.metrics){ foreach($m in $w.metrics){ if((Get-MetricPart $m.id) -match $pat){ return $m } } } return $null }
 # U10/D3: does this metric id measure downstream value (conversion value / revenue / ROAS)?
@@ -271,10 +295,38 @@ function Total-Row($w){
 }
 # Row-level breakdown findings for ONE widget (concentration, new/paused, segment-divergence,
 # effort->result, share-mismatch). Pure over the widget + $script:RuleCfg; returns a findings array.
-function Get-BreakdownFindings($w,$clientName){
+# ANLZ-aUniformLattice-9 D2: a row share is a share of whatever its WIDGET totalled, which is not
+# necessarily the account total. Resolve the canonical cell from the uniform per-platform view and
+# classify. $canon is passed EXPLICITLY, never read from the script scope: PowerShell's dynamic
+# scoping would let this function see the run body's $platforms and work end-to-end while failing
+# in every -DefineOnly fixture, which is the worst possible shape for a bug.
+# Returns @{ clause; scope } - clause is '' when nothing needs disclosing.
+function Get-ScopeDisclosure($canon,$metric,$widgetTotal,$pname,$mlabel,$wUnit,$wCurrency){
+  $none=[ordered]@{ widgetTotal=$widgetTotal; canonicalTotal=$null; sharePct=$null }
+  if(-not $canon -or -not $metric){ return @{ clause=''; scope=$none } }
+  $mprov = Get-MetricProviderId $metric          # the METRIC's provider, not the widget's - they differ
+  if(-not $mprov -or -not $canon.Contains($mprov)){ return @{ clause=''; scope=$none } }
+  $pf=$canon[$mprov]
+  $mid=[string]$metric.id
+  if(-not $pf.metrics -or -not $pf.metrics.Contains($mid)){ return @{ clause=''; scope=$none } }
+  $cell=$pf.metrics[$mid]
+  $ct=$cell.current
+  if(-not ($ct -is [double] -or $ct -is [int] -or $ct -is [long] -or $ct -is [decimal])){ return @{ clause=''; scope=$none } }
+  if([double]$ct -eq 0){ return @{ clause=''; scope=$none } }          # never divide by it
+  if(-not (Test-SameBasis $wUnit $wCurrency $cell.unit $cell.currency)){ return @{ clause=''; scope=$none } }
+  $r = [double]$widgetTotal / [double]$ct
+  $p = [math]::Round($r*100,0)
+  $sc=[ordered]@{ widgetTotal=$widgetTotal; canonicalTotal=$ct; sharePct=$p }
+  if($r -gt $script:ScopeOverPct){
+    return @{ clause=(" - against a widget total " + [math]::Round($r,1) + "x the account $mlabel"); scope=$sc } }
+  if($r -ge $script:ScopeFullPct){ return @{ clause=''; scope=$sc } }
+  return @{ clause=(" - within a $p% subset of $pname $mlabel"); scope=$sc }
+}
+function Get-BreakdownFindings($w,$clientName,$canon){
   $out=[System.Collections.ArrayList]@()
   Resolve-CellKeys $w
   $wdims=@($w.dimensions); if($wdims.Count -eq 0){ return @() }
+  $dimFull = (@($wdims) -join ' / ')     # D1: the full cut this widget measures
   $tr=Total-Row $w; if(-not $tr){ return @() }
   $wprov = if($w.providers -and $w.providers.Count -gt 0){ $w.providers[0].id } else { (@($w.metrics)[0].id -split ':')[0] }
   $wcat = Get-Category $wprov
@@ -287,10 +339,13 @@ function Get-BreakdownFindings($w,$clientName){
   $pkey=$null; $plabel=$null; if($primary){ $pkey=Metric-Key $primary; $plabel=Metric-Label $primary }
   if($primary){ $tot=Row-Cur $tr $pkey
     if($tot -and $tot -gt 0){ foreach($r in $detail){ $v=Row-Cur $r $pkey; if($null -ne $v -and ($v/$tot) -ge 0.5){ $sh=[math]::Round(($v/$tot)*100,0)
-      [void]$out.Add([ordered]@{ ruleId='ANOM_CONCENTRATION'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is $sh% of $plabel ($(Format-Metric $primary.id $primary.unit $v $cc) of $(Format-Metric $primary.id $primary.unit $tot $cc))"; evidence=[ordered]@{ share="$sh%" } }); break } } } }
+      $sd = Get-ScopeDisclosure $canon $primary $tot $pname $plabel $primary.unit $cc
+      [void]$out.Add([ordered]@{ ruleId='ANOM_CONCENTRATION'; severity='info'; platform=$pname; widget=$dimName; dimension=$dimFull; metricId=[string]$primary.id; scope=$sd.scope; statement="${pname} by ${dimFull}: '$(Row-LabelFull $r)' is $sh% of $plabel ($(Format-Metric $primary.id $primary.unit $v $cc) of $(Format-Metric $primary.id $primary.unit $tot $cc))$($sd.clause)"; evidence=[ordered]@{ share="$sh%" } }); break } } } }
   # ANOM_SEGMENT_DIVERGENCE + NEW/PAUSED (comparison-gated, grain-capped)
   if($primary){
     $ptot=Row-Cur $tr $pkey; $ptotPrev=Row-Cmp $tr $pkey
+    # ANLZ-9 D2: one disclosure for every rule below that measures against the primary metric.
+    $sdP = Get-ScopeDisclosure $canon $primary $ptot $pname $plabel $primary.unit $cc
     $totDelta=Get-DeltaPct $ptot $ptotPrev
     $nNP=0; $nDiv=0
     foreach($r in $detail){
@@ -298,14 +353,14 @@ function Get-BreakdownFindings($w,$clientName){
       if($null -eq $rv -or $null -eq $rp){ continue }
       $share=if($ptot -and $ptot -gt 0){ $rv/$ptot } else { 0 }
       if($rv -gt 0 -and $rp -eq 0 -and $share -ge 0.05 -and $nNP -lt 5){ $nNP++
-        [void]$out.Add([ordered]@{ ruleId='ANOM_NEW'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' is new this period ($plabel $(Format-Metric $primary.id $primary.unit $rv $cc), was 0)" }) }
+        [void]$out.Add([ordered]@{ ruleId='ANOM_NEW'; severity='info'; platform=$pname; widget=$dimName; dimension=$dimFull; metricId=[string]$primary.id; scope=$sdP.scope; statement="${pname} by ${dimFull}: '$(Row-LabelFull $r)' is new this period ($plabel $(Format-Metric $primary.id $primary.unit $rv $cc), was 0)$($sdP.clause)" }) }
       elseif($rv -eq 0 -and $rp -gt 0 -and $nNP -lt 5){ $nNP++
-        [void]$out.Add([ordered]@{ ruleId='ANOM_PAUSED'; severity='major'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' stopped ($plabel 0 this period, was $(Format-Metric $primary.id $primary.unit $rp $cc))" }) }
+        [void]$out.Add([ordered]@{ ruleId='ANOM_PAUSED'; severity='major'; platform=$pname; widget=$dimName; dimension=$dimFull; metricId=[string]$primary.id; scope=$sdP.scope; statement="${pname} by ${dimFull}: '$(Row-LabelFull $r)' stopped ($plabel 0 this period, was $(Format-Metric $primary.id $primary.unit $rp $cc))" }) }
       elseif($rv -gt 0 -and $rp -gt 0 -and $share -ge 0.15 -and $null -ne $totDelta -and $nDiv -lt 5){
         $rd=Get-DeltaPct $rv $rp
         if($null -ne $rd){ $diverges=(($rd -gt 0) -ne ($totDelta -gt 0)) -or ([math]::Abs($rd-$totDelta) -ge 50)
           if($diverges){ $nDiv++
-            [void]$out.Add([ordered]@{ ruleId='ANOM_SEGMENT_DIVERGENCE'; severity='info'; platform=$pname; widget=$dimName; statement="${pname}: '$(Row-Label $r)' $plabel moved $(Format-Delta $rd) vs the $plabel total $(Format-Delta $totDelta)"; evidence=[ordered]@{ rowDelta=(Format-Delta $rd); totalDelta=(Format-Delta $totDelta) } }) } } }
+            [void]$out.Add([ordered]@{ ruleId='ANOM_SEGMENT_DIVERGENCE'; severity='info'; platform=$pname; widget=$dimName; dimension=$dimFull; metricId=[string]$primary.id; scope=$sdP.scope; statement="${pname} by ${dimFull}: '$(Row-Label $r)' $plabel moved $(Format-Delta $rd) vs the $plabel total $(Format-Delta $totDelta)"; evidence=[ordered]@{ rowDelta=(Format-Delta $rd); totalDelta=(Format-Delta $totDelta) } }) } } }
     }
   }
   # config-driven effort->result + share-mismatch
@@ -316,6 +371,8 @@ function Get-BreakdownFindings($w,$clientName){
       if(-not $em -or -not $rm -or $em.id -eq $rm.id){ continue }
       $ekey=Metric-Key $em; $rkey=Metric-Key $rm; $elabel=Metric-Label $em; $rlabel=Metric-Label $rm
       $totE=Row-Cur $tr $ekey; $totR=Row-Cur $tr $rkey
+      # ANLZ-9 D2: both pair rules disclose an EFFORT share, so the effort metric owns the denominator.
+      $sdE = Get-ScopeDisclosure $canon $em $totE $pname $elabel $em.unit $cc
       if(-not $totE -or $totE -le 0){ continue }
       $nEmpty=0
       foreach($r in $detail){
@@ -323,11 +380,11 @@ function Get-BreakdownFindings($w,$clientName){
         if($null -eq $re){ continue }
         $eShare=$re/$totE
         if($eShare -ge 0.02 -and $rr -eq 0){ if($nEmpty -lt 8){ $nEmpty++
-          [void]$out.Add([ordered]@{ ruleId='ANOM_EFFORT_NO_RESULT'; severity='major'; platform=$pname; widget=$dimName; requiresDownstreamData=$false; statement="${pname}: '$(Row-Label $r)' used $([math]::Round($eShare*100,0))% of $elabel ($(Format-Metric $em.id $em.unit $re $cc)) with 0 $rlabel"; evidence=[ordered]@{ effort=(Format-Metric $em.id $em.unit $re $cc); result='0'; effortShare="$([math]::Round($eShare*100,0))%" } }) } }
+          [void]$out.Add([ordered]@{ ruleId='ANOM_EFFORT_NO_RESULT'; severity='major'; platform=$pname; widget=$dimName; dimension=$dimFull; metricId=[string]$em.id; scope=$sdE.scope; statement="${pname} by ${dimFull}: '$(Row-LabelFull $r)' used $([math]::Round($eShare*100,0))% of $elabel ($(Format-Metric $em.id $em.unit $re $cc)) with 0 $rlabel$($sdE.clause)"; evidence=[ordered]@{ effort=(Format-Metric $em.id $em.unit $re $cc); result='0'; effortShare="$([math]::Round($eShare*100,0))%" } }) } }
         elseif($totR -and $totR -gt 0 -and $null -ne $rr -and $rr -gt 0 -and $eShare -ge 0.10){
           $rShare=$rr/$totR
           if(($eShare/$rShare) -ge 3){ $hint=([string](Row-Label $r)) -match '(?i)awareness|brand|video|launch|opening'; $sev=if($hint){'info'}else{'major'}
-            [void]$out.Add([ordered]@{ ruleId='ANOM_SHARE_MISMATCH'; severity=$sev; platform=$pname; widget=$dimName; requiresDownstreamData=$true; statement="${pname}: '$(Row-Label $r)' is $([math]::Round($eShare*100,0))% of $elabel but only $([math]::Round($rShare*100,1))% of $rlabel$(if($hint){' (looks upper-funnel/awareness)'})"; evidence=[ordered]@{ effortShare="$([math]::Round($eShare*100,0))%"; resultShare="$([math]::Round($rShare*100,1))%" } }) }
+            [void]$out.Add([ordered]@{ ruleId='ANOM_SHARE_MISMATCH'; severity=$sev; platform=$pname; widget=$dimName; dimension=$dimFull; metricId=[string]$em.id; scope=$sdE.scope; statement="${pname} by ${dimFull}: '$(Row-Label $r)' is $([math]::Round($eShare*100,0))% of $elabel but only $([math]::Round($rShare*100,1))% of $rlabel$(if($hint){' (looks upper-funnel/awareness)'})"; evidence=[ordered]@{ effortShare="$([math]::Round($eShare*100,0))%"; resultShare="$([math]::Round($rShare*100,1))%" } }) }
         }
       }
     }
@@ -362,7 +419,7 @@ function Get-BreakdownFindings($w,$clientName){
           $bev=[ordered]@{ campaigns=($bLbls -join '; '); share=$bshare
             matchedTotal=(Format-Metric $om.id $om.unit $bsum $cc); total=(Format-Metric $om.id $om.unit $btot $cc) }
           if($btk){ $bev.brandToken=$btk }
-          [void]$out.Add([ordered]@{ ruleId='ANOM_BRAND_BASELINE'; severity='info'; platform=$bpname; widget=$dimName; confidence=$bconf
+          [void]$out.Add([ordered]@{ ruleId='ANOM_BRAND_BASELINE'; severity='info'; platform=$bpname; widget=$dimName; dimension=$dimFull; confidence=$bconf
             statement="${bpname}: brand-demand-suspect campaigns ($(($bLbls | ForEach-Object { "'$_'" }) -join ', ')) account for $bshare of $($om.name) ($(Format-Metric $om.id $om.unit $bsum $cc) of $(Format-Metric $om.id $om.unit $btot $cc)) - Performance Max / brand-named campaigns harvest existing brand demand, so treat this share as baseline-suspect context, not proof of driven demand"
             evidence=$bev })
         }
@@ -472,7 +529,10 @@ function Get-Breakdown($w, $cap, $mustLabels){
   elseif($orderMet){ $omk=Metric-Key $orderMet; $sorted=@($detail | Sort-Object { $v=Row-Cur $_ $omk; if($null -eq $v){0}else{[double]$v} } -Descending) }
   else { $sorted=@($detail) }
   $top=@($sorted | Select-Object -First $cap)
-  if($mustLabels){ foreach($r in $sorted){ $lbl=[string](Row-Label $r); if(($mustLabels -contains $lbl) -and -not @($top | Where-Object { [string](Row-Label $_) -eq $lbl })){ $top+=$r } } }
+  # ANLZ-aUniformLattice-9 D3: match EITHER label form. Finding statements quote Row-LabelFull, this
+  # list is keyed on Row-Label, and matching only one side would silently drop the force-include.
+  if($mustLabels){ foreach($r in $sorted){ $lbl=[string](Row-Label $r); $lblF=[string](Row-LabelFull $r)
+    if((($mustLabels -contains $lbl) -or ($mustLabels -contains $lblF)) -and -not @($top | Where-Object { [string](Row-Label $_) -eq $lbl })){ $top+=$r } } }
   # ANLZ-aUniformLattice-5 (P4): how many metrics share each DISPLAY NAME in this widget. A collided
   # name is the one case where reading a row cell by name returns the wrong metric's number, so it
   # decides whether valuesById can be trusted for that metric on a schemaVersion-2 document.
@@ -1366,7 +1426,14 @@ foreach($w in $dataWidgets){
     if(-not ($cell.current -is [double] -or $cell.current -is [int] -or $cell.current -is [long] -or $cell.current -is [decimal])){continue}
     $key="$($m.id)`t$dimSig"
     if(-not $byMetric.ContainsKey($key)){ $byMetric[$key]=@{ mid=$m.id; rows=@() } }
-    $byMetric[$key].rows += @{ wid=$w.id; cur=$cell.current; prev=$cell.compare }
+    # ANLZ-aUniformLattice-10: the FOURTH consumer of the D5 gate, and the one that was missing.
+    # The loop below iterates 'cur','prev' symmetrically, so an ungated $cell.compare published
+    # previous-period numbers inside a force-surfaced discrepancy finding while every CELL-layer
+    # comparison was correctly suppressed. Gate at COLLECTION, not at emit: $vals drops $null and
+    # the -lt 2 continue then makes the 'prev' arm self-skip, keeping the loop period-agnostic.
+    $prevCell = $null
+    if(-not $script:compareUntrusted){ $prevCell = $cell.compare }
+    $byMetric[$key].rows += @{ wid=$w.id; cur=$cell.current; prev=$prevCell }
   }
 }
 foreach($key in $byMetric.Keys){
@@ -1395,7 +1462,7 @@ foreach($w in $dataWidgets){
 }
 
 # ---- row-level breakdown rules (per-category, config-driven; see Get-BreakdownFindings) ----
-foreach($w in $dataWidgets){ foreach($fnd in (Get-BreakdownFindings $w $doc.report.client)){ [void]$anoms.Add($fnd) } }
+foreach($w in $dataWidgets){ foreach($fnd in (Get-BreakdownFindings $w $doc.report.client $platforms)){ [void]$anoms.Add($fnd) } }
 
 # ---- breakdown tables into facts (force-include finding-referenced rows) ----
 $plLabels=@{}
@@ -1427,7 +1494,7 @@ if($hasCmp -and ($doc.report.dateRange.primary.measure -in 'quarter','month','we
 }
 $facts=[ordered]@{
   meta=[ordered]@{
-    tool='Analyze-SwydoReport.ps1'; factsVersion=3; canonicalVersion=4; matrixVersion=2; computedFrom=$doc.meta.tool
+    tool='Analyze-SwydoReport.ps1'; factsVersion=4; canonicalVersion=4; matrixVersion=2; computedFrom=$doc.meta.tool
     reportName=$doc.report.name; clientId=$doc.meta.clientId; client=$doc.report.client; extractedAt=$doc.meta.extractedAt
     providerInventory=@($doc.meta.providerInventory); providerFilter=@($doc.meta.providerFilter); annotations=@($annotations)
     currentPeriod=$periods.current; previousPeriod=$periods.previous; periodLabel=$periods.label; periodConfidence=$periods.confidence; period=$periodMeta

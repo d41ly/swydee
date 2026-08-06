@@ -30,6 +30,9 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 - **Mode A:** run `${CLAUDE_SKILL_DIR}/scripts/Get-SwydoReport.ps1 -ShareUrl <link> [-Secret <pw>] -OutDir <tmp>` → note the extraction path (DO NOT open it). Then `${CLAUDE_SKILL_DIR}/scripts/Analyze-SwydoReport.ps1 -InFile <extraction> -OutDir <out>`.
 - **Mode B:** validate the file has `meta.schemaVersion` of 2 or 3 (else stop: "re-extract with the current Get-SwydoReport.ps1"). Then `${CLAUDE_SKILL_DIR}/scripts/Analyze-SwydoReport.ps1 -InFile <file> -OutDir <out>`.
 - Read the resulting `*.facts.json` (BOM-less UTF-8) — **this is your only data source.**
+- Check `meta.compareBasis` before writing any comparison: `untrusted` forbids comparative language outright. See **Comparison basis** in Notes.
+- Every flag either tool accepts, with its default, is in **## Parameters** below. Reach for it before
+  guessing a flag or re-deriving a default from a script.
 
 ### 3. Decide single-pass vs fan-out
 - Count distinct `meta.providers[].category`. **Single-pass** if 1 category (and not `--thorough`). **Fan-out** if ≥ 2 distinct categories (or `--thorough`); `--fast` forces single-pass.
@@ -43,7 +46,15 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
   number is NOT quotable at row level. A cell whose display name was ambiguous carries
   `canonical.keyBasis` and is named in the info finding `GAP_METRIC_NAME_AMBIGUOUS`, which lists ids
   and a count and no values.
-  SKIP `valuesById`, `rowKey`, `rowKeyBasis`, `valuesByIdScope`, `metricIds`,
+  **Row findings (ANLZ-aUniformLattice-9).** Every row-level anomaly carries `dimension` (the cut it
+  measures, e.g. `Publisher platform / Placement`) and `metricId`. Its statement names that cut, so
+  two findings with the same row label are distinguishable rather than contradictory. When the
+  widget's total for that metric is not the account total, the statement carries a scope clause —
+  `within a N% subset of <Platform> <metric>` or `against a widget total N.Nx the account <metric>`
+  — and `scope` holds the same numbers. **That clause is load-bearing: never strip it when moving
+  the statement into prose.** Without it, `'CONTENT' is 100% of Impressions (617 of 617)` reads as
+  "this platform is all Display" when 617 is 3% of the account.
+  SKIP `valuesById`, `rowKey`, `rowKeyBasis`, `valuesByIdScope`, `metricIds`, `scope`,
   `basis`, `contributingWidgetIds`, `observedOnWidgetIds` and `coverageBasis` - they exist so a
   future tool can address a cell by id, and carry no narrative content. Spending attention on
   them costs context and buys nothing.
@@ -59,7 +70,7 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 Write the **draft** (with anchors) to a working path `<out>\<stamp>-<slug>-report.draft.md`. Fill the template from the facts in the selected voice profile (default `causal`). Obey every hard rule in it: verbatim numbers; ALL comparisons narrated as prose (no tables/charts); mandatory caveats; the `<!-- platform:id -->` / `<!-- finding:fid -->` / `<!-- caveat:id -->` anchors (these are the verifier's scaffold and get stripped from the delivered file). The voice changes only tone and attribution confidence — never the numbers or caveats.
 
 ### 5. Verify + publish — run the closer, fail-closed
-Run `${CLAUDE_SKILL_DIR}/scripts/Test-ReportNumbers.ps1 -Report <draft.md> -Facts <facts.json> -PublishTo <out>\<stamp>-<slug>-report.md`. On PASS the closer writes the client copy with all anchors stripped to `-PublishTo` (deterministic strip → the delivered file is the verified text minus comments). If it exits non-zero, it publishes NOTHING — read the violations, **fix the draft** (untraceable numbers, missing caveats/gaps, comparison claims, leaked credentials), and re-run. Never hand-strip anchors or deliver a report the closer rejects.
+Run `${CLAUDE_SKILL_DIR}/scripts/Test-ReportNumbers.ps1 -Report <draft.md> -Facts <facts.json> -PublishTo <out>\<stamp>-<slug>-report.md`. On PASS the closer writes the client copy with all anchors stripped to `-PublishTo` (deterministic strip → the delivered file is the verified text minus comments). If it exits non-zero, it publishes NOTHING — read the violations, **fix the draft** (untraceable numbers, missing caveats/gaps, comparison claims, leaked credentials), and re-run. Never hand-strip anchors or deliver a report the closer rejects. If `meta.compareBasis` is `untrusted`, the closer's comparison-without-data check is what catches comparative language that slipped in — see **Comparison basis** in Notes.
 
 ### 6. Deliver
 Deliver the published `<out>\<stamp>-<slug>-report.md` (anchor-free, credential-free). Keep the `.draft.md` as the audit/re-verify source. Tell the user the report path and the facts path; summarize the headline in one or two sentences.
@@ -71,7 +82,7 @@ The archive lives **inside the skill** at `${CLAUDE_SKILL_DIR}/archive/` by defa
 
 ### 8. Refresh trend history — Mode A, default-on (opt out with `--fast` or `--no-trend`)
 After delivering the primary single-period report, keep the client's cumulative monthly ledger current so QoQ/YoY history survives across pulls. Run **FAIL-SOFT** (a trend failure must NEVER affect the delivered report):
-`${CLAUDE_SKILL_DIR}/scripts/Sync-SwydoTrend.ps1 -ShareUrl <link> [-Secret <pw>] -OutDir <tmp>` (add `-Platform <id>` to match a filtered pull). It extracts a wide per-platform monthly pull, scrubs it, and merges into `${CLAUDE_SKILL_DIR}/archive/<client-slug>/ledger.json`. If it exits non-zero (e.g. the report has no monthly time-series widget), say "trend history not updated this run" in one line and STOP there — do not retry, do not touch the primary report.
+`${CLAUDE_SKILL_DIR}/scripts/Sync-SwydoTrend.ps1 -ShareUrl <link> [-Secret <pw>] -OutDir <tmp>` (there is NO `-Platform` here, by design - see Parameters). It extracts a wide per-platform monthly pull, scrubs it, and merges into `${CLAUDE_SKILL_DIR}/archive/<client-slug>/ledger.json`. If it exits non-zero (e.g. the report has no monthly time-series widget), say "trend history not updated this run" in one line and STOP there — do not retry, do not touch the primary report.
 On success, you MAY produce a SEPARATE trend report (never merge trend numbers into the single-period report — they won't trace): run `Analyze-SwydoTrend.ps1 -LedgerFile <archive>/<client-slug>/ledger.json -OutDir <out>` → write a trend draft from the template → verify with `Test-ReportNumbers.ps1` against the **`*.trendanalysis.facts.json`** (its own facts) → deliver as a distinct `-trend-report.md`. Skip this whole step entirely under `--fast`/`--no-trend`, and for Mode B (file) input.
 
 ## Retention commands (user-invoked)
@@ -88,17 +99,96 @@ When the user asks to review or clean up archived data (first token `list` or `c
 Run the pipeline (each step feeds the next):
 1. **Extract wide** — `Get-SwydoReport.ps1 -Trend -ShareUrl <link> [-Secret <pw>] -OutDir <tmp>`. Probes each platform's true history ceiling (bracket + bisection; e.g. Google ~48mo, Facebook ~18mo) and pulls monthly. It NEVER uses one uniform window — an overshoot is REFUSED, which would silently blank the shorter platform. The ceiling is read from Swydo's explicit `REJECTED` verdict, never inferred from a window merely coming back empty, so a slow response can no longer masquerade as the end of a client's history. A window that goes unanswered twice yields `coverage[].ceilingUncertain: true` — the ceiling is then a lower bound, and a later run can extend it. Output: `*.trend.json` (raw, has the share key).
 2. **Scrub + shape** — `ConvertTo-SwydoTrendFacts.ps1 -InFile <*.trend.json> -OutDir <out>`. The ONLY tool that opens the raw trend extraction; fail-closed credential scrub → `*.trendfacts.json` (safe).
-3. **Update the ledger** — `Update-SwydoLedger.ps1 -InFile <*.trendfacts.json>`. Merges into `${CLAUDE_SKILL_DIR}/archive/<client-slug>/ledger.json`: months older than 6 are frozen write-once; recent months refresh, but a null/overshoot pull never clobbers a good value; a unit/currency change forks a new series (never coerced). The ledger is the accumulating union of every window ever pulled (`-ArchiveRoot <dir>` to override its location).
+3. **Update the ledger** — `Update-SwydoLedger.ps1 -InFile <*.trendfacts.json>`. Merges into `${CLAUDE_SKILL_DIR}/archive/<client-slug>/ledger.json`: months older than `-K` (default 6) are frozen write-once; recent months refresh, but a null/overshoot pull never clobbers a good value; a unit/currency change forks a new series (never coerced). The ledger is the accumulating union of every window ever pulled (`-ArchiveRoot <dir>` to override its location).
 4. **Analyze** — `Analyze-SwydoTrend.ps1 -LedgerFile <archive>/<client-slug>/ledger.json -OutDir <out>`. QoQ/YoY over the settled months, gated by an **honesty gate**: a comparison is emitted only when both endpoints are fully settled + same-basis — otherwise an explicit "no comparison available — <provider> history begins <month>", never a fabricated number; providers with different coverage are never blended. Output: `*.trendanalysis.facts.json` (closer-shaped, `meta.factsVersion`).
 
 Then **continue at step 3 of the Flow** using `*.trendanalysis.facts.json` as the facts source: single-pass vs fan-out, write the report DRAFT from the template in the chosen voice (all comparisons as PROSE), verify + publish with the closer, deliver, and retain (step 7). The trend facts carry QoQ/YoY findings, a monthly `timeSeries`, and honesty-gate `dataGaps` — surface the gaps (the closer forces the major ones). A figure restated after freezing surfaces as a `GAP_RESTATEMENT_SUPPRESSED` anomaly you MUST narrate: the ledger keeps the frozen value and notes the platform's newer number rather than substituting it (the numbers still trace).
 
 **Re-analyze an existing ledger without re-pulling** (e.g. to regenerate a report, or after a new platform accrues history): `trend client:<name>` → run only step 4 on `${CLAUDE_SKILL_DIR}/archive/<client-slug>/ledger.json`, then continue at step 3 of the Flow.
 
+## Parameters
+
+Every flag the eight tools accept. Defaults are the `param()` defaults; where a default is an empty
+sentinel or an expression, the **effective** value and where it resolves are given instead, because
+publishing a literal `""` would be misleading. `-DefineOnly` is on all eight: it dot-sources the
+script's functions and runs nothing, and is how the suites and any reusing caller load them.
+
+**`Get-SwydoReport.ps1`** — the only network adapter (11)
+
+| flag | default | reach for it when |
+|---|---|---|
+| `-ShareUrl <url>` | required | always, in Mode A |
+| `-OutDir <dir>` | `.\extractions` | always — give each run its own directory (§4 isolation) |
+| `-Secret <pw>` | none (unprotected share) | the share link asks for a password |
+| `-Platform <id>` | all providers | pulling only some platforms; forces `PROVIDER_FILTERED` |
+| `-MaxWaitSec <n>` | `90` | the same widgets keep coming back `incomplete` |
+| `-MaxTotalWaitSec <n>` | `420` | bounding a whole run against a dead backend |
+| `-PageSize <n>` | `500` | a breakdown truncates; raises rows fetched per widget |
+| `-CacheDir <dir>` | `%LOCALAPPDATA%\swydee\ceilings` (:1085) | isolating or inspecting the trend ceiling-probe cache |
+| `-Trend` | off | pulling the wide monthly history instead of the report window |
+| `-ProbeFields` | off | diagnosing field coverage; records `meta.fieldProbe` |
+| `-DefineOnly` | off | loading the functions without running |
+
+**`Analyze-SwydoReport.ps1`** — the compute core (7)
+
+| flag | default | reach for it when |
+|---|---|---|
+| `-InFile <path>` | required | always |
+| `-OutDir <dir>` | the input's directory (:1013) | writing facts somewhere else |
+| `-WinLossPct <n>` | `10.0` | tuning the win/loss delta threshold |
+| `-SmallN <n>` | `30` | tuning when a finding is tagged `confidence='low'` |
+| `-BrandSharePct <n>` | `25.0` | tuning the brand-baseline dominance gate |
+| `-ScopeFullPct <n>` | `0.95` | tuning when a row finding's widget total counts as the full account total |
+| `-ScopeOverPct <n>` | `1.05` | tuning when a widget total is treated as EXCEEDING the account total (a cross-tab) |
+| `-NotesFile <path>` | none | supplying client context notes from a file |
+| `-DefineOnly` | off | loading the functions without running |
+
+**`Test-ReportNumbers.ps1`** — the closer (5)
+
+| flag | default | reach for it when |
+|---|---|---|
+| `-Report <path>` | required | always |
+| `-Facts <path>` | required | always |
+| `-PublishTo <path>` | no publish | writing the anchor-stripped client copy on PASS |
+| `-TraceRecommendations` | off | also tracing numbers inside the recommendations section |
+| `-DefineOnly` | off | loading the functions without running |
+
+**`Manage-SwydoArchive.ps1`** — archive + registry (16). Modes: `-Store`, `-List`, `-Cleanup`,
+`-MergeClient`. `-ArchiveRoot` defaults to the installed skill's own `archive/` (:35) — the client
+history lives there, so override it rather than moving it. `-Store` takes `-Facts`, `-Report`,
+`-Draft`, `-Extraction`, `-Client`. `-Cleanup` takes `-OlderThan`, `-All` and is a dry run until
+`-Execute`. `-MergeClient` takes `-From` and `-Into`. Plus `-DefineOnly`.
+
+**Trend tools**
+
+| script | flags |
+|---|---|
+| `Sync-SwydoTrend.ps1` (6) | `-ShareUrl` (required), `-Secret`, `-OutDir` (`.\trend-tmp`), `-ArchiveRoot`, `-CacheDir`, `-DefineOnly`. **There is no `-Platform`** — trend sync always covers the FULL account so the ledger never accumulates a partial history. |
+| `ConvertTo-SwydoTrendFacts.ps1` (3) | `-InFile` (required), `-OutDir` (the input's directory, :71), `-DefineOnly` |
+| `Update-SwydoLedger.ps1` (6) | `-InFile` (required), `-ArchiveRoot` (the skill's `archive/`, :170), `-Client` (from the facts, :195), `-NowIso` (now, :171), `-K <n>` (`6`, the freeze horizon in months), `-DefineOnly` |
+| `Analyze-SwydoTrend.ps1` (5) | `-LedgerFile` (required), `-OutDir` (the ledger's directory, :117), `-WinLossPct` (`10`), `-PeriodKpiFacts`, `-DefineOnly` |
+
 ## Notes
 - Coverage: surface every finding with `confidence` normal and every anomaly in the insights section; every `dataGaps`/`discrepancies` finding of severity ≥ major and every `meta.comparisonCaveats` MUST appear (the closer enforces the major ones).
 - **Context annotations.** Analyze collects real client notes from the report's TEXT widgets (layout headers like "Google Ads" are filtered out) into `meta.annotations`. To add external context (e.g. an account-change log the user placed in the client folder), pass `Analyze-SwydoReport.ps1 -NotesFile <path>` (repeatable; plain text). Surface annotations verbatim in the report's "Context (unverified, client-supplied)" section with each `<!-- annotation:<aid> -->` anchor, and cite them ONLY as temporal co-occurrence — never as cause (the closer scopes a note's numbers to its anchored line and treats them as non-comparison, so a note can't launder a fabricated or comparative figure).
 - **--platform filter.** `--platform <providerId>` (repeatable) pulls/analyzes only those platforms; the report MUST then surface the forced `PROVIDER_FILTERED` data-gap naming the excluded platforms (it is a partial view).
 - If Mode A extraction returns warnings (`meta.warnings`) or empty widgets, surface them as data gaps — never present a clean report over incomplete data.
+- **Comparison basis.** The previous-period column is not inherited from the dashboard. The extractor
+  COMPUTES the preceding window and passes it explicitly as `{start, type:'FROM'}`, so `cells` and
+  `compareCells` come from ONE payload per widget — there is no second pull for the previous period.
+  (A RELATIVE primary window additionally costs one extra fetch of a single probe widget, which
+  fails the run closed when our resolved window and Swydo's relative range disagree.)
+  `meta.periodResolved` records the two windows and `meta.compareBasis` records how much to trust
+  them. Three values reach the facts:
+  - `computed` — the window was proven. Comparisons are real; narrate them normally.
+  - `untrusted` — the window could NOT be proven. Every comparison is suppressed: no `previous`, no
+    `deltaPct`, no `displayDelta`, `hasComparison` false, and no cross-widget previous-period
+    discrepancy. The report must then carry **no comparative language at all** — not "up", not
+    "down", not "flat". There is nothing to compare against.
+  - `unknown` — the facts came from an extraction predating this contract. It behaves like
+    `computed` (the gate matches the literal `untrusted` only), so older artifacts keep comparing.
+  Because the window is ours rather than the dashboard's, a report can legitimately disagree with a
+  like-for-like view on screen — especially when the dashboard has comparison switched off. That is
+  what the forced `GAP_WARNINGS` disclosure exists to say, and it must reach the delivered report.
 - **Completeness gate.** Swydo computes widget data asynchronously and pushes a per-widget verdict on its websocket: `RESOLVED` (data ready) or `REJECTED` (window out of range). The extractor waits for that verdict instead of guessing, and classifies every data widget `filled`, `empty-resolved` (genuinely no data in the period — fine), `rejected`, or `incomplete`. Any `incomplete` widget sets `meta.extractionComplete: false` and lists the widget under `meta.incompleteWidgets`. Analyze turns that into a **critical** `GAP_EXTRACTION_INCOMPLETE`, and the closer **refuses to publish** — a report whose numbers all trace can still be totals over partial data. If you hit it, re-extract; raise `-MaxWaitSec` only if the same widgets keep failing. `Update-SwydoLedger.ps1` refuses an incomplete trend pull for the same reason: partial months must never freeze into the cumulative ledger.
-- **Patience flags.** `-MaxWaitSec <n>` (default 90) is the per-widget wall-clock budget for Swydo to answer; `-MaxTotalWaitSec <n>` (default 420) bounds the whole run's waiting so a dead backend fails in minutes, not hours. Both are on `Get-SwydoReport.ps1` and apply to the default and `-Trend` paths. `meta.fetchBudget` records what the run actually spent, so a slow client is diagnosable from the artifact alone. An extraction produced before this gate existed carries no `extractionComplete` key and is read as complete, so old files keep working unchanged.
+- **Patience flags.** `-MaxWaitSec` and `-MaxTotalWaitSec` (see Parameters for defaults) bound per-widget and whole-run waiting on `Get-SwydoReport.ps1`, and apply to the default and `-Trend` paths. `meta.fetchBudget` records what the run actually spent, so a slow client is diagnosable from the artifact alone. An extraction produced before this gate existed carries no `extractionComplete` key and is read as complete, so old files keep working unchanged.
