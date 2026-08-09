@@ -9,3 +9,4 @@ memory/orchestration/
   builds/
     2026-08-05-ORCH-aUniformLattice/
     2026-08-05-ORCH-aUniformLattice-docs/
+    2026-08-09-ORCH-aFlattenedLedger/
