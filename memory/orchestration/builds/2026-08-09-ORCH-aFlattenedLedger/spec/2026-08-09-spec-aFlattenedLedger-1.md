@@ -1,6 +1,6 @@
 # ORCH-aFlattenedLedger-1 — flatten the memory tree to kit 1.6 and retire the in-flight ledger
 
-**Status:** SPECCED · rev-1 · 2026-08-09 · node a · Tier-2 · base 6a1c4dd2 · streams orchestration
+**Status:** BLOCKED · rev-2 · 2026-08-09 · node a · Tier-2 · base 6a1c4dd2 · streams orchestration · ratified 2026-08-09
 
 ## 1. Goal
 
@@ -9,10 +9,15 @@ the four discipline directories into one flat `memory/builds/<slug>/` tree and r
 per-node in-flight ledger with a generated work-state index. Upstream is retiring the sharded ledger
 as a product feature, and this repo is the one adopter still carrying one.
 
+**Parked on an external prereq (owner, 2026-08-09): build waits until kit 1.7 lands on
+coding-governance `main`.** The target version is therefore **1.7, not 1.6**, and every measurement in
+this spec was taken against 1.6 — see §4 Rollout for the precondition and the re-measure list.
+
 ## 2. Scope (IN)
 
-- **S1** Install memory-tree kit 1.6 over the installed 1.4 at `memory-tree/`, adding the six files
-  1.4 does not ship and deleting `gen-memory-tree.sh`, which upstream retired.
+- **S1** Install the target memory-tree kit over the installed 1.4 at `memory-tree/`, adding the files
+  1.4 does not ship and deleting `gen-memory-tree.sh`, which upstream retired. The target is kit 1.7;
+  the file list in §4 Files touched is the 1.6 one and is re-derived at build time.
 - **S2** Flatten `memory/<discipline>/builds/<date>-<FAMILY>-<slug>/` to `memory/builds/<slug>/`,
   merging the six folders that share the slug `aUniformLattice` into one build.
 - **S3** Disambiguate the recording filenames that collide or become ambiguous inside the merged
@@ -212,6 +217,35 @@ trains a reader to ignore `git status`. U4 replaces the dead pin with `memory/LI
 
 ### Rollout
 
+**Precondition, ratified by the owner on 2026-08-09: kit 1.7 must be merged to coding-governance
+`main` before U1 runs.** Measured on 2026-08-09: `main` carries **1.6**, and **1.7 exists on exactly
+one ref**, the unmerged `branch/cd-memory-rework-alignment-005661`. Migrating to 1.6 now and to 1.7
+weeks later would pay the flatten's link-repair and front-matter cost twice, which is what the hold
+avoids.
+
+Two consequences of the hold, stated so neither is mistaken later:
+
+1. **1.7 does not retire the ledger either.** Measured: `adopt-memory-tree.sh` still scaffolds
+   `IN-FLIGHT.md`, `in-flight/` and `journal/` on that branch, exactly as at 1.6. Upstream removes
+   them at the 1.8 bump. So F1's ratified "retire now" still means running one step ahead of the kit
+   at the target version, and its rationale is unchanged rather than merely still true.
+2. **Every number in this spec is a 1.6 measurement and must be re-taken against 1.7 before U1.** The
+   tree-shape findings are version-independent; the engine findings are not.
+
+| finding | re-measure at 1.7? |
+|---|---|
+| the 8 broken links (§4 Migration) | no — a property of the tree, not the engine |
+| the per-file migration map, the slug collision, R100 | no — same |
+| the gate is green over the flattened tree (AC1) | **yes** — 1.7 may add or change a check |
+| the self-test's 101 assertions (AC2) | **yes** — the count is the engine's |
+| the both-directions atomicity probe | **yes** — check 3's permitted root set is the engine's |
+| 12 generated artifacts (AC5) | **yes** — the generator ships with the kit |
+| checks 13-19 off; the `memory-recall` sibling lookup | **yes** — both are `corpus_ids.py` behaviour |
+| the kit file list (§4 Files touched) | **yes** — 1.7 may add or drop a file |
+| the `.gitattributes` CRLF churn, the two `manifest-check.sh` failures | no — git and the manifest kit, not the hygiene engine |
+
+Re-running the dry run against 1.7 reproduces the whole table in minutes; the procedure is in §9.
+
 Four commits. U1 and U2 are one commit by the atomicity rule above; the rest are separable because
 each leaves the gate green.
 
@@ -381,6 +415,10 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   it now, in U3**, because the migration is already reading the shard for its front-matter values and
   a second pass over the same file later is the more expensive order. The adopter re-scaffold hazard
   is theoretical: the scaffolder refuses to touch an already-scaffolded tree.
+  **RESOLVED (owner, 2026-08-09): retire it now, in U3.** Taken with the target version's own
+  behaviour measured rather than assumed: kit 1.7 still scaffolds the ledger, so the decision is
+  knowingly one step ahead of the kit until upstream's 1.8 bump removes it, and the U3 work is
+  unchanged by the version hold.
 - **F2 — the FAMILY-qualifier rule: minimum churn, or qualify everything?** §4 Alternatives rejected
   argues minimum churn and §4 Data model states the resulting rule. The cost of being wrong is
   asymmetric: qualifying more files later is a rename plus a link sweep, while un-qualifying is the
@@ -410,6 +448,17 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   the flattened tree, the eight broken links in §4 Migration are that run's actual check-2 output,
   the both-directions atomicity table is two separate probe clones, and the CRLF churn and the two
   `manifest-check.sh` failures were reproduced rather than predicted.
+- rev-2 · 2026-08-09 · owner ratified F1 as **retire the ledger now, in U3**, marked RESOLVED in place,
+  and the header tail stamped `ratified 2026-08-09`. Owner also parked the build on an external
+  prereq: kit **1.7**, not 1.6, is the target, and it must land on coding-governance `main` first.
+  Status moved SPECCED → BLOCKED, which is this repo's token for exactly that. Measured while
+  re-targeting: `main` is at 1.6 and 1.7 exists on one unmerged branch, and 1.7 does **not** retire the
+  ledger from the scaffolder — so F1's "one step ahead of the kit" reading survives the retarget
+  instead of being quietly invalidated by it. §4 Rollout gained the precondition and a
+  version-sensitivity table splitting the tree-shape findings, which stand, from the engine findings,
+  which must be re-taken. To re-measure: clone this repo to a scratch dir, copy the 1.7
+  `tools/memory-tree/` over `memory-tree/`, replay §4 Migration's map, then run the hygiene gate, its
+  self-test, `gen_build_index.py --check` and both atomicity probes.
 
 ## 10. Reuse audit
 
