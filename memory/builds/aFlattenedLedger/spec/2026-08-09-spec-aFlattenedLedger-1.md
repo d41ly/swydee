@@ -79,6 +79,12 @@ Re-measured at `57fe074d` on 2026-08-10 against kit **2.2**, end-to-end in a thr
 repo (see Rollout). `git ls-files memory` → **58 tracked paths**, becoming **52** after the flatten,
 a delta of **−6**. Verified by enumeration in the rehearsal clone, not by arithmetic.
 
+*As built the figures are 59 → 53, same −6.* The Tier-2 review artifact
+(`reviews/2026-08-10-review-aFlattenedLedger-1.md`) landed between the measurement and the build,
+adding one tracked path — the same baseline drift this spec has now absorbed three times: from its
+own build folder at rev-3, from F5's delete at rev-5, and from its own review. The DELTA is the
+stable number; an absolute count is only ever true of a named sha.
+
 Two corrections layered here, both worth naming so the number is auditable. rev-2's `6a1c4dd2`
 figures were 56 → 52 (−4); the baseline moved +2 because two commits later this build's OWN folder
 exists, making `orchestration/builds/2026-08-09-ORCH-aFlattenedLedger/` a 15th folder and a 10th
