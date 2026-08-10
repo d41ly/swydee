@@ -1,6 +1,6 @@
 # ORCH-aFlattenedLedger-1 — flatten the memory tree to kit 2.2 and retire the in-flight ledger
 
-**Status:** SPECCED · rev-5 · 2026-08-10 · node a · Tier-2 · base 57fe074d · streams orchestration · ratified 2026-08-09, all forks closed + Tier-2 reviewed 2026-08-10
+**Status:** CLOSED · rev-5 · 2026-08-10 · node a · Tier-2 · base 57fe074d · streams orchestration · ratified 2026-08-09, all forks closed + Tier-2 reviewed 2026-08-10
 
 ## 1. Goal
 
@@ -634,6 +634,16 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
    this repo does not carry. The DRIVER it tests (`merge-rows.py`) does run here — that is F6.
 
 ## 8. Open questions
+
+none — all six forks are resolved and the unit is built. F1 and the F5 disposition were owner
+ratifications; F3, F4 and F6 were ratified as deferrals and are carried as
+`ORCH-aFlattenedLedger-4` and `-5` in `memory/backlog/ORCH.md`, which is where an OPEN item belongs
+once its spec closes. F2 is recorded below as accepted-by-default rather than ratified.
+
+The fork record is kept in full below because it is the reasoning a later reader needs, and because
+two of these decisions were reversed mid-flight — F5 from relocate to delete, and F1's rationale
+from "one step ahead of the kit" to "in step with it". A resolution without its superseded
+alternative is an assertion, not a record.
 
 - **F1 — does the ledger retirement land in this unit or wait for the kit version that removes it?**
   Kit 1.6 still scaffolds and admits the sharded ledger; upstream retires it at a later version whose

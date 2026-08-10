@@ -36,52 +36,24 @@ carry the FAMILY qualifier. The mixed naming is a decision, not an accident.
 
 ## Status
 
-**SPECCED at rev-5 (2026-08-10) — unparked, forks closed, Tier-2 reviewed, ready to build.** The
-review is [2026-08-10-review-aFlattenedLedger-1](reviews/2026-08-10-review-aFlattenedLedger-1.md):
-14 confirmed findings folded, verdict SAFE AFTER EDITS. Its blocker was this spec's own instruction
-to run `kit-dogfood-parity.test.sh --render`, which writes toward the KIT and would have silently
-reinstated the 1.4 templates over the 2.2 ones — the exact defect §4 exists to fix. Never run it here.
-The rev-2 hold was "wait
-for kit 1.7 on coding-governance `main`". `main` is now at `e7ec336` carrying kit **2.2**, four minor
-versions past the hold, so the prereq is discharged and overshot. Every rev-2 measurement was re-taken
-against 2.2 in fresh clones of `57fe074d`, and §4 Rollout's re-measure table is now a results table.
+**CLOSED at rev-5, built 2026-08-10.** Landed as three commits: `974545c` (U1+U2+U3 — kit 2.2, the
+flatten, the ledger retired), `13a7dc4` (U4 — governing docs, gate leg, CRLF pins) and `3bc9b27`
+(U5 — decision and backlog rows). Full bar green at each boundary.
 
-Forks: F1 ratified at rev-2 (retire the ledger now — the action stands, its rationale moved, since
-2.2's scaffolder has no ledger and check 3 rejects one, so U3 is in step with the kit rather than one
-step ahead, and no longer optional). F3, F4, F5 and F6 ratified 2026-08-10, each at its
-recommendation: the F3+F4 follow-up merges into ONE unit behind a memory-recall 1.0 → 1.1 re-pull;
-F5 **deletes** `project/README.md` and `project/MEMORY.md` rather than archiving them; F6 takes
-`merge-rows.py` inert with a backlog row. **F2 is not formally ratified** — it stands at minimum
-churn, unchallenged, which §8 records as acceptance by default rather than a decision.
+The unit was retargeted twice and reviewed once before it built. rev-2 parked it on kit 1.7; rev-3
+found `main` had reached 2.2 and re-measured everything against it; rev-4 closed the forks; rev-5
+folded a Tier-2 review whose blocker was this spec's own instruction to run
+`kit-dogfood-parity.test.sh --render` — a command that writes toward the kit and would have
+silently reinstated the 1.4 templates over the 2.2 ones. See
+[the review](reviews/2026-08-10-review-aFlattenedLedger-1.md).
 
-Three things rev-2 did not predict, worth knowing before opening the spec:
-
-- **The rollout is three commits, not four.** 2.2's check 3 rejects the ledger paths outright, so a
-  commit that flattens but leaves them reds. U1, U2 and U3 are now one commit.
-- **`project/MEMORY.md` and `project/README.md` lose their home** — check 3 admits only `*.txt`
-  waiver registries under `project/` now. That reverses a §4 Migration row. F5 deletes both: one is
-  an empty index, the other describes machinery this unit removes, and nothing links to either.
-- **`merge-rows.py` arrives with the kit**, a row-keyed merge driver for exactly the `DECISIONS.md`
-  and `backlog/*.md` shapes this flatten creates, but wiring it needs files this repo lacks. F6 takes
-  it inert with a backlog row.
-
-Two more found by an adversarial read of the kit source rather than the dry run, both verified:
-`memory/TEMPLATE-SPEC.md` puts `## 10. Reuse audit` OUTSIDE its fenced skeleton where 2.2's template
-puts it inside, so copying the skeleton omits a section check 12 requires — U1 replaces the file. And
-arming checks 13-16 needs `extract.grammar_for(root)`, which the installed memory-recall does not
-export, so that follow-up is a second kit upgrade rather than a config edit.
-
-Changed by measurement: the self-test is **120 assertions** (was 101), the generator writes **13
-artifacts** (was 12), and the tree is **58 → 54 paths** (was 56 → 52 — the same −4 delta, re-based
-onto a commit where this build's own folder exists as a 10th slug).
-
-Nothing under `memory/` has been edited beyond this build folder, per the measure-then-spec-then-move
-discipline.
+Follow-ups live in `memory/backlog/ORCH.md` as `ORCH-aFlattenedLedger-4` (memory-recall re-pull →
+`DURABLE` fix → arm checks 13-16) and `-5` (wire the row-keyed merge driver).
 
 <!-- gen:build-index -->
-**Build status:** SPECCED · 1 unit(s) · node a · opened 2026-08-09 · streams orchestration · ids ORCH-aFlattenedLedger-1
+**Build status:** CLOSED · 1 unit(s) · node a · opened 2026-08-09 · streams orchestration · ids ORCH-aFlattenedLedger-1
 
 | Unit | Status | Rev | Last change |
 |---|---|---|---|
-| [ORCH-aFlattenedLedger-1 — flatten the memory tree to kit 2.2 and retire the in-flight ledger](spec/2026-08-09-spec-aFlattenedLedger-1.md) | SPECCED | rev-5 | 2026-08-10 |
+| [ORCH-aFlattenedLedger-1 — flatten the memory tree to kit 2.2 and retire the in-flight ledger](spec/2026-08-09-spec-aFlattenedLedger-1.md) | CLOSED | rev-5 | 2026-08-10 |
 <!-- /gen:build-index -->
