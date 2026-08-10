@@ -1,23 +1,32 @@
-# ORCH-aFlattenedLedger-1 — flatten the memory tree to kit 1.6 and retire the in-flight ledger
+# ORCH-aFlattenedLedger-1 — flatten the memory tree to kit 2.2 and retire the in-flight ledger
 
-**Status:** BLOCKED · rev-2 · 2026-08-09 · node a · Tier-2 · base 6a1c4dd2 · streams orchestration · ratified 2026-08-09
+**Status:** SPECCED · rev-3 · 2026-08-10 · node a · Tier-2 · base 57fe074d · streams orchestration · ratified 2026-08-09
 
 ## 1. Goal
 
 Bring this repo's `memory/` tree from memory-tree kit 1.4 to the current upstream kit, which collapses
 the four discipline directories into one flat `memory/builds/<slug>/` tree and replaces the authored
-per-node in-flight ledger with a generated work-state index. Upstream is retiring the sharded ledger
-as a product feature, and this repo is the one adopter still carrying one.
+per-node in-flight ledger with a generated work-state index. Upstream retired the sharded ledger as a
+product feature, and this repo is the one adopter still carrying one.
 
-**Parked on an external prereq (owner, 2026-08-09): build waits until kit 1.7 lands on
-coding-governance `main`.** The target version is therefore **1.7, not 1.6**, and every measurement in
-this spec was taken against 1.6 — see §4 Rollout for the precondition and the re-measure list.
+**The external prereq is satisfied and overshot (2026-08-10).** rev-2 parked this build until kit 1.7
+reached coding-governance `main`; `main` is now at **2.2** (`e7ec336`). The target is therefore **2.2,
+not 1.7**, every rev-2 measurement has been re-taken against it, and Status returns BLOCKED → SPECCED.
+Two rev-2 statements are superseded rather than merely refreshed, and §4 Rollout carries both:
+
+1. **2.2 retires the ledger from the scaffolder.** `adopt-memory-tree.sh` at 2.2 contains zero
+   `IN-FLIGHT`/`in-flight`/`journal` references. F1's ratified action is unchanged, but its rationale
+   is: U3 now moves this repo **in step with** its kit, not one step ahead of it.
+2. **The adopter runbook landed.** rev-1 derived the upgrade path from kit source because
+   `WIRE-INTO-PROJECT.md` still documented the sharded ledger. It now carries §3a, "Migrating an
+   existing repo off the sharded session ledger (BREAKING)", which names this repo by measurement as
+   the one adopter on this node. Every step of §4 Migration was re-checked against it.
 
 ## 2. Scope (IN)
 
 - **S1** Install the target memory-tree kit over the installed 1.4 at `memory-tree/`, adding the files
-  1.4 does not ship and deleting `gen-memory-tree.sh`, which upstream retired. The target is kit 1.7;
-  the file list in §4 Files touched is the 1.6 one and is re-derived at build time.
+  1.4 does not ship and deleting `gen-memory-tree.sh`, which upstream retired. The target is kit
+  **2.2**, and §4 Files touched now carries the measured 2.2 list rather than a placeholder.
 - **S2** Flatten `memory/<discipline>/builds/<date>-<FAMILY>-<slug>/` to `memory/builds/<slug>/`,
   merging the six folders that share the slug `aUniformLattice` into one build.
 - **S3** Disambiguate the recording filenames that collide or become ambiguous inside the merged
@@ -25,7 +34,7 @@ this spec was taken against 1.6 — see §4 Rollout for the precondition and the
 - **S4** Merge the four per-discipline `DECISIONS.md` into one append-only `memory/DECISIONS.md`, and
   the four `BACKLOG.md` into per-family shards at `memory/backlog/<FAMILY>.md`.
 - **S5** Author README front matter (`slug node opened streams roster ids [status]`) plus the
-  generated-region marker pair for all nine surviving builds, and generate `memory/LIVE.md` and
+  generated-region marker pair for all ten surviving builds, and generate `memory/LIVE.md` and
   `memory/ledger/<month>.md`.
 - **S6** Relocate `memory/project/in-flight/a.md` to `memory/archive/ledger/a.md` byte-identically,
   and delete the pointer stub and the two empty `.gitkeep` directories in the same commit.
@@ -61,37 +70,51 @@ this spec was taken against 1.6 — see §4 Rollout for the precondition and the
 
 ### Inventory
 
-Measured at `6a1c4dd2` on 2026-08-09, and re-measured end-to-end in a throwaway clone of this repo
-(see Rollout). `git ls-files memory` → **56 tracked paths**, becoming **52** after the flatten.
+Re-measured at `57fe074d` on 2026-08-10 against kit **2.2**, end-to-end in a throwaway clone of this
+repo (see Rollout). `git ls-files memory` → **58 tracked paths**, becoming **54** after the flatten.
+
+The absolute counts moved by +2 from rev-2's `6a1c4dd2` figures because two commits later this build's
+OWN folder exists: `orchestration/builds/2026-08-09-ORCH-aFlattenedLedger/` is a 15th folder and a
+10th slug. The net delta is unchanged at −4, so rev-2's arithmetic stands; only its baseline moved.
 
 | what | measured now | after |
 |---|---|---|
-| build folders | 14, named `<date>-<FAMILY>-<slug>` under four discipline dirs | 9, named for the slug alone |
+| build folders | 15, named `<date>-<FAMILY>-<slug>` under four discipline dirs | 10, named for the slug alone |
 | folders sharing the slug `aUniformLattice` | 6 | 1 |
-| decision logs | 4 (`memory/<discipline>/DECISIONS.md`) | 1 (`memory/DECISIONS.md`), 7638 B / 44 L |
+| decision logs | 4 (`memory/<discipline>/DECISIONS.md`) | 1 (`memory/DECISIONS.md`) |
 | backlogs | 4 (`memory/<discipline>/BACKLOG.md`) | 4 shards (`memory/backlog/<FAMILY>.md`) |
 | generated tree listings | 5 `TREE.md` | 0 — replaced by `LIVE.md` + 2 `ledger/<month>.md` |
-| build READMEs carrying front matter | 0 of 1 existing README | 9 of 9 |
+| build READMEs carrying front matter | 0 of 2 existing READMEs | 10 of 10 |
 | live ledger rows | 3, all `merged:<sha>` | 0 — relocated to `archive/ledger/` |
+| files admitted at `memory/project/` | 6 | 2 — see the 2.2 eviction below |
 
 The merged `memory/DECISIONS.md` enters check 6's capped index set. At 7638 B / 44 L it sits well
 under the 20480 B / 250 L cap, so no rotation is needed at the flatten.
 
 Three facts that decide the plan, each measured rather than assumed:
 
-1. **Kit 1.6 still ships the sharded ledger.** `adopt-memory-tree.sh` scaffolds `IN-FLIGHT.md`,
-   `in-flight/` and `journal/`, and check 3 admits all three. Retiring the ledger here is therefore
-   *permitted, not required* — nothing at 1.6 reds when those paths are absent, because every index
-   entry that names them is filtered through a `[ -f ]` test and check 3's entries are permits. Doing
-   it now makes this repo forward-compatible with the kit version that removes them.
-2. **Checks 13-19 are off.** `corpus_ids.py` enables checks 13-16 only when one of `DEAD_PATH_PIN`,
-   `ORPHAN_ID_PIN` or `READ_PATH_CEILING` is non-blank; this repo's `.memory-tree.conf` sets none of
-   them. `gotchas.py` returns an empty record set when `memory/gotchas/` is absent, and both its
-   check-17 guard and its check-18/19 loop are gated on that set being non-empty.
+1. **Kit 2.2 no longer ships the sharded ledger — retiring it is now REQUIRED, not permitted.** This
+   inverts rev-1's fact 1 and is the single largest change at the retarget. `adopt-memory-tree.sh` at
+   2.2 contains zero `IN-FLIGHT`/`in-flight`/`journal` references, and check 3's permitted set at
+   `memory/project/` is *the gate's own waiver registries (`*.txt`) and nothing else*. Measured on the
+   2.2 engine over the UNFLATTENED tree, check 3 names `project/in-flight`, `project/journal` and
+   `project/IN-FLIGHT.md` as unexpected entries — so an untouched tree cannot go green on 2.2 while
+   the ledger exists. U3 is no longer forward-compatibility work; it is part of the migration.
+2. **Checks 13-19 are off, and 2.2 has 19 checks rather than 1.4's 12.** `corpus_ids.py` enables
+   checks 13-16 only when one of `DEAD_PATH_PIN`, `ORPHAN_ID_PIN` or `READ_PATH_CEILING` is non-blank;
+   this repo's `.memory-tree.conf` sets none of them, and `python memory-tree/corpus_ids.py` exits 0
+   over the flattened tree. `gotchas.py` returns an empty record set when `memory/gotchas/` is absent,
+   and both its check-17 guard and its check-18/19 loop are gated on that set being non-empty. So 12
+   checks are active and 7 are gated off — which is why the leg's display name needs care in U4.
 3. **The cross-kit dependency resolves in this repo's layout.** `corpus_ids.py` looks for the id
    grammar at `<kit-parent>/memory-recall/`. The kit is root-installed at `memory-tree/`, so the
    parent is the repo root and `memory-recall/` is exactly where it looks. The kit self-test passes
-   here unmodified: **101 assertions, exit 0.**
+   here unmodified: **120 assertions, exit 0** (was 101 at 1.6).
+4. **`.memory-tree.conf` needs no edit.** Diffing this repo's key set against 2.2's
+   `.memory-tree.conf.example`: every key 2.2 reads is present, and the one key this repo has that the
+   example omits is `TOMBSTONE_ROOTS`, which 2.2 still reads. `DISCIPLINES` became a closed enum of
+   header values rather than a directory list at 1.5, but its value here is already the four stream
+   names, so the same literal is correct under both readings.
 
 The retrieval regression, stated with its number. `memory-recall/extract.py`'s `DURABLE` pattern
 requires a `memory/<segment>/(DECISIONS|BACKLOG).md` shape. It selects **8 files today and 0 after
@@ -120,9 +143,22 @@ Front matter opens at line 1 of each build README and carries six required keys 
 
 The `status` rule is a hard either/or, not a default: with a derivable status an authored `status:`
 key is rejected as "two answers to one question", and with none the absent key is a named error. That
-splits this repo's nine builds cleanly — the six grandfathered builds carry no status header at all
-and take an authored `status: CLOSED`; the three post-adoption builds derive theirs and must NOT
-carry the key.
+splits this repo's ten builds cleanly — six take an authored `status: CLOSED`, and four derive theirs
+and must NOT carry the key.
+
+**Why the six are underivable is not what rev-1 assumed, and the difference is worth pinning.** rev-1
+said the grandfathered builds "carry no status header at all". Measured: five of the six DO carry a
+`**Status:**` line — `SHIPPED (built, reviewed, merged to main)` and similar — and only
+`aCanonicalClient` has none. They are underivable because `SHIPPED` **is not in the status vocabulary**.
+`gen_build_index.py` anchors on `^\*\*Status:\*\* (?P<token>…)` over the closed set
+`OPEN · SPECCED · INPROGRESS · BLOCKED · DEFERRED · CLOSED · WONTDO`, so the free-prose header does not
+match and the build reports "no spec under this build carries a parseable header". rev-1's *action*
+was right for the wrong reason; the authored value stays `CLOSED`, which is the vocabulary's terminal
+token for work that shipped. A builder who "fixes" the six prose headers into tokens instead would be
+rewriting frozen grandfathered records, which §3 forbids.
+
+The four that derive are `aPatientHarvest` (CLOSED), `aCandidTally` (INPROGRESS), `aUniformLattice`
+(INPROGRESS) and `aFlattenedLedger` (BLOCKED at rev-2, SPECCED at rev-3 — this build indexes itself).
 
 The derived status is not the same fact the ledger recorded, and the difference is worth stating
 because it looks like a contradiction. All three ledger rows read `merged:<sha>`, yet the generated
@@ -172,10 +208,25 @@ path is named.
 | `<discipline>/BACKLOG.md` ×4 | U2 | `backlog/{ANLZ,EXTR,ORCH,TREND}.md`, links repointed one level deeper | check 3 admits only `<FAMILY>.md` under `backlog/` |
 | `<discipline>/README.md` ×4 | U2 | delete | they describe only the directory that is going away |
 | `<discipline>/TREE.md` ×4, `TREE.md` | U2 | delete | the generator that wrote them is retired; `LIVE.md` replaces them |
+| `orchestration/builds/2026-08-09-ORCH-aFlattenedLedger/` | U2 | `builds/aFlattenedLedger/` | this build's own folder; did not exist at rev-1's `6a1c4dd2` baseline |
 | `project/in-flight/a.md` | U3 | `archive/ledger/a.md`, byte-identical `git mv` | **sole carrier** of worktree names, the four-branch history of `aUniformLattice`, and the per-family seq high-water marks |
 | `project/IN-FLIGHT.md` | U3 | delete; its protocol prose has no successor | its only content is the vocabulary, which retires with the ledger |
 | `project/in-flight/.gitkeep`, `project/journal/.gitkeep` | U3 | delete with their directories | 0 B; `journal/` never held a journal |
-| `project/README.md`, `project/MEMORY.md`, the two `*.txt` | — | **stay** | check 3 admits all four at `project/`; both registries are empty and remain the grandfather hooks |
+| `project/README.md`, `project/MEMORY.md` | U3 | `archive/project-README.md`, `archive/project-MEMORY.md` — see F5 | **REVERSED at 2.2.** rev-1 had these staying |
+| `project/legacy-files.txt`, `project/curation-debt.txt` | — | **stay** | still admitted; both are empty and remain the grandfather hooks |
+
+**Check 3 evicts two files at 2.2 that 1.6 admitted, and this is the one migration row the retarget
+reverses.** 2.2's `HYGIENE.template.md` states the rule directly: `project/` holds "the gate's own
+waiver registries (`*.txt`, five of them) and nothing else". Measured on the flattened tree with the
+2.2 engine, check 3 fails naming exactly `memory/project/MEMORY.md` and `memory/project/README.md`;
+the two `.txt` registries are not named. Relocating both under `archive/` — whose charter is "rotated
+indexes + legacy material a build can't claim" — takes the gate to **exit 0, no output**. The
+disposition is a decision rather than a mechanical consequence, so it is F5.
+
+The same passage names five registries where this repo has two (`corpus-path-unresolved.txt`,
+`id-orphan-waiver.txt` and `unarmed-branches.txt` are the absentees). Their absence is NOT a failure:
+the gate is green without them, because each is a waiver file consulted only by a check this repo has
+gated off. They arrive with checks 13-19, which F4 keeps out of scope.
 
 **The ledger is read before it is moved, and that ordering is load-bearing.** Its `streams` column is
 the source for every `streams:` front-matter value and its `seq high-water` column is the source for
@@ -185,17 +236,21 @@ every `ids:` value, so U2 cannot author front matter without it. Relocation, not
 **Atomicity rule, measured in both directions.** The kit bump and the flatten MUST be one commit.
 Neither half is green alone:
 
-| probe | result |
+| probe | result at 2.2 (re-taken 2026-08-10, two separate clones) |
 |---|---|
-| kit 1.6 installed, tree not yet flattened | check 3 reports the four discipline dirs and `TREE.md`; check 9 reports `LIVE.md` missing; the empty-population guard fires for checks 4, 5, 8 and 12 |
-| tree flattened, kit still 1.4 | check 3 reports `archive/ backlog/ builds/ ledger/ DECISIONS.md LIVE.md`; check 9 reports all five `TREE.md` stale |
+| kit 2.2 installed, tree not yet flattened | exit 1. Check 3 reports the four discipline dirs, `TREE.md`, **and `project/in-flight`, `project/journal`, `project/IN-FLIGHT.md`, `project/MEMORY.md`, `project/README.md`**; check 9 reports `LIVE.md` missing (never rendered); the empty-population guard fires for checks 4, 5, 8 and 12 |
+| tree flattened, kit still 1.4 | exit 1. Check 2 reports the 8 broken links; check 3 reports `archive/ backlog/ builds/ DECISIONS.md`; check 9 reports all five `TREE.md` stale |
 
-The empty-population guard firing four ways in the first probe is the 1.5 flatten's own alarm working
-as designed: the two tree shapes are mutually exclusive to the gate, so there is no green intermediate
-state to land on.
+The first probe's five extra `project/` entries are the 2.2 tightening; everything else reproduces
+rev-1's 1.6 table unchanged, including the four-way empty-population guard. That guard firing is the
+1.5 flatten's own alarm working as designed.
 
-**Link integrity is the only check that needs hand repair.** The dry run's first full gate run over
-the flattened tree failed check 2 and nothing else, with exactly eight broken links:
+The two tree shapes are mutually exclusive to the gate, so there is no green intermediate state to
+land on.
+
+**Two checks need hand repair at 2.2, not one.** The dry run's first full gate run over the flattened
+tree failed check 2 and check 3 and nothing else. Check 3 is the `project/` eviction above. Check 2 is
+exactly eight broken links, unchanged from rev-1:
 
 | broken link | repair |
 |---|---|
@@ -217,78 +272,121 @@ trains a reader to ignore `git status`. U4 replaces the dead pin with `memory/LI
 
 ### Rollout
 
-**Precondition, ratified by the owner on 2026-08-09: kit 1.7 must be merged to coding-governance
-`main` before U1 runs.** Measured on 2026-08-09: `main` carries **1.6**, and **1.7 exists on exactly
-one ref**, the unmerged `branch/cd-memory-rework-alignment-005661`. Migrating to 1.6 now and to 1.7
-weeks later would pay the flatten's link-repair and front-matter cost twice, which is what the hold
-avoids.
+**The precondition is DISCHARGED.** rev-2 held U1 until kit 1.7 reached coding-governance `main`.
+Measured 2026-08-10: `main` is at `e7ec336` carrying kit **2.2**, so the hold is satisfied and
+overshot by four minor versions. The whole dry run was replayed against 2.2 in a fresh clone of
+`57fe074d`, and the rev-2 re-measure table is now a results table rather than a to-do list.
 
-Two consequences of the hold, stated so neither is mistaken later:
+| finding | rev-2 said | re-taken at 2.2 |
+|---|---|---|
+| the 8 broken links (§4 Migration) | no re-measure | **unchanged** — the same 8, verbatim, in the same 3 files |
+| the per-file migration map, the slug collision | no re-measure | **unchanged**, plus one row for this build's own folder |
+| R100 on the relocated shard | no re-measure | **unchanged** — `similarity index 100%` |
+| the gate is green over the flattened tree (AC1) | re-measure | **green, exit 0, no output** — but only after the F5 relocation below |
+| the self-test's assertion count (AC2) | re-measure | **101 → 120** |
+| the both-directions atomicity probe | re-measure | **reproduced**, plus five extra `project/` entries in probe A |
+| generated artifacts (AC5) | re-measure | **12 → 13**, and the cause is the 10th build, not the engine |
+| checks 13-19 off; the `memory-recall` sibling lookup | re-measure | **still off** (no pins set, `corpus_ids.py` exits 0); recall selftest **21/21**, `--check` exit 0 |
+| the kit file list (§4 Files touched) | re-measure | **+2 files** — `merge-rows.py`, `merge-rows.test.sh` |
+| the `.gitattributes` CRLF churn, the two `manifest-check.sh` failures | no re-measure | **unchanged** — both reproduced exactly |
+| the `DURABLE` retrieval population | no re-measure | **unchanged** — measured 8 → 0 |
 
-1. **1.7 does not retire the ledger either.** Measured: `adopt-memory-tree.sh` still scaffolds
-   `IN-FLIGHT.md`, `in-flight/` and `journal/` on that branch, exactly as at 1.6. Upstream removes
-   them at the 1.8 bump. So F1's ratified "retire now" still means running one step ahead of the kit
-   at the target version, and its rationale is unchanged rather than merely still true.
-2. **Every number in this spec is a 1.6 measurement and must be re-taken against 1.7 before U1.** The
-   tree-shape findings are version-independent; the engine findings are not.
+**One finding is new at 2.2 and appears in no rev-2 row: check 3 evicts `project/MEMORY.md` and
+`project/README.md`.** It sits inside the surface rev-2 predicted ("check 3's permitted root set is
+the engine's"), so the table caught it, but its consequence is a reversed migration row rather than a
+changed number. That is F5.
 
-| finding | re-measure at 1.7? |
-|---|---|
-| the 8 broken links (§4 Migration) | no — a property of the tree, not the engine |
-| the per-file migration map, the slug collision, R100 | no — same |
-| the gate is green over the flattened tree (AC1) | **yes** — 1.7 may add or change a check |
-| the self-test's 101 assertions (AC2) | **yes** — the count is the engine's |
-| the both-directions atomicity probe | **yes** — check 3's permitted root set is the engine's |
-| 12 generated artifacts (AC5) | **yes** — the generator ships with the kit |
-| checks 13-19 off; the `memory-recall` sibling lookup | **yes** — both are `corpus_ids.py` behaviour |
-| the kit file list (§4 Files touched) | **yes** — 1.7 may add or drop a file |
-| the `.gitattributes` CRLF churn, the two `manifest-check.sh` failures | no — git and the manifest kit, not the hygiene engine |
+**Two kit self-tests cannot run in this repo's layout, and neither is wanted.** `merge-rows.test.sh`
+and `check-verdict-epoch.test.sh` both resolve the repo root as `$HERE/../..`, which assumes the kit
+sits at `<root>/tools/memory-tree/`; this repo root-installs at `memory-tree/`, so that path lands
+outside the repo. `check-verdict-epoch.sh` itself hardcodes `tools/memory-tree/check-memory-hygiene.sh`
+and exits 2 here. §7's third coupling already declined that leg on its own merits, so this measurement
+confirms a decision rather than forcing one. The hygiene ENGINE is layout-independent (it resolves via
+`git rev-parse --show-toplevel`), which is why AC1 is green regardless.
 
-Re-running the dry run against 1.7 reproduces the whole table in minutes; the procedure is in §9.
+**Three commits at 2.2, not four — U3 has been absorbed.** rev-1 made U3 separable on the measured
+fact that kit 1.6 still ADMITTED the ledger paths, so a commit that flattened but left them alone was
+green. At 2.2 it is not. Probed directly (kit 2.2 installed, flatten and front matter complete, U3's
+work deliberately skipped): check 3 fails naming `project/in-flight`, `project/journal`,
+`project/IN-FLIGHT.md`, `project/MEMORY.md` and `project/README.md`, exit 1. The ledger retirement is
+now inside the same atomicity envelope as the kit bump and the flatten.
 
-Four commits. U1 and U2 are one commit by the atomicity rule above; the rest are separable because
-each leaves the gate green.
+This is the mechanical consequence of F1 being overtaken by upstream: the owner ratified retiring the
+ledger as a choice, and 2.2 turned it into a requirement. The ratification still governs — it is why
+the shard is relocated rather than deleted — but "which commit" is no longer a free variable.
+
+**The intermediate commit could not be MADE even if a red gate were tolerable.** Check 3 selects
+tree-wide — `FILES=$(git ls-files "$M/")` — and, unlike checks 6, 7 and 12, it never calls the
+`in_scope` filter, so `--staged` does not narrow it. The pre-commit hook runs
+`check-memory-hygiene.sh --staged` whenever anything under `memory/**` is staged. A commit that
+stages the flatten while `project/in-flight/` still exists is therefore refused by the hook, not
+merely red afterwards. That closes the "land it red and fix it next commit" escape.
 
 | unit | work | reds a watched path? |
 |---|---|---|
-| U1+U2 | kit 1.6 in, `gen-memory-tree.sh` out; the whole flatten; record merges; front matter; the eight link repairs; `LIVE.md` + `ledger/` generated | **yes** — `memory-tree`, and U2 kills a `verify-paths` anchor |
-| U3 | ledger to `archive/ledger/`; stub and both `.gitkeep` directories deleted | no |
+| U1+U2+U3 | kit 2.2 in, `gen-memory-tree.sh` out; the whole flatten; record merges; front matter; the eight link repairs; `LIVE.md` + `ledger/` generated; ledger to `archive/ledger/`; stub and both `.gitkeep` directories deleted; the two F5 relocations | **yes** — `memory-tree`, and U2 kills a `verify-paths` anchor |
 | U4 | `.gitattributes` pins; the `tools/gate-legs.json` leg name; `AGENTS.md` and `.claude/SESSION-KICKOFF.md` re-trued; `memory/README.md` and `memory/HYGIENE.md` re-trued | **yes** — `tools`, `scripts`, `AGENTS.md`, `memory-recall` |
 | U5 | `memory/DECISIONS.md` rows, including the `TREND-aGovernedCanon-2` superseding row; the §8 F3 backlog row | no |
 
-Two ratchets bite on U1+U2 and U4, both measured on the dry run:
+Two ratchets bite on U1+U2+U3 and U4, both re-measured on the 2.2 dry run and both unchanged:
 
 - `scripts/manifest-check.sh` **check 4** reds because `verify-paths` anchors
   `memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md`,
   which U2 moves. The same path is cited in §B as the units-index location. Both must be repointed to
-  `memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md` in U1+U2's own commit,
+  `memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md` in that same commit,
   because the pre-commit hook runs `manifest-check.sh --staged` on every commit.
 - `manifest-check.sh` **check 5** reds because watched pathspecs moved with no re-stamp. `watch` is
-  `AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf`; U1+U2
-  stages `memory-tree` and U4 stages four of them. Each of those two commits carries its own
-  `last-audit` re-stamp bundled in, since the `--staged` leg accepts only a re-stamp in that same
-  commit. `memory/` itself is not watched, so U3 and U5 need no re-stamp.
+  `AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf`. Measured at
+  2.2 the first commit stages **17** files under `memory-tree` (the 8 replaced, the 9 new — one more
+  pair than at 1.6 — and the deleted `gen-memory-tree.sh`), and U4 stages four more watch entries.
+  Each of those two commits carries its own `last-audit` re-stamp bundled in, since the `--staged` leg
+  accepts only a re-stamp in that same commit. `memory/` itself is not watched, so U5 needs no
+  re-stamp.
 
 ### Files touched (estimate)
 
-Kit, replaced wholesale from upstream `tools/memory-tree/`: `check-memory-hygiene.sh`,
-`check-memory-hygiene.test.sh`, `hygiene-parity.test.sh`, `adopt-memory-tree.sh`,
-`HYGIENE.template.md`, `README.md`, `SPEC-TEMPLATE.template.md`, `.memory-tree.conf.example`.
-**New in the kit:** `gen_build_index.py`, `corpus_ids.py`, `gotchas.py`, `check-arms.py`,
-`check-verdict-epoch.sh`, `check-verdict-epoch.test.sh`, `kit-dogfood-parity.test.sh`.
-**Deleted:** `gen-memory-tree.sh`.
+Measured against kit 2.2 at `e7ec336`, not estimated. Kit, replaced wholesale from upstream
+`tools/memory-tree/`: `check-memory-hygiene.sh`, `check-memory-hygiene.test.sh`,
+`hygiene-parity.test.sh`, `adopt-memory-tree.sh`, `HYGIENE.template.md`, `README.md`,
+`SPEC-TEMPLATE.template.md`, `.memory-tree.conf.example`.
+**New in the kit (9, two more than at 1.6):** `gen_build_index.py`, `corpus_ids.py`, `gotchas.py`,
+`check-arms.py`, `check-verdict-epoch.sh`, `check-verdict-epoch.test.sh`,
+`kit-dogfood-parity.test.sh`, and — new at 2.2 — **`merge-rows.py`, `merge-rows.test.sh`**.
+**Deleted:** `gen-memory-tree.sh`. Copy the directory but NOT `__pycache__`.
 
-Tree: 14 folder moves, 6 file renames, 9 READMEs authored, 4 decision logs merged to 1, 4 backlogs
-resharded, 13 files deleted, 1 shard relocated, 3 artifacts generated.
+`merge-rows.py` is the row-keyed three-way merge driver for `DECISIONS.md` and `backlog/*.md` — the
+two file shapes this flatten CREATES. It arrives with the kit but is inert until wired, and wiring it
+needs `lib/pyrun.sh` plus a `check-wiring.sh` newer than the one installed here. That is F6.
 
-Repo: `.gitattributes`, `tools/gate-legs.json` (the leg's display name says "12 checks"),
+`kit-dogfood-parity.test.sh` fails on a fresh install and is expected to: it byte-compares the kit's
+shipped `SPEC-TEMPLATE.template.md` against a render. `bash memory-tree/kit-dogfood-parity.test.sh
+--render` then exits 0, and it does not modify `memory/TEMPLATE-SPEC.md`. Run it once in U1.
+
+Tree: 15 folder moves, 6 file renames, 10 READMEs authored, 4 decision logs merged to 1, 4 backlogs
+resharded, 13 files deleted, 1 shard relocated, 2 files relocated to `archive/` (F5), 13 artifacts
+generated.
+
+Repo: `.gitattributes`, `tools/gate-legs.json` (the leg's display name says "12 checks"; 2.2 has
+**19**, of which 12 are active here and 7 gated off by F4 — so the honest rename is not simply "19"),
 `AGENTS.md` (8 ledger/journal references, including the §3 shard rule the product is retiring),
 `.claude/SESSION-KICKOFF.md` (the ledger pointer at `:143`, the stale `TREE.md`/check-9 sentence at
 `:260`, the units-index path at `:68`, and the `manifest-audit` block).
 
 `memory/HYGIENE.md` carries 11 references to the retiring machinery and is the copy of the kit's
-`HYGIENE.template.md`; replace it from the 1.6 template rather than hand-patching it, so the two do
+`HYGIENE.template.md`; replace it from the 2.2 template rather than hand-patching it, so the two do
 not drift.
+
+**`memory/TEMPLATE-SPEC.md` must be replaced too, and rev-1 missed it — the installed copy is
+structurally wrong in a way nothing here gates.** Measured: swydee's copy closes its fenced skeleton
+at line 128 and places `## 10. Reuse audit` at line 130, OUTSIDE the fence; 2.2's
+`SPEC-TEMPLATE.template.md` closes at 159 with §10 inside at 153. So an author who copies the
+skeleton — which is what the file is FOR — silently omits §10. Check 12 then reds that spec, because
+`SPEC10_CUTOFF` defaults to `2026-08-04`, byte-identical to this repo's `SPEC_FORMAT_CUTOFF`: there
+is zero grandfathering margin. Nothing catches the template itself, since check 12's canon is
+hardcoded in the shell and `kit-dogfood-parity.test.sh` is not a leg here. This is the mechanical fix
+for a trap the kickoff manifest currently carries as prose ("a Tier-2 spec dated on/after 2026-08-04
+needs a tenth `## 10. Reuse audit` section"); U4 can drop that half of the entry once the template is
+correct.
 
 ### Alternatives rejected
 
@@ -319,7 +417,7 @@ gate reporting five findings against the current tree.
 
 - security — N/A. No auth, egress or sanitization surface; the change moves markdown and runs
   stdlib-only local scripts.
-- perf / scale — the tree is 56 tracked paths. Kit 1.6 is strictly faster on it than 1.4: it batches
+- perf / scale — the tree is 58 tracked paths. Kit 2.2 is strictly faster on it than 1.4: it batches
   the per-file forks 1.4 spawned. Measured gate runtime stays under a second either way.
 - a11y — N/A. No user interface.
 - i18n — N/A. No user-facing strings; `skill/SKILL.md` is untouched.
@@ -334,50 +432,72 @@ gate reporting five findings against the current tree.
   untouched by this unit and will see the flat tree only when they rebase. Rollback is `git revert`;
   no external state.
 - testing + left-shift gates — no new gate leg; one leg's display name changes. The whole migration
-  was executed end-to-end in a throwaway clone before this spec was written, and the gate result
-  quoted in AC1 is that run's.
+  was executed end-to-end in a throwaway clone before this spec was written, and again at rev-3
+  against kit 2.2 in a fresh clone of `57fe074d`; the gate result quoted in AC1 is the rev-3 run's.
+  Three probe clones back the atomicity and separability claims rather than one.
 - migration / rollback — this unit IS the migration; §4 Migration carries the per-file map.
 - user docs — S7. `AGENTS.md` and `.claude/SESSION-KICKOFF.md` are the agent-facing surface; there is
   no end-user documentation of the memory tree.
 
 ## 6. Acceptance criteria
 
-- **AC1** When `bash memory-tree/check-memory-hygiene.sh` is run after each of U1+U2, U3, U4 and U5,
-  it exits 0 and prints nothing. Measured on the dry run at the end of U1+U2 plus U3: exit 0, no
-  output.
+- **AC1** When `bash memory-tree/check-memory-hygiene.sh` is run after each of U1+U2+U3, U4 and U5,
+  it exits 0 and prints nothing. Measured on the rev-3 dry run at the end of U1+U2+U3: exit 0, no
+  output. The negative case is pinned too: probe C skipped only U3's work and the same command exits
+  1 on check 3, which is why the three units are one commit.
 - **AC2** When `bash memory-tree/check-memory-hygiene.test.sh` is run after U1, it passes with at
-  least the 101 assertions the dry run reported, and `bash memory-tree/check-memory-hygiene.sh
-  --staged` exits 0.
+  least the **120** assertions the rev-3 dry run reported (101 was the 1.6 figure), and `bash
+  memory-tree/check-memory-hygiene.sh --staged` exits 0. Additionally `bash
+  memory-tree/kit-dogfood-parity.test.sh` exits 0 — it fails on a fresh install until `--render` is
+  run once.
 - **AC3** When `git log --follow --find-renames` is run over `memory/archive/ledger/a.md`, it shows
   the rename from `memory/project/in-flight/a.md` with a 100% similarity index and no content change.
-- **AC4** When `git ls-files memory/project` is run after U3, it lists exactly `README.md`,
-  `MEMORY.md`, `legacy-files.txt` and `curation-debt.txt`, and nothing else.
+- **AC4** When `git ls-files memory/project` is run after U3, it lists exactly `legacy-files.txt` and
+  `curation-debt.txt`, and nothing else. **Changed at rev-3:** `README.md` and `MEMORY.md` are no
+  longer admitted by check 3 and move to `archive/` per F5; an AC4 that still expected them would have
+  contradicted AC1.
 - **AC5** When `python memory-tree/gen_build_index.py --check` is run after U1+U2, it exits 0 and
-  reports 12 artifacts; `memory/LIVE.md` lists `aCandidTally` and `aUniformLattice` as INPROGRESS and
-  does NOT list `aPatientHarvest`; and `memory/ledger/` holds exactly `2026-07.md` and `2026-08.md`.
+  reports **13** artifacts (10 build READMEs + `LIVE.md` + 2 month shards; 12 was the nine-build
+  figure); `memory/LIVE.md` lists `aCandidTally` and `aUniformLattice` as INPROGRESS and
+  `aFlattenedLedger` as its then-current status, and does NOT list `aPatientHarvest`; and
+  `memory/ledger/` holds exactly `2026-07.md` and `2026-08.md`.
 - **AC6** When `git ls-files memory/builds` is read after U2, every path's third segment is one of the
-  nine slugs, no folder name carries a date or a FAMILY prefix, and
+  **ten** slugs, no folder name carries a date or a FAMILY prefix, and
   `memory/builds/aUniformLattice/spec/` holds 13 specs whose names are pairwise distinct.
-- **AC7** When each of the nine build READMEs is read after U2, front matter opens at line 1 with the
-  six required keys; the six grandfathered builds carry `status: CLOSED`; and `aPatientHarvest`,
-  `aCandidTally` and `aUniformLattice` carry NO `status:` key.
-- **AC8** When `bash scripts/manifest-check.sh` is run after U1+U2 and again after U4, it exits 0 —
+- **AC7** When each of the **ten** build READMEs is read after U2, front matter opens at line 1 with
+  the six required keys; the six grandfathered builds carry `status: CLOSED`; and `aPatientHarvest`,
+  `aCandidTally`, `aUniformLattice` and `aFlattenedLedger` carry NO `status:` key. A build that
+  wrongly carries both is a named hard error, not a silent precedence.
+- **AC8** When `bash scripts/manifest-check.sh` is run after U1+U2+U3 and again after U4, it exits 0 —
   proving the moved `verify-paths` anchor was repointed and each watched-path commit carried its own
-  `last-audit` re-stamp.
+  `last-audit` re-stamp. Both failures were reproduced at 2.2 before the repair: check 4 on the dead
+  anchor, check 5 naming 17 `memory-tree/` files.
 - **AC9** When `python memory-recall/selftest.py` and `bash memory-recall/adopt-memory-recall.sh
-  --check` are run after U4, each exits 0.
+  --check` are run after U4, each exits 0. Re-measured at 2.2 over the flattened tree: selftest
+  **21/21 checks passed**, `--check` reports the SKILL matches the conf. This holds despite the
+  `DURABLE` population going 8 → 0, which is precisely why F3 exists — nothing reds.
 - **AC10** When `memory/LIVE.md` and `memory/ledger/2026-08.md` are deleted, restored with `git
   checkout --`, and `python memory-tree/gen_build_index.py --write` is then run, `git status` reports
   no modification to either — the `.gitattributes` fix from U4 verified by the exact procedure that
   reproduced the defect.
 - **AC11** When `grep -rniE "in-?flight|journal|TREE\.md" AGENTS.md .claude/SESSION-KICKOFF.md
-  memory/README.md memory/HYGIENE.md memory/project/README.md` is run after U4, every surviving hit
-  is listed in the commit message with its reason. Measured baseline at `6a1c4dd2`: 8 · 2 · 2 · 11 ·
-  2. A zero-hit result on a file whose baseline is 0 proves nothing and is not evidence of work.
+  memory/README.md memory/HYGIENE.md archive/project-README.md` is run after U4, every surviving hit
+  is listed in the commit message with its reason. Baseline **re-measured at `57fe074d`: 8 · 2 · 2 ·
+  11 · 2 — identical to rev-1's**, so the two intervening commits touched none of these. The fifth
+  path is renamed because F5 moves that file. A zero-hit result on a file whose baseline is 0 proves
+  nothing and is not evidence of work.
+- **AC14** When `bash memory-tree/check-verdict-epoch.sh` is NOT present in `tools/gate-legs.json`
+  after U4, that absence is deliberate per §7's third coupling. Pinned as an AC because the leg
+  arrives with the kit and a later reader will otherwise assume it was forgotten: measured here it
+  exits 2 (`tools/memory-tree/check-memory-hygiene.sh is missing`), since it hardcodes the `tools/`
+  prefix this repo does not use.
 - **AC12** When `memory/DECISIONS.md` is read after U5, `TREND-aGovernedCanon-2` is unedited and a
   later row supersedes it by id, naming `memory/archive/ledger/` as the retired ledger's home.
-- **AC13** When `bash tools/run-gates.sh` is run at the end of U5, it is green, and the memory-hygiene
-  leg's display name no longer claims 12 checks.
+- **AC13** When `bash tools/run-gates.sh` is run at the end of U5, every leg is green, and the
+  memory-hygiene leg's display name no longer claims a check count that misdescribes 2.2. The engine
+  has 19 checks and 12 are active here, so "12 checks" is now wrong on the total and right on the
+  effect; the rename must not simply read "19 checks", which would claim seven checks that are gated
+  off. The PowerShell suite tallies are untouched by this unit — 1435 assertions before and after.
 
 ## 7. Gates
 
@@ -403,7 +523,13 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
    engine.
 3. **`check-verdict-epoch.sh` arrives with the kit but has nothing to gate here.** It exists to force
    `KIT_MEMORY_TREE_VERSION` to move when the engine changes; this repo does not author the engine, it
-   copy-installs it. Wiring it would red on the next upstream re-pull for no benefit.
+   copy-installs it. Wiring it would red on the next upstream re-pull for no benefit. rev-3 adds a
+   second, independent reason measured rather than argued: it hardcodes
+   `tools/memory-tree/check-memory-hygiene.sh` and exits 2 in this repo's root-level kit layout. AC14
+   pins the absence so it reads as a decision.
+4. **`merge-rows.test.sh` is new at 2.2 and is likewise not a leg.** It resolves the repo root as
+   `$HERE/../..`, which lands outside this repo, and it sources `tools/lib/resolve-python.sh`, which
+   this repo does not carry. The DRIVER it tests (`merge-rows.py`) does run here — that is F6.
 
 ## 8. Open questions
 
@@ -419,6 +545,12 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   behaviour measured rather than assumed: kit 1.7 still scaffolds the ledger, so the decision is
   knowingly one step ahead of the kit until upstream's 1.8 bump removes it, and the U3 work is
   unchanged by the version hold.
+  *rev-3 note, appended without altering the ratification above:* the retarget to 2.2 carried the
+  build past upstream's 1.8 bump, so the "one step ahead" framing no longer describes reality — 2.2's
+  scaffolder has no ledger and check 3 rejects one. The ratified ACTION is unchanged and its main
+  reason (the migration already reads the shard for front-matter values) still holds. What changed is
+  that it stopped being optional: see §4 Rollout's separability probe, which is why U3 folds into the
+  first commit.
 - **F2 — the FAMILY-qualifier rule: minimum churn, or qualify everything?** §4 Alternatives rejected
   argues minimum churn and §4 Data model states the resulting rule. The cost of being wrong is
   asymmetric: qualifying more files later is a rename plus a link sweep, while un-qualifying is the
@@ -436,6 +568,43 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   until U2 lands, and `gotchas.py` needs a catalogue this repo has never had. `corpus_ids.py
   --measure` prints the pins, so the follow-up is mechanical. **Recommendation: out of scope**, with
   a backlog row in U5 so seven silently-off checks are not mistaken for seven passing ones.
+  *rev-3 note:* the count is now exact — 2.2 has 19 checks, 12 active here. The three absent waiver
+  registries (`corpus-path-unresolved.txt`, `id-orphan-waiver.txt`, `unarmed-branches.txt`) belong to
+  those seven and arrive with them, so they stay out of scope too.
+  **rev-1's "the follow-up is mechanical" is WRONG and the correction raises the follow-up's cost.**
+  Arming checks 13-16 needs more than setting a pin: `corpus_ids.py` reaches into the memory-recall
+  kit for the id grammar via `extract.grammar_for(root)` and raises a named error when the installed
+  kit predates that accessor. Measured — swydee's `memory-recall/extract.py` has **0** occurrences of
+  `grammar_for`; upstream's 1.1 has 4. So F4's follow-up is gated on a memory-recall 1.0 → 1.1
+  re-pull, i.e. a second kit upgrade, not a config edit. This does not affect THIS unit (the pins stay
+  blank and the gate is green), but the backlog row U5 files must say so.
+  Separately and reassuringly: the frozen `U1..U10` era is safe under checks 13-16 by construction.
+  They are disarmed with all three pins blank, and the id grammar requires a `<FAMILY>-` prefix on
+  every era, so a bare `U6` matches no branch and can never be read as a definition, a citation or an
+  orphan. The second half of that is read from the regex rather than executed, since arming it is
+  blocked by the `grammar_for` gap above.
+- **F5 — NEW at rev-3. Where do `project/README.md` and `project/MEMORY.md` go?** Kit 2.2's check 3
+  admits only `*.txt` waiver registries under `project/`, so rev-1's "they stay" is no longer
+  available and doing nothing means a red gate. Three exits: delete both; relocate both under
+  `archive/`; or relocate `MEMORY.md` and delete `README.md`. `README.md` describes a directory whose
+  contents this unit removes, so most of its text is about to be false. `MEMORY.md` is the durable
+  memory-note index and is content, not machinery. **Recommendation: relocate BOTH to
+  `archive/project-README.md` and `archive/project-MEMORY.md`** — `archive/`'s charter is "legacy
+  material a build can't claim", the relocation is what the rev-3 dry run measured to exit 0, and
+  deleting a stale README is a judgement better made when someone reads it than mid-restructure.
+  Deleting instead is defensible and costs one line of U3; it is the owner's call, not the gate's.
+- **F6 — NEW at rev-3. Wire the row-keyed merge driver, or take the kit file inert?** 2.2 ships
+  `merge-rows.py`, a three-way merge driver keyed on id rows, whose declared targets are
+  `memory/DECISIONS.md` and `memory/backlog/*.md` — both created BY this flatten. Wiring it needs
+  three things this repo lacks: `lib/pyrun.sh`, a `tools/check-wiring.sh` new enough to know the
+  driver (the installed copy has zero references to it; upstream's has eight), and two
+  `.gitattributes` lines plus a per-node `git config` set by `check-wiring.sh --fix`. The value is
+  real but not urgent: one node, one session at a time, so the append-only log rarely takes a true
+  three-way merge — though when it does, an un-wired driver is exactly the silent "auto-took" class
+  `AGENTS.md` §1 warns about, and upstream measured that failure as marker-free. **Recommendation:
+  out of scope for this unit, backlog row in U5**, wired alongside the `check-wiring.sh` upgrade in
+  the same follow-up that handles the other drifted engine files. Bundling it here adds a second
+  kit's wiring to a restructure whose main risk is already a mis-repointed link.
 
 ## 9. Revision log
 
@@ -459,6 +628,44 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   which must be re-taken. To re-measure: clone this repo to a scratch dir, copy the 1.7
   `tools/memory-tree/` over `memory-tree/`, replay §4 Migration's map, then run the hygiene gate, its
   self-test, `gen_build_index.py --check` and both atomicity probes.
+- rev-3 · 2026-08-10 · **retargeted 1.7 → 2.2 and unparked.** The rev-2 precondition is discharged:
+  coding-governance `main` is at `e7ec336` carrying kit 2.2, four minor versions past the hold.
+  Status BLOCKED → SPECCED. The rev-2 re-measure procedure was executed against `57fe074d` in three
+  fresh clones (one migration, two atomicity probes, plus a third separability probe), and §4 Rollout's
+  to-do table is now a results table. Baseline moved `6a1c4dd2` → `57fe074d`, which adds this build's
+  own folder as a 15th folder and 10th slug; the tree is 58 → 54 paths, so rev-2's −4 delta stands and
+  only its absolute figures moved.
+
+  Changed by measurement: self-test **101 → 120** assertions; generated artifacts **12 → 13**; the kit
+  file list gains **`merge-rows.py` and `merge-rows.test.sh`**; check 3 now has **19 checks** behind it
+  with 12 active here. Unchanged and re-verified: the 8 broken links verbatim, R100 on the shard, the
+  `DURABLE` 8 → 0, the CRLF churn, both `manifest-check.sh` failures, and AC11's 8 · 2 · 2 · 11 · 2
+  baseline.
+
+  Three findings rev-2 did not predict, in descending order of consequence. **(a) U3 is no longer
+  separable** — 2.2's check 3 rejects `project/in-flight`, `project/journal` and `project/IN-FLIGHT.md`
+  outright, so a commit that flattens but leaves them reds; the rollout goes from four commits to
+  three and U1+U2+U3 become one. This is F1 being overtaken: the owner ratified the retirement as a
+  choice and the kit turned it into a requirement. **(b) check 3 evicts `project/MEMORY.md` and
+  `project/README.md`**, reversing a §4 Migration row that said they stay — now F5. **(c)
+  `merge-rows.py` arrives wireable but unwired** — now F6.
+
+  One rev-1 rationale is corrected without changing its action: the six grandfathered builds are
+  underivable because `SHIPPED` is not in the status vocabulary, not because they lack a header. Five
+  of the six do carry one. The authored `status: CLOSED` was and remains right.
+
+  Two further gaps found by an adversarial read of the kit source rather than by the dry run, both
+  verified by measurement before being written here. **`memory/TEMPLATE-SPEC.md` is structurally
+  wrong** — it puts `## 10. Reuse audit` outside the fenced skeleton where 2.2's template puts it
+  inside, so copying the skeleton omits a section check 12 requires for every spec dated on or after
+  2026-08-04; §4 Files touched now adds the replacement. **F4's follow-up is not mechanical** — it
+  needs `extract.grammar_for(root)`, which the installed memory-recall kit does not have, so arming
+  checks 13-16 is gated on a memory-recall re-pull.
+
+  Method note for a later reader: rev-3's measurements come from four throwaway clones of `57fe074d`
+  (migration, two atomicity probes, one separability probe) and a source read of the 2.2 kit run as a
+  bounded five-lens fan-out plus synthesis. Where the two disagreed the clone won, and every claim
+  imported from the read was re-verified against the files before it was written down.
 
 ## 10. Reuse audit
 
@@ -471,7 +678,7 @@ the unit's discipline is to wire through them rather than reimplement:
 `gen_build_index.py --write` renders the work-state index and `--check` gates it; check 5's existing
 FAMILY-qualifier slot resolves the slug collision; `git mv` carries the rename similarity that AC3
 asserts; `corpus_ids.py --measure` is the follow-up's pin source in F4. The one hand-authored
-artifact is the nine READMEs' front matter, which is data, not a mechanism, and its values are
+artifact is the ten READMEs' front matter, which is data, not a mechanism, and its values are
 transcribed from the ledger shard rather than invented.
 
 The seam deliberately NOT wired through is `memory-recall/extract.py`'s `DURABLE` pattern: F3 records
