@@ -12,6 +12,25 @@
 # check-memory-hygiene.test.sh, which needs no baseline. Keep this committed so the NEXT collapse
 # pass can re-point it at its own base.
 #
+# THE BASELINE MUST BE >= THE CURRENT VERDICT EPOCH. This harness asserts byte-identity, and a kit
+# version bump is exactly where the engine deliberately CHANGES what it says: comparing across one
+# reports every difference as a failure, which is true and useless. It is for behaviour-preserving
+# rewrites only.
+#
+# The floor below derives that epoch from KIT_MEMORY_TREE_VERSION, and that only works if the
+# constant is honest. It was not: the 1.5 engine changed check 5's selector, the §9 rev range and the
+# index set while the constant sat still, so the floor pointed before those changes and this harness
+# accepted a baseline it could not legally compare. `tools/memory-tree/check-verdict-epoch.sh` is
+# now a merge-bar leg that reds when the engine's non-comment lines move and the constant does not.
+#
+# EXPECT A GAP AFTER A BUMP. Immediately after the bump commit C the only baseline at-or-after the
+# floor is C itself, and passing C trips the same-bytes guard below. That is correct fork-collapse
+# order — bump the epoch, then rewrite, then compare against C — but it reads as a break if nobody
+# says so, so this says so.
+#
+# Kit-versus-dogfood DOC parity is a different question with a different harness —
+# kit-dogfood-parity.test.sh, which IS a gate leg.
+#
 # Two corpora, because either alone is blind:
 #   arm 1  the REAL tracked memory tree with violations injected — real ordering, real population
 #   arm 2  pathological SHAPES no committed file has — where the subtle divergences actually live
@@ -20,6 +39,35 @@ ROOT=$(git rev-parse --show-toplevel) || exit 2
 cd "$ROOT" || exit 2
 BEFORE_REV=${1:-}
 [ -n "$BEFORE_REV" ] || { echo "usage: bash tools/memory-tree/hygiene-parity.test.sh <before-rev>"; exit 2; }
+
+# THE BASELINE FLOOR. This harness asserts BYTE-IDENTITY, and a kit version bump is where the engine
+# deliberately changes what it says — the 1.5 flatten changed the verdicts on purpose. Handed a
+# baseline from before that, every arm below reports a difference: true, and useless, and it looks
+# exactly like a broken rewrite.
+#
+# The floor is DERIVED, never written down. A hardcoded sha rots at the next bump; the thing that
+# actually defines "when the verdicts changed" is the version constant, so the floor is the first
+# commit in which the constant reached its CURRENT value.
+KITV=$(sed -n 's/^KIT_MEMORY_TREE_VERSION=\([0-9.]*\).*/\1/p' tools/memory-tree/check-memory-hygiene.sh | head -1)
+[ -n "$KITV" ] || { echo "FAIL cannot read KIT_MEMORY_TREE_VERSION — the baseline floor is derived from it"; exit 2; }
+FLOOR=$(git log --format=%H -S"KIT_MEMORY_TREE_VERSION=$KITV" -- tools/memory-tree/check-memory-hygiene.sh | tail -1)
+if [ -z "$FLOOR" ]; then
+  # THE EMPTY CASE IS DEFINED, because "no floor found" is not "any baseline is fine". A shallow
+  # clone or a squashed import has no commit introducing the constant, and silently skipping the
+  # check would restore exactly the failure mode this floor exists to prevent.
+  echo "FAIL cannot derive the baseline floor: no commit in this history introduces"
+  echo "     KIT_MEMORY_TREE_VERSION=$KITV. A shallow clone or a squashed import does that."
+  echo "     Fetch full history (CI: fetch-depth: 0), or run this harness where the history is whole."
+  exit 2
+fi
+if ! git merge-base --is-ancestor "$FLOOR" "$BEFORE_REV" 2>/dev/null; then
+  echo "FAIL baseline $BEFORE_REV predates kit memory-tree@$KITV (floor $FLOOR)."
+  echo "     This harness asserts BYTE-IDENTITY, and the version bump changed the verdicts on"
+  echo "     purpose — comparing across it reports every difference as a failure, which is true and"
+  echo "     useless. Re-point it at $FLOOR or later, or use check-memory-hygiene.test.sh, which"
+  echo "     needs no baseline at all."
+  exit 2
+fi
 
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -105,7 +153,7 @@ git init -q -b main . && git config user.email t@t.test && git config user.name 
 specs=()
 while IFS= read -r f; do
   b=${f##*/}
-  [[ $b =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-spec-[A-Za-z0-9]+-[0-9]+(-[a-z0-9][a-z0-9-]*)?\.md$ ]] || continue
+  [[ $b =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-spec-([A-Z]+-)?[A-Za-z0-9]+-[0-9]+(-[a-z0-9][a-z0-9-]*)?\.md$ ]] || continue
   [ "${b:0:10}" \< "2026-07-15" ] && continue
   specs+=("$f")
 done < <(find memory -path '*/builds/*/spec/*' -name '*.md' | tr '\\' '/' | LC_ALL=C sort)
@@ -152,8 +200,8 @@ fi
 # §9 never follows. Shape 08 is the divergence upstream actually shipped a bug for.
 # =====================================================================================================
 say "-- arm 2: pathological shapes"
-R2="$TMP/shapes"; D=memory/tooling/builds/2026-08-01-TOOL-tShape/spec
-mkdir -p "$R2/$D/subspecs" "$R2/memory/project"
+R2="$TMP/shapes"; D=memory/builds/tShape/spec
+mkdir -p "$R2/$D/subspecs" "$R2/memory/project" "$R2/memory/backlog"
 cp "$CONF" "$R2/.memory-tree.conf"
 cd "$R2" || exit 2
 printf 'sentinel\n' > memory/HYGIENE.md
@@ -209,7 +257,7 @@ L=$(printf 'y%.0s' $(seq 1 320))
   # sides of the cap under the two readings of length(). Both engines must agree either way — this is
   # the only shape that catches an LC_ALL= prefix being added to the check-7 awk.
   printf -- '- TOOL-tShape-4 · OPEN · %s\n' "$(printf '·%.0s' $(seq 1 160))"
-} > memory/tooling/BACKLOG.md
+} > memory/backlog/TOOL.md
 git init -q -b main . && git config user.email t@t.test && git config user.name t && git config core.autocrlf false
 git add -A && git commit -q -m shapes --no-verify
 
