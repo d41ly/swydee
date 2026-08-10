@@ -36,7 +36,12 @@ carry the FAMILY qualifier. The mixed naming is a decision, not an accident.
 
 ## Status
 
-**SPECCED at rev-4 (2026-08-10) — unparked, forks closed, ready to build.** The rev-2 hold was "wait
+**SPECCED at rev-5 (2026-08-10) — unparked, forks closed, Tier-2 reviewed, ready to build.** The
+review is [2026-08-10-review-aFlattenedLedger-1](reviews/2026-08-10-review-aFlattenedLedger-1.md):
+14 confirmed findings folded, verdict SAFE AFTER EDITS. Its blocker was this spec's own instruction
+to run `kit-dogfood-parity.test.sh --render`, which writes toward the KIT and would have silently
+reinstated the 1.4 templates over the 2.2 ones — the exact defect §4 exists to fix. Never run it here.
+The rev-2 hold was "wait
 for kit 1.7 on coding-governance `main`". `main` is now at `e7ec336` carrying kit **2.2**, four minor
 versions past the hold, so the prereq is discharged and overshot. Every rev-2 measurement was re-taken
 against 2.2 in fresh clones of `57fe074d`, and §4 Rollout's re-measure table is now a results table.

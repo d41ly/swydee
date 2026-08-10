@@ -1,6 +1,6 @@
 # ORCH-aFlattenedLedger-1 — flatten the memory tree to kit 2.2 and retire the in-flight ledger
 
-**Status:** SPECCED · rev-4 · 2026-08-10 · node a · Tier-2 · base 57fe074d · streams orchestration · ratified 2026-08-09, all forks closed 2026-08-10
+**Status:** SPECCED · rev-5 · 2026-08-10 · node a · Tier-2 · base 57fe074d · streams orchestration · ratified 2026-08-09, all forks closed + Tier-2 reviewed 2026-08-10
 
 ## 1. Goal
 
@@ -34,7 +34,12 @@ Two rev-2 statements are superseded rather than merely refreshed, and §4 Rollou
 - **S4** Merge the four per-discipline `DECISIONS.md` into one append-only `memory/DECISIONS.md`, and
   the four `BACKLOG.md` into per-family shards at `memory/backlog/<FAMILY>.md`.
 - **S5** Author README front matter (`slug node opened streams roster ids [status]`) plus the
-  generated-region marker pair for all ten surviving builds, and generate `memory/LIVE.md` and
+  generated-region marker pair for the NINE builds that lack them — `builds/aFlattenedLedger/README.md`
+  already carries both, so it is MOVED with its head and body untouched; authoring a second pair makes
+  `gen_build_index.py` raise `expected exactly one marker pair, found 2 open and 2 close` and render
+  nothing, which reds check 9 and makes the one atomic commit unmakeable. Front matter is PREPENDED to
+  an existing README, never written over it: `aUniformLattice`'s body is hand-written and is not the
+  generator's to replace. Then generate `memory/LIVE.md` and
   `memory/ledger/<month>.md`.
 - **S6** Relocate `memory/project/in-flight/a.md` to `memory/archive/ledger/a.md` byte-identically,
   and delete the pointer stub and the two empty `.gitkeep` directories in the same commit.
@@ -71,11 +76,14 @@ Two rev-2 statements are superseded rather than merely refreshed, and §4 Rollou
 ### Inventory
 
 Re-measured at `57fe074d` on 2026-08-10 against kit **2.2**, end-to-end in a throwaway clone of this
-repo (see Rollout). `git ls-files memory` → **58 tracked paths**, becoming **54** after the flatten.
+repo (see Rollout). `git ls-files memory` → **58 tracked paths**, becoming **52** after the flatten,
+a delta of **−6**. Verified by enumeration in the rehearsal clone, not by arithmetic.
 
-The absolute counts moved by +2 from rev-2's `6a1c4dd2` figures because two commits later this build's
-OWN folder exists: `orchestration/builds/2026-08-09-ORCH-aFlattenedLedger/` is a 15th folder and a
-10th slug. The net delta is unchanged at −4, so rev-2's arithmetic stands; only its baseline moved.
+Two corrections layered here, both worth naming so the number is auditable. rev-2's `6a1c4dd2`
+figures were 56 → 52 (−4); the baseline moved +2 because two commits later this build's OWN folder
+exists, making `orchestration/builds/2026-08-09-ORCH-aFlattenedLedger/` a 15th folder and a 10th
+slug. Then **rev-4's F5 switched the two `project/` files from relocate to delete without re-basing
+the count**, taking the post-flatten figure 54 → 52 and the delta −4 → −6. rev-5 fixes both.
 
 | what | measured now | after |
 |---|---|---|
@@ -84,7 +92,7 @@ OWN folder exists: `orchestration/builds/2026-08-09-ORCH-aFlattenedLedger/` is a
 | decision logs | 4 (`memory/<discipline>/DECISIONS.md`) | 1 (`memory/DECISIONS.md`) |
 | backlogs | 4 (`memory/<discipline>/BACKLOG.md`) | 4 shards (`memory/backlog/<FAMILY>.md`) |
 | generated tree listings | 5 `TREE.md` | 0 — replaced by `LIVE.md` + 2 `ledger/<month>.md` |
-| build READMEs carrying front matter | 0 of 2 existing READMEs | 10 of 10 |
+| build READMEs carrying front matter | **1** of 2 existing READMEs — `aFlattenedLedger` already has all six keys AND a marker pair; `aUniformLattice` has a body but neither | 10 of 10 |
 | live ledger rows | 3, all `merged:<sha>` | 0 — relocated to `archive/ledger/` |
 | files admitted at `memory/project/` | 6 | 2 — see the 2.2 eviction below |
 
@@ -136,9 +144,21 @@ Front matter opens at line 1 of each build README and carries six required keys 
 | `slug` | must equal the folder name | the folder |
 | `node` | `a` | the ledger shard |
 | `opened` | the earliest date among the folders that merge into it | the old folder name's date prefix |
-| `streams` | `+`-joined, every value inside the `DISCIPLINES` enum | the ledger's `streams` column |
+| `streams` | `+`-joined, every value inside the `DISCIPLINES` enum | the ledger for the 3 builds it covers; the OLD discipline directory for the other 7 |
 | `roster` | `+`-joined, every value inside the `FAMILIES` set | the ids the build's specs define |
-| `ids` | the id range the build owns | the ledger's `seq high-water` column |
+| `ids` | the id range the build owns | the ledger for the 3 builds it covers; the specs' own H1 titles for the other 7 |
+
+**The ledger covers three builds, not ten, and rev-4 over-claimed it as the source.** Its build rows
+are `aPatientHarvest`, `aCandidTally` and `aUniformLattice`; a fourth row is the session slug
+`aWiredLineage`, which has no build folder. For the other seven, `streams` comes from the discipline
+directory the folder is leaving — a lossless mapping, since a pre-flatten folder sits under exactly
+one discipline — and `ids` comes from each spec's H1 title, which carries the id verbatim.
+
+The six grandfathered builds own **no FAMILY-shaped id at all**: their specs are titled `U6`, `U7`,
+`U8`, `U9`, `U10` and the U1–U5 master spec. Their `ids` value is therefore the frozen U-era id
+(`U6`, `U7a/U7b`, `U1/-U5`, …), not a `FAMILY-slug-seq`. That is correct and must not be "fixed" into
+a minted id: §3 freezes the era, and the `*-aGovernedCanon-*` ids that CITE these builds belong to a
+different slug and are not theirs to claim.
 | `status` | REQUIRED when no spec carries a parseable header; an ERROR when one does | the specs |
 
 The `status` rule is a hard either/or, not a default: with a derivable status an authored `status:`
@@ -276,7 +296,15 @@ artifacts are unpinned, and the consequence was measured rather than reasoned: a
 checkout, `memory/LIVE.md` and `memory/ledger/2026-08.md` are CRLF; `gen_build_index.py --check`
 stays **green**, because its reader normalises CRLF; but `--write` re-emits LF and `git status` then
 shows both files permanently modified. So the defect is not a red gate — it is invisible churn that
-trains a reader to ignore `git status`. U4 replaces the dead pin with `memory/LIVE.md`,
+trains a reader to ignore `git status`.
+
+**The pin must cover all 13 generated artifacts, not 3.** rev-4's replacement named `LIVE.md`,
+`ledger/*.md` and `DECISIONS.md` and missed the ten `builds/<slug>/README.md` files, which are
+generated on exactly the same footing: `gen_build_index.py`'s plan puts every build README into its
+artifact set and writes them in binary mode with LF bytes, while `--check` reads through a normalising
+reader. So they check green and churn forever, which is the same invisible-churn defect one order of
+magnitude wider. The pin needs `memory/builds/*/README.md` too. U4 replaces the dead pin with
+`memory/LIVE.md`,
 `memory/ledger/*.md` and `memory/DECISIONS.md`.
 
 ### Rollout
@@ -334,7 +362,7 @@ merely red afterwards. That closes the "land it red and fix it next commit" esca
 | unit | work | reds a watched path? |
 |---|---|---|
 | U1+U2+U3 | kit 2.2 in, `gen-memory-tree.sh` out; the whole flatten; record merges; front matter; the eight link repairs; `LIVE.md` + `ledger/` generated; `memory/HYGIENE.md` and `memory/TEMPLATE-SPEC.md` replaced from the 2.2 templates; ledger to `archive/ledger/`; stub, both `.gitkeep` directories and the two F5 files deleted | **yes** — `memory-tree`, and U2 kills a `verify-paths` anchor |
-| U4 | `.gitattributes` pins; the `tools/gate-legs.json` leg name; `AGENTS.md` and `.claude/SESSION-KICKOFF.md` re-trued; `memory/README.md` and `memory/HYGIENE.md` re-trued | **yes** — `tools`, `scripts`, `AGENTS.md`, `memory-recall` |
+| U4 | `.gitattributes` pins incl. `memory/builds/*/README.md`; the `tools/gate-legs.json` leg name; `AGENTS.md` and `.claude/SESSION-KICKOFF.md` re-trued (the 8 dead routes AND the 4 orphaned ledger obligations); the provenance comment in `Analyze-SwydoReport.ps1` | **yes** — `tools`, `scripts`, `AGENTS.md`, `skill` |
 | U5 | `memory/DECISIONS.md` rows, including the `TREND-aGovernedCanon-2` superseding row; **two** backlog rows — one for the merged F3+F4 follow-up (memory-recall 1.0 → 1.1, then `DURABLE`, then arm 13-16), one for F6's inert merge driver | no |
 
 Two ratchets bite on U1+U2+U3 and U4, both re-measured on the 2.2 dry run and both unchanged:
@@ -346,8 +374,10 @@ Two ratchets bite on U1+U2+U3 and U4, both re-measured on the 2.2 dry run and bo
   because the pre-commit hook runs `manifest-check.sh --staged` on every commit.
 - `manifest-check.sh` **check 5** reds because watched pathspecs moved with no re-stamp. `watch` is
   `AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf`. Measured at
-  2.2 the first commit stages **17** files under `memory-tree` (the 8 replaced, the 9 new — one more
-  pair than at 1.6 — and the deleted `gen-memory-tree.sh`), and U4 stages four more watch entries.
+  2.2 the first commit stages **17** files under `memory-tree`, and U4 stages four more watch entries.
+  The breakdown is 7 modified + 9 added + 1 deleted, NOT 8 + 9 + 1: `.memory-tree.conf.example` is
+  byte-identical between 1.4 and 2.2 (verified with `cmp`), so copying it stages nothing. The total
+  the ratchet sees is right; rev-4's arithmetic behind it was not.
   Each of those two commits carries its own `last-audit` re-stamp bundled in, since the `--staged` leg
   accepts only a re-stamp in that same commit. `memory/` itself is not watched, so U5 needs no
   re-stamp.
@@ -367,18 +397,59 @@ Measured against kit 2.2 at `e7ec336`, not estimated. Kit, replaced wholesale fr
 two file shapes this flatten CREATES. It arrives with the kit but is inert until wired, and wiring it
 needs `lib/pyrun.sh` plus a `check-wiring.sh` newer than the one installed here. That is F6.
 
-`kit-dogfood-parity.test.sh` fails on a fresh install and is expected to: it byte-compares the kit's
-shipped `SPEC-TEMPLATE.template.md` against a render. `bash memory-tree/kit-dogfood-parity.test.sh
---render` then exits 0, and it does not modify `memory/TEMPLATE-SPEC.md`. Run it once in U1.
+**`kit-dogfood-parity.test.sh --render` is DESTRUCTIVE here and must never be run in this repo.**
+rev-4 said to run it once in U1 and was wrong in a way that would have silently undone this unit's
+main documentation fix. Its body is `norm "$live" > "$ship"`: it writes toward the KIT, overwriting
+`memory-tree/*.template.md` from the live `memory/*` copies. On a fresh install that reinstates
+swydee's 1.4 templates over the 2.2 ones — putting `## 10. Reuse audit` back OUTSIDE the fenced
+skeleton, the exact defect the fix below exists to remove — and then reports parity GREEN, because
+both sides hold the broken text. Nothing catches it: the leg is not in `tools/gate-legs.json` and
+check 12's canon is hardcoded in the engine.
 
-Tree: 15 folder moves, 6 file renames, 10 READMEs authored, 4 decision logs merged to 1, 4 backlogs
-resharded, **15** files deleted (13 plus the two F5 files), 1 shard relocated, 13 artifacts generated.
+Measured, not reasoned: this session's own U1 rehearsal ran `--render` in a clone where the live
+docs had ALREADY been replaced from 2.2, and still corrupted the kit —
+`memory-tree/SPEC-TEMPLATE.template.md` moved to md5 `a144b5e4…` against upstream's `44e8c85d…`.
+So no ordering makes it safe, and the fix is a deletion rather than a reordering.
+
+**The correct order, and it is load-bearing:** install the 2.2 kit, then copy
+`memory-tree/HYGIENE.template.md` → `memory/HYGIENE.md` and
+`memory-tree/SPEC-TEMPLATE.template.md` → `memory/TEMPLATE-SPEC.md` verbatim, and only then run
+plain `bash memory-tree/kit-dogfood-parity.test.sh`, which exits 0 reporting
+`shipped and installed docs agree (2 pairs)`. `--render` exists for the repo that AUTHORS the kit.
+This one copy-installs it.
+
+Tree: 15 folder moves, 6 file renames, **9** READMEs authored plus 1 already conformant, 4 decision
+logs merged to 1, 4 backlogs resharded, **14** files deleted, 1 shard relocated, 13 artifacts
+generated. The 14 enumerate exactly: 4 discipline `README.md` + 5 `TREE.md` (root plus one per
+discipline) + `project/IN-FLIGHT.md` + 2 `.gitkeep` + the 2 F5 files. rev-4's "15 (13 plus two)"
+carried a rev-1 miscount forward.
+
+Three tracked paths have NO row in §4 Migration and are handled here instead, because the table's
+"every path is named" claim is what a builder works to exhaustion: `memory/README.md` is REWRITTEN for
+the flat shape (it is repair #1 of the eight broken links), and `memory/HYGIENE.md` plus
+`memory/TEMPLATE-SPEC.md` are REPLACED verbatim from the 2.2 kit templates per the ordering rule
+above.
 
 Repo: `.gitattributes`, `tools/gate-legs.json` (the leg's display name says "12 checks"; 2.2 has
 **19**, of which 12 are active here and 7 gated off by F4 — so the honest rename is not simply "19"),
-`AGENTS.md` (8 ledger/journal references, including the §3 shard rule the product is retiring),
-`.claude/SESSION-KICKOFF.md` (the ledger pointer at `:143`, the stale `TREE.md`/check-9 sentence at
-`:260`, the units-index path at `:68`, and the `manifest-audit` block).
+`AGENTS.md`, `.claude/SESSION-KICKOFF.md`, and `skill/scripts/Analyze-SwydoReport.ps1`.
+
+**The governing-doc repair is wider than rev-4 scoped it, in two directions.** First, eight dead
+`memory/<discipline>/` ROUTES survive beyond the ledger references: `AGENTS.md:130` (the session-start
+reading order) and `AGENTS.md:167` — which MANDATES persisting every Tier-2 review to
+`memory/<discipline>/builds/<date>-<FAMILY>-<slug>/reviews/`, a path that stops existing — plus
+`.claude/SESSION-KICKOFF.md` at `:80`, `:81`, `:82`, `:84`, `:85` (the pointer map's five discipline
+cells) and `:118` (where new specs are written). Second, the ledger's PROTOCOL obligations survive
+with no successor at `AGENTS.md:49` ("add a ledger row"), `:57` ("ledger row updated"), `:81`
+(per-family high-water) and `:102` (the self-prune rule). AC11's grep finds none of these: its pattern
+has no `ledger` alternative and no `memory/<discipline>` alternative, so it matched 8 of the 14
+`ledger` lines and two of those 8 are false positives. AC11 is widened accordingly.
+
+`skill/scripts/Analyze-SwydoReport.ps1:459` carries an inline provenance citation to
+`memory/analysis/builds/2026-07-07-ANLZ-aCrossWidget`, which U2 moves. `AGENTS.md` §6 requires
+non-obvious rules to carry provenance, so the comment is repointed to `builds/aCrossWidget/` rather
+than dropped. Nothing gates it — it is a comment in a PowerShell file — which is why it is named here.
+This is the ONLY source-file edit in the unit and it changes no behaviour.
 
 `memory/HYGIENE.md` carries 11 references to the retiring machinery and is the copy of the kit's
 `HYGIENE.template.md`; replace it from the 2.2 template rather than hand-patching it, so the two do
@@ -429,9 +500,12 @@ gate reporting five findings against the current tree.
   the per-file forks 1.4 spawned. Measured gate runtime stays under a second either way.
 - a11y — N/A. No user interface.
 - i18n — N/A. No user-facing strings; `skill/SKILL.md` is untouched.
-- error / empty / loading states — the empty cases are the ones that bite: an empty `journal/`, two
-  empty grandfather registries, and two empty backlogs. Each is preserved as empty rather than
-  removed, so a later first row does not look like a new feature.
+- error / empty / loading states — the empty cases are the ones that bite: two empty grandfather
+  registries and two empty backlogs, each preserved as empty rather than removed, so a later first row
+  does not look like a new feature. **`journal/` is the exception and rev-4 wrongly listed it here**:
+  it is DELETED by §4, and kit 2.2's check 3 rejects it, so a builder who followed this bullet and
+  kept `project/journal/.gitkeep` would red check 3 and be unable to make the commit at all. Empty is
+  preserved where the container still has a future; `journal/` does not.
 - observability — the generated `LIVE.md` and `ledger/<month>.md` ARE the instrument, and AC5
   requires them to distinguish live from terminal builds rather than merely render.
 - risks (concurrency, data-loss, rollback hazards) — **data-loss is the live risk**, in one place: a
@@ -455,9 +529,11 @@ gate reporting five findings against the current tree.
   1 on check 3, which is why the three units are one commit.
 - **AC2** When `bash memory-tree/check-memory-hygiene.test.sh` is run after U1, it passes with at
   least the **120** assertions the rev-3 dry run reported (101 was the 1.6 figure), and `bash
-  memory-tree/check-memory-hygiene.sh --staged` exits 0. Additionally `bash
-  memory-tree/kit-dogfood-parity.test.sh` exits 0 — it fails on a fresh install until `--render` is
-  run once.
+  memory-tree/check-memory-hygiene.sh --staged` exits 0 **at the end of the U1+U2+U3 commit** — not
+  "after U1", which names no committable state, since check 3 is tree-wide and the kit-in/tree-unflat
+  intermediate is exit 1 by §4's own probe A. Additionally plain `bash
+  memory-tree/kit-dogfood-parity.test.sh` exits 0 with `shipped and installed docs agree (2 pairs)`
+  once the two live docs have been replaced from the 2.2 templates. **`--render` is never run.**
 - **AC3** When `git log --follow --find-renames` is run over `memory/archive/ledger/a.md`, it shows
   the rename from `memory/project/in-flight/a.md` with a 100% similarity index and no content change.
 - **AC4** When `git ls-files memory/project` is run after U3, it lists exactly `legacy-files.txt` and
@@ -476,7 +552,9 @@ gate reporting five findings against the current tree.
 - **AC7** When each of the **ten** build READMEs is read after U2, front matter opens at line 1 with
   the six required keys; the six grandfathered builds carry `status: CLOSED`; and `aPatientHarvest`,
   `aCandidTally`, `aUniformLattice` and `aFlattenedLedger` carry NO `status:` key. A build that
-  wrongly carries both is a named hard error, not a silent precedence.
+  wrongly carries both is a named hard error, not a silent precedence. Each README holds exactly ONE
+  `gen:build-index` marker pair — `grep -c 'gen:build-index' README.md` returns 2 for every build,
+  never 4 — and `aUniformLattice`'s and `aFlattenedLedger`'s hand-written bodies survive verbatim.
 - **AC8** When `bash scripts/manifest-check.sh` is run after U1+U2+U3 and again after U4, it exits 0 —
   proving the moved `verify-paths` anchor was repointed and each watched-path commit carried its own
   `last-audit` re-stamp. Both failures were reproduced at 2.2 before the repair: check 4 on the dead
@@ -485,17 +563,25 @@ gate reporting five findings against the current tree.
   --check` are run after U4, each exits 0. Re-measured at 2.2 over the flattened tree: selftest
   **21/21 checks passed**, `--check` reports the SKILL matches the conf. This holds despite the
   `DURABLE` population going 8 → 0, which is precisely why F3 exists — nothing reds.
-- **AC10** When `memory/LIVE.md` and `memory/ledger/2026-08.md` are deleted, restored with `git
-  checkout --`, and `python memory-tree/gen_build_index.py --write` is then run, `git status` reports
-  no modification to either — the `.gitattributes` fix from U4 verified by the exact procedure that
-  reproduced the defect.
-- **AC11** When `grep -rniE "in-?flight|journal|TREE\.md" AGENTS.md .claude/SESSION-KICKOFF.md
-  memory/README.md memory/HYGIENE.md` is run after U4, every surviving hit is listed in the commit
-  message with its reason. Baseline **re-measured at `57fe074d`: 8 · 2 · 2 · 11 — identical to
-  rev-1's first four**, so the two intervening commits touched none of them. rev-1's fifth path was
-  `memory/project/README.md` at baseline 2; F5 deletes that file, so its two hits are discharged by
-  the deletion and it leaves the grep list rather than being re-pointed. A zero-hit result on a file
-  whose baseline is 0 proves nothing and is not evidence of work.
+- **AC10** When **all 13 generated artifacts** — `memory/LIVE.md`, both `memory/ledger/*.md` and all
+  ten `memory/builds/*/README.md` — are deleted, restored with `git checkout --`, and `python
+  memory-tree/gen_build_index.py --write` is then run, `git status` reports no modification to any of
+  them. The `.gitattributes` fix from U4 verified by the exact procedure that reproduced the defect.
+  Widened at rev-5: pinning only the three non-README artifacts would leave ten files churning
+  invisibly, since `--check` normalises CRLF and stays green over exactly that.
+- **AC11** When `grep -rniE "in-?flight|journal|ledger|memory/<?discipline|memory/(extraction|analysis|trend|orchestration)/|TREE\.md" AGENTS.md .claude/SESSION-KICKOFF.md memory/README.md memory/HYGIENE.md`
+  is run after U4, every surviving hit is listed in the commit message with its reason.
+  **Widened at rev-5, because rev-4's pattern was green-by-absence**: it had no `ledger` alternative
+  and no `memory/<discipline>` alternative, so it matched 8 of `AGENTS.md`'s 14 `ledger` lines — two
+  of those 8 being false positives — and none of the eight dead discipline routes. A pattern that
+  cannot match the thing being retired is not evidence that it was retired. rev-1's fifth path,
+  `memory/project/README.md`, leaves the list because F5 deletes it; its hits are discharged by the
+  deletion. A zero-hit result on a file whose baseline is 0 proves nothing and is not evidence of work.
+- **AC15** When `grep -rn "memory/\(extraction\|analysis\|trend\|orchestration\)/" skill/ tests/ tools/ scripts/`
+  is run after U4, it returns nothing from `skill/`. Pins the one source-file edit
+  (`Analyze-SwydoReport.ps1:459`'s provenance citation), which no gate covers because it is a comment.
+  A pre-existing `tools/check-wiring.sh:3` citation to `memory/tooling/builds/…` is upstream kit text
+  naming the GOV repo's own tree, not this one, and is deliberately left alone.
 - **AC14** When `bash memory-tree/check-verdict-epoch.sh` is NOT present in `tools/gate-legs.json`
   after U4, that absence is deliberate per §7's third coupling. Pinned as an AC because the leg
   arrives with the kit and a later reader will otherwise assume it was forgotten: measured here it
@@ -737,6 +823,42 @@ way; it is written down so that a later reader does not cite F2 as ratified when
   **F2 is NOT ratified** and §8 now says so. It was walked through and left standing at minimum churn
   without challenge. That is acceptance by default, and rounding it up to a ratification would put a
   decision on the record the owner never made.
+- rev-5 · 2026-08-10 · **Tier-2 review folded.** 28 raw findings from five primed lenses, 7 refuted by
+  a batched skeptic pass, **14 confirmed** and folded here. Verdict SAFE AFTER EDITS; the design
+  needed no re-specification. Report:
+  [2026-08-10-review-aFlattenedLedger-1](../reviews/2026-08-10-review-aFlattenedLedger-1.md).
+
+  **The blocker was a destructive instruction this spec itself gave.** rev-4 §4 told the builder to
+  run `kit-dogfood-parity.test.sh --render` once in U1. That command writes toward the KIT
+  (`norm "$live" > "$ship"`), so on a fresh install it overwrites the just-installed 2.2 templates
+  with swydee's 1.4 copies — reinstating the §10-outside-the-fence defect this unit exists to fix —
+  and then reports parity GREEN over the corruption. Not theoretical: this session's own U1 rehearsal
+  ran it and moved `memory-tree/SPEC-TEMPLATE.template.md` off upstream's md5, in a clone where the
+  live docs had ALREADY been replaced. No ordering is safe; the step is deleted, not reordered.
+
+  Two more that no gate would have caught. `builds/aFlattenedLedger/README.md` already carries front
+  matter AND a marker pair, so S5's "author for all ten" would have produced a second pair and made
+  `gen_build_index.py` raise rather than render — and front matter is now specified as PREPENDED,
+  because overwriting would destroy two hand-written bodies. And
+  `skill/scripts/Analyze-SwydoReport.ps1:459` carries a provenance citation into a folder U2 moves,
+  which was in no repair list; AC15 now pins it.
+
+  The rest are corrections to prose that would each have cost a builder time or shipped a quietly
+  false document: the ledger over-claimed as the front-matter source for ten builds when it covers
+  three; `.gitattributes` pinning 3 of 13 generated artifacts; AC2 requiring a green `--staged` at a
+  state §4 twice measured as red; §5 promising to preserve a `journal/` that §4 deletes; eight dead
+  `memory/<discipline>/` routes and four orphaned ledger obligations in the governing docs, none of
+  which AC11's old pattern could match; three tracked paths with no migration row; `HYGIENE.md`
+  assigned to two units with contradictory treatments; and five off-by-N counts — post-flatten paths
+  54 → **52** (delta −4 → **−6**, the rev-4 F5 fallout this session's rehearsal caught independently),
+  files deleted 15 → **14**, and the 17-file kit breakdown restated as 7 modified + 9 added + 1
+  deleted, since `.memory-tree.conf.example` is byte-identical between 1.4 and 2.2.
+
+  §10's recurring-bug-classes pass ran seven classes. Two hits on green-by-absence (the `--render`
+  parity and AC11's pattern), five on off-by-one, one ordering hazard. Auto-took, silent truncation,
+  rename/similarity loss and link rot came back CLEAN — the last of them additionally covered by a
+  compensating link verifier this session added for check 2's `DECISIONS.md` exemption, which resolves
+  31 links across the merged log, the backlog shards and the root index with 0 broken.
 
 ## 10. Reuse audit
 
