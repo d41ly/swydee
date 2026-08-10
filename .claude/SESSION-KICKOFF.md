@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-10T13:54:52+03:00 @ 6a1c4dd2ae052a1c8db06e857c1a5f0ab078a3a9
+last-audit: 2026-08-10T14:36:35+03:00 @ cee59f475282ef907119181844d2d2af6ba86e48
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -106,7 +106,7 @@ ALL suites re-run green on every unit, not just the touched one (green-count con
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
 1435 assertions across the 8 suites after ANLZ-aUniformLattice-9 --
 the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 327,
-Analyze 701, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
+Analyze 731, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
 Was 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +
 ANLZ-aCandidTally-1, 1276 after
 ANLZ-aUniformLattice-8, and 1064 at adoption.
