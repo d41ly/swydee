@@ -36,24 +36,35 @@ carry the FAMILY qualifier. The mixed naming is a decision, not an accident.
 
 ## Status
 
-**SPECCED at rev-3 (2026-08-10) — unparked.** The rev-2 hold was "wait for kit 1.7 on
-coding-governance `main`". `main` is now at `e7ec336` carrying kit **2.2**, four minor versions past
-the hold, so the prereq is discharged and overshot. Every rev-2 measurement was re-taken against 2.2
-in fresh clones of `57fe074d`, and §4 Rollout's re-measure table is now a results table.
+**SPECCED at rev-4 (2026-08-10) — unparked, forks closed, ready to build.** The rev-2 hold was "wait
+for kit 1.7 on coding-governance `main`". `main` is now at `e7ec336` carrying kit **2.2**, four minor
+versions past the hold, so the prereq is discharged and overshot. Every rev-2 measurement was re-taken
+against 2.2 in fresh clones of `57fe074d`, and §4 Rollout's re-measure table is now a results table.
 
-F1 is **RESOLVED (owner, 2026-08-09): retire the ledger now, in U3.** The action stands; its rationale
-moved. 2.2's scaffolder has no ledger at all and check 3 rejects one, so U3 is now in step with the
-kit rather than one step ahead — and no longer optional. F2, F3 and F4 stand at the spec's
-recommendations. **F5 and F6 are new at rev-3 and want a decision before U1.**
+Forks: F1 ratified at rev-2 (retire the ledger now — the action stands, its rationale moved, since
+2.2's scaffolder has no ledger and check 3 rejects one, so U3 is in step with the kit rather than one
+step ahead, and no longer optional). F3, F4, F5 and F6 ratified 2026-08-10, each at its
+recommendation: the F3+F4 follow-up merges into ONE unit behind a memory-recall 1.0 → 1.1 re-pull;
+F5 **deletes** `project/README.md` and `project/MEMORY.md` rather than archiving them; F6 takes
+`merge-rows.py` inert with a backlog row. **F2 is not formally ratified** — it stands at minimum
+churn, unchallenged, which §8 records as acceptance by default rather than a decision.
 
 Three things rev-2 did not predict, worth knowing before opening the spec:
 
 - **The rollout is three commits, not four.** 2.2's check 3 rejects the ledger paths outright, so a
   commit that flattens but leaves them reds. U1, U2 and U3 are now one commit.
 - **`project/MEMORY.md` and `project/README.md` lose their home** — check 3 admits only `*.txt`
-  waiver registries under `project/` now. That reverses a §4 Migration row. It is F5.
+  waiver registries under `project/` now. That reverses a §4 Migration row. F5 deletes both: one is
+  an empty index, the other describes machinery this unit removes, and nothing links to either.
 - **`merge-rows.py` arrives with the kit**, a row-keyed merge driver for exactly the `DECISIONS.md`
-  and `backlog/*.md` shapes this flatten creates, but wiring it needs files this repo lacks. It is F6.
+  and `backlog/*.md` shapes this flatten creates, but wiring it needs files this repo lacks. F6 takes
+  it inert with a backlog row.
+
+Two more found by an adversarial read of the kit source rather than the dry run, both verified:
+`memory/TEMPLATE-SPEC.md` puts `## 10. Reuse audit` OUTSIDE its fenced skeleton where 2.2's template
+puts it inside, so copying the skeleton omits a section check 12 requires — U1 replaces the file. And
+arming checks 13-16 needs `extract.grammar_for(root)`, which the installed memory-recall does not
+export, so that follow-up is a second kit upgrade rather than a config edit.
 
 Changed by measurement: the self-test is **120 assertions** (was 101), the generator writes **13
 artifacts** (was 12), and the tree is **58 → 54 paths** (was 56 → 52 — the same −4 delta, re-based

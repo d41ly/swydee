@@ -1,6 +1,6 @@
 # ORCH-aFlattenedLedger-1 — flatten the memory tree to kit 2.2 and retire the in-flight ledger
 
-**Status:** SPECCED · rev-3 · 2026-08-10 · node a · Tier-2 · base 57fe074d · streams orchestration · ratified 2026-08-09
+**Status:** SPECCED · rev-4 · 2026-08-10 · node a · Tier-2 · base 57fe074d · streams orchestration · ratified 2026-08-09, all forks closed 2026-08-10
 
 ## 1. Goal
 
@@ -212,16 +212,25 @@ path is named.
 | `project/in-flight/a.md` | U3 | `archive/ledger/a.md`, byte-identical `git mv` | **sole carrier** of worktree names, the four-branch history of `aUniformLattice`, and the per-family seq high-water marks |
 | `project/IN-FLIGHT.md` | U3 | delete; its protocol prose has no successor | its only content is the vocabulary, which retires with the ledger |
 | `project/in-flight/.gitkeep`, `project/journal/.gitkeep` | U3 | delete with their directories | 0 B; `journal/` never held a journal |
-| `project/README.md`, `project/MEMORY.md` | U3 | `archive/project-README.md`, `archive/project-MEMORY.md` — see F5 | **REVERSED at 2.2.** rev-1 had these staying |
+| `project/README.md`, `project/MEMORY.md` | U3 | **delete** — F5, ratified 2026-08-10 | **REVERSED at 2.2.** rev-1 had these staying. Both are empty scaffolding: `MEMORY.md` is 48 B holding zero notes, and two of `README.md`'s three bullets describe machinery THIS unit deletes |
 | `project/legacy-files.txt`, `project/curation-debt.txt` | — | **stay** | still admitted; both are empty and remain the grandfather hooks |
 
 **Check 3 evicts two files at 2.2 that 1.6 admitted, and this is the one migration row the retarget
 reverses.** 2.2's `HYGIENE.template.md` states the rule directly: `project/` holds "the gate's own
 waiver registries (`*.txt`, five of them) and nothing else". Measured on the flattened tree with the
 2.2 engine, check 3 fails naming exactly `memory/project/MEMORY.md` and `memory/project/README.md`;
-the two `.txt` registries are not named. Relocating both under `archive/` — whose charter is "rotated
-indexes + legacy material a build can't claim" — takes the gate to **exit 0, no output**. The
-disposition is a decision rather than a mechanical consequence, so it is F5.
+the two `.txt` registries are not named. Draining both takes the gate to **exit 0, no output** — the
+dry run proved that by relocating them, and a deletion satisfies check 3 identically, because the
+check tests what REMAINS rather than where anything went.
+
+**F5 ratified them as DELETIONS on 2026-08-10**, after the files were read rather than counted.
+`MEMORY.md` is 48 bytes — an `# Memory Index` heading and a `> One line per durable note.`
+blockquote, holding zero notes. `README.md` is 241 bytes describing three things: `MEMORY.md`, the
+in-flight ledger, and `journal/` — and this unit deletes the latter two, so two of its three bullets
+are false the moment it lands. Nothing in the repo links to either file. `archive/`'s charter is
+"legacy material a build can't claim", and an empty index and a description of removed machinery are
+neither. Git keeps both recoverable, which is exactly why a deletion is cheap here and a relocation
+would have bought nothing but two files nobody will read.
 
 The same passage names five registries where this repo has two (`corpus-path-unresolved.txt`,
 `id-orphan-waiver.txt` and `unarmed-branches.txt` are the absentees). Their absence is NOT a failure:
@@ -324,9 +333,9 @@ merely red afterwards. That closes the "land it red and fix it next commit" esca
 
 | unit | work | reds a watched path? |
 |---|---|---|
-| U1+U2+U3 | kit 2.2 in, `gen-memory-tree.sh` out; the whole flatten; record merges; front matter; the eight link repairs; `LIVE.md` + `ledger/` generated; ledger to `archive/ledger/`; stub and both `.gitkeep` directories deleted; the two F5 relocations | **yes** — `memory-tree`, and U2 kills a `verify-paths` anchor |
+| U1+U2+U3 | kit 2.2 in, `gen-memory-tree.sh` out; the whole flatten; record merges; front matter; the eight link repairs; `LIVE.md` + `ledger/` generated; `memory/HYGIENE.md` and `memory/TEMPLATE-SPEC.md` replaced from the 2.2 templates; ledger to `archive/ledger/`; stub, both `.gitkeep` directories and the two F5 files deleted | **yes** — `memory-tree`, and U2 kills a `verify-paths` anchor |
 | U4 | `.gitattributes` pins; the `tools/gate-legs.json` leg name; `AGENTS.md` and `.claude/SESSION-KICKOFF.md` re-trued; `memory/README.md` and `memory/HYGIENE.md` re-trued | **yes** — `tools`, `scripts`, `AGENTS.md`, `memory-recall` |
-| U5 | `memory/DECISIONS.md` rows, including the `TREND-aGovernedCanon-2` superseding row; the §8 F3 backlog row | no |
+| U5 | `memory/DECISIONS.md` rows, including the `TREND-aGovernedCanon-2` superseding row; **two** backlog rows — one for the merged F3+F4 follow-up (memory-recall 1.0 → 1.1, then `DURABLE`, then arm 13-16), one for F6's inert merge driver | no |
 
 Two ratchets bite on U1+U2+U3 and U4, both re-measured on the 2.2 dry run and both unchanged:
 
@@ -363,8 +372,7 @@ shipped `SPEC-TEMPLATE.template.md` against a render. `bash memory-tree/kit-dogf
 --render` then exits 0, and it does not modify `memory/TEMPLATE-SPEC.md`. Run it once in U1.
 
 Tree: 15 folder moves, 6 file renames, 10 READMEs authored, 4 decision logs merged to 1, 4 backlogs
-resharded, 13 files deleted, 1 shard relocated, 2 files relocated to `archive/` (F5), 13 artifacts
-generated.
+resharded, **15** files deleted (13 plus the two F5 files), 1 shard relocated, 13 artifacts generated.
 
 Repo: `.gitattributes`, `tools/gate-legs.json` (the leg's display name says "12 checks"; 2.2 has
 **19**, of which 12 are active here and 7 gated off by F4 — so the honest rename is not simply "19"),
@@ -453,9 +461,10 @@ gate reporting five findings against the current tree.
 - **AC3** When `git log --follow --find-renames` is run over `memory/archive/ledger/a.md`, it shows
   the rename from `memory/project/in-flight/a.md` with a 100% similarity index and no content change.
 - **AC4** When `git ls-files memory/project` is run after U3, it lists exactly `legacy-files.txt` and
-  `curation-debt.txt`, and nothing else. **Changed at rev-3:** `README.md` and `MEMORY.md` are no
-  longer admitted by check 3 and move to `archive/` per F5; an AC4 that still expected them would have
-  contradicted AC1.
+  `curation-debt.txt`, and nothing else. **Changed at rev-3, settled at rev-4:** `README.md` and
+  `MEMORY.md` are no longer admitted by check 3 and are DELETED per F5; an AC4 that still expected
+  them would have contradicted AC1. `git ls-files memory/archive` lists exactly `ledger/a.md` —
+  the relocation is the shard's alone.
 - **AC5** When `python memory-tree/gen_build_index.py --check` is run after U1+U2, it exits 0 and
   reports **13** artifacts (10 build READMEs + `LIVE.md` + 2 month shards; 12 was the nine-build
   figure); `memory/LIVE.md` lists `aCandidTally` and `aUniformLattice` as INPROGRESS and
@@ -481,11 +490,12 @@ gate reporting five findings against the current tree.
   no modification to either — the `.gitattributes` fix from U4 verified by the exact procedure that
   reproduced the defect.
 - **AC11** When `grep -rniE "in-?flight|journal|TREE\.md" AGENTS.md .claude/SESSION-KICKOFF.md
-  memory/README.md memory/HYGIENE.md archive/project-README.md` is run after U4, every surviving hit
-  is listed in the commit message with its reason. Baseline **re-measured at `57fe074d`: 8 · 2 · 2 ·
-  11 · 2 — identical to rev-1's**, so the two intervening commits touched none of these. The fifth
-  path is renamed because F5 moves that file. A zero-hit result on a file whose baseline is 0 proves
-  nothing and is not evidence of work.
+  memory/README.md memory/HYGIENE.md` is run after U4, every surviving hit is listed in the commit
+  message with its reason. Baseline **re-measured at `57fe074d`: 8 · 2 · 2 · 11 — identical to
+  rev-1's first four**, so the two intervening commits touched none of them. rev-1's fifth path was
+  `memory/project/README.md` at baseline 2; F5 deletes that file, so its two hits are discharged by
+  the deletion and it leaves the grep list rather than being re-pointed. A zero-hit result on a file
+  whose baseline is 0 proves nothing and is not evidence of work.
 - **AC14** When `bash memory-tree/check-verdict-epoch.sh` is NOT present in `tools/gate-legs.json`
   after U4, that absence is deliberate per §7's third coupling. Pinned as an AC because the leg
   arrives with the kit and a later reader will otherwise assume it was forgotten: measured here it
@@ -563,6 +573,12 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   unrelated edit complicates the next three-way merge. **Recommendation: record it as an OPEN
   `ORCH-aFlattenedLedger-2` backlog row in U5**, naming the measured 8 → 0 and the one consumer
   (`bench.py --sets spine`), and fix it in its own unit alongside the upstream re-pull.
+  **RESOLVED (owner, 2026-08-10): backlog row in U5, and the follow-up is ONE unit shared with F4.**
+  rev-3 established that F4's follow-up needs the same memory-recall 1.0 → 1.1 re-pull, so the two
+  forks share a prerequisite and land together: upgrade the kit, fix `DURABLE` against the flat shape,
+  then measure and arm. One review boundary, and the pin measurements are taken against a corpus that
+  by then exists. The row must still record the measured 8 → 0, so the regression is not rediscovered
+  later as a mystery.
 - **F4 — should this unit enable hygiene checks 13-19?** §3 puts them out of scope because
   `corpus_ids.py`'s three pins must be measured against the post-flatten corpus, which does not exist
   until U2 lands, and `gotchas.py` needs a catalogue this repo has never had. `corpus_ids.py
@@ -583,6 +599,13 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   every era, so a bare `U6` matches no branch and can never be read as a definition, a citation or an
   orphan. The second half of that is read from the regex rather than executed, since arming it is
   blocked by the `grammar_for` gap above.
+  **RESOLVED (owner, 2026-08-10): out of scope here, and the follow-up merges with F3's into ONE
+  unit.** The raised cost strengthens rather than weakens the original recommendation — a fork whose
+  follow-up needs a second kit upgrade is plainly not something to bundle into a restructure. The
+  shared unit's order is fixed by the dependency: memory-recall 1.0 → 1.1 first, then `DURABLE`, then
+  `corpus_ids.py --measure` against the flattened corpus, then arm. U5's backlog row names the
+  `grammar_for` prerequisite explicitly, so a later session does not re-derive why a pin edit alone
+  fails.
 - **F5 — NEW at rev-3. Where do `project/README.md` and `project/MEMORY.md` go?** Kit 2.2's check 3
   admits only `*.txt` waiver registries under `project/`, so rev-1's "they stay" is no longer
   available and doing nothing means a red gate. Three exits: delete both; relocate both under
@@ -593,6 +616,18 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   material a build can't claim", the relocation is what the rev-3 dry run measured to exit 0, and
   deleting a stale README is a judgement better made when someone reads it than mid-restructure.
   Deleting instead is defensible and costs one line of U3; it is the owner's call, not the gate's.
+  **That recommendation was WITHDRAWN before it reached the owner, and the reason is worth keeping.**
+  It rested on `MEMORY.md` being "the durable memory-note index … content, not machinery" — asserted
+  from the filename, never opened. Measured: `MEMORY.md` is **48 bytes**, an `# Memory Index` heading
+  and a `> One line per durable note.` blockquote, holding **zero** notes. `README.md` is 241 bytes
+  whose three bullets are `MEMORY.md`, the in-flight ledger and `journal/` — this unit deletes the
+  latter two. `grep -rn` across every tracked `.md` finds **no inbound link** to either. So the
+  premise was wrong: there is no content to preserve, and `archive/` would gain an empty index plus a
+  description of things that no longer exist.
+  **RESOLVED (owner, 2026-08-10): DELETE both.** Check 3 is satisfied identically either way — it
+  tests what remains, not where anything went — so the gate does not choose here and the owner did.
+  Git keeps both blobs reachable, which is why the reversible option is the deletion rather than the
+  relocation.
 - **F6 — NEW at rev-3. Wire the row-keyed merge driver, or take the kit file inert?** 2.2 ships
   `merge-rows.py`, a three-way merge driver keyed on id rows, whose declared targets are
   `memory/DECISIONS.md` and `memory/backlog/*.md` — both created BY this flatten. Wiring it needs
@@ -605,6 +640,18 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   out of scope for this unit, backlog row in U5**, wired alongside the `check-wiring.sh` upgrade in
   the same follow-up that handles the other drifted engine files. Bundling it here adds a second
   kit's wiring to a restructure whose main risk is already a mis-repointed link.
+  **RESOLVED (owner, 2026-08-10): copy the file in with the kit, leave it inert, backlog row in U5.**
+  The row must record two things a later session cannot re-derive cheaply: that the inertness is a
+  decision rather than an oversight, and the two prerequisites above. It must also carry the
+  marker-free failure mode, because that is the reason the row exists at all rather than the driver
+  simply being dropped.
+
+**Fork state, stated exactly rather than rounded up.** F1 was owner-ratified at rev-2. F3, F4, F5 and
+F6 were owner-ratified on 2026-08-10, each at its stated recommendation. **F2 has never been
+explicitly ratified** — it was walked through on 2026-08-10 and left standing at its recommendation
+(minimum churn) without challenge, which is acceptance by default rather than a decision on the
+record. Nothing turns on the difference today, because the recommendation is what U2 builds either
+way; it is written down so that a later reader does not cite F2 as ratified when it is not.
 
 ## 9. Revision log
 
@@ -666,6 +713,30 @@ No new leg. Three couplings a builder will otherwise discover the hard way:
   (migration, two atomicity probes, one separability probe) and a source read of the 2.2 kit run as a
   bounded five-lens fan-out plus synthesis. Where the two disagreed the clone won, and every claim
   imported from the read was re-verified against the files before it was written down.
+- rev-4 · 2026-08-10 · **forks closed, no new measurement.** The owner ratified F3, F4, F5 and F6 in
+  one pass, each at its stated recommendation. Nothing measured changed; this revision is decisions
+  and their consequences only.
+
+  **F5 → delete both, not relocate.** rev-3 recommended relocating `project/README.md` and
+  `project/MEMORY.md` to `archive/`. Reading them reversed that recommendation before it was put to
+  the owner: `MEMORY.md` is 48 B holding zero notes, `README.md` is 241 B of which two of three
+  bullets describe machinery this unit removes, and nothing links to either. Check 3 is satisfied
+  identically by a deletion, since it tests what remains. Consequences threaded through: the §4
+  Migration row, the U1+U2+U3 work list, AC4 (which now also pins `archive/` to the shard alone), and
+  AC11 — whose fifth grep target was that README, so the path leaves the list and its baseline drops
+  from `8 · 2 · 2 · 11 · 2` to `8 · 2 · 2 · 11`. Files deleted goes 13 → 15.
+
+  **F3 + F4 → one shared follow-up unit.** rev-3 found both need the memory-recall 1.0 → 1.1 re-pull
+  for `grammar_for`, so they land together in a fixed order: re-pull, fix `DURABLE`, measure pins
+  against the by-then-existing flat corpus, arm 13-16. U5 files one row for the pair.
+
+  **F6 → inert, with a row.** `merge-rows.py` is copied in with the kit and wired by nobody; the row
+  records that this is a decision, names the two missing prerequisites, and carries the marker-free
+  failure mode so the row's purpose survives its author. U5 now files two backlog rows, not one.
+
+  **F2 is NOT ratified** and §8 now says so. It was walked through and left standing at minimum churn
+  without challenge. That is acceptance by default, and rounding it up to a ratification would put a
+  decision on the record the owner never made.
 
 ## 10. Reuse audit
 
