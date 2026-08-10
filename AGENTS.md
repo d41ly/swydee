@@ -23,7 +23,7 @@ swydee-specific bullets; the marker below is what the re-pull and the kickoff en
 > Wired by `tools/agent-instructions/` and gated by its `--check` leg.
 >
 > swydee runs **one node on one machine**, so the multi-node machinery below (node registry, stream
-> ownership, the sharded ledger, slug disjointness) is largely degenerate today. It is kept rather
+> ownership, slug disjointness) is largely degenerate today. It is kept rather
 > than deleted because it is exactly what stops a second machine or a parallel session from
 > colliding, and adopting it retroactively after the first collision is the expensive order.
 
@@ -44,9 +44,9 @@ Keep units small: one stream/owner, no cross-stream contract change, reviewable 
 
 **Definition of Ready — run before touching code:**
 - Sync: `fetch` + fast-forward local `main` (another node may be ahead); recreate/repair your worktree if needed (§3).
-- Locate: read your stream's decision log + backlog (§6) and the in-flight ledger (§3); confirm your node tag (§2).
+- Locate: read the master decision index + the family backlog (§6) and the GENERATED work-state index `memory/LIVE.md` (§3); confirm your node tag (§2).
 - Scope: clear acceptance criteria, one stream, small, gates named — if you can't state those, split or clarify first.
-- Reserve: at your session's first work-unit, mint + grep-check a session slug (§2) and add a ledger row (§3).
+- Reserve: at your session's first work-unit, mint + grep-check a session slug (§2) and open the build folder whose README front matter carries it (§3).
 - Large new feature (a Tier-2 change): the DoR *is* a design pass — a written spec (goal · scope · non-goals · acceptance) + a bounded production-readiness menu (best-practice implementation, the extra tools it needs, and the cross-cutting concerns: security · perf/scale · a11y · i18n · error/empty/loading states · observability · testing/gates · migration/rollback · `skill/SKILL.md` docs). Spec shape: the memory-kit `TEMPLATE-SPEC.md` (check 12).
 - Surface that menu and **get scope approval BEFORE building** (a menu to select from, not scope-creep licence); record the agreed spec per §6.
 
@@ -54,13 +54,13 @@ Keep units small: one stream/owner, no cross-stream contract change, reviewable 
 - Gates green (§7); the change verified by a check that exercises it (§8), not asserted.
 - Every confirmed finding left-shifted: a regression gate, or a §10 checklist entry if its class can't be gated (§7).
 - User-facing change → its `skill/SKILL.md` page created/updated (§5).
-- Memory (non-derivable only), decision log/backlog, and ledger row updated — **committed before the push and the wrap-up message** (§16).
+- Memory (non-derivable only), decision log/backlog, and the build's front matter + spec status updated, then `gen_build_index.py --write` re-run — **committed before the push and the wrap-up message** (§16).
 - Kickoff manifest (when the project keeps one) updated if this unit changed what it front-loads — a gate command, entrypoint, governing doc, layout/branch convention, a trap hit, a doc/memory claim found stale, or a fact re-derived that it should have front-loaded — re-stamp `last-audit` with a delta line in the commit message; no delta → no touch.
 
 **Landing — merge protocol:**
 - Land on local `main` first, verify, then push; the merge to shared `main` and the push each need an explicit ask (§8).
 - After each merge run a diff-scoped gate (a conflict-free merge is not a passing merge); the FULL bar runs ONCE, at the push boundary.
-- Reconcile shared mutable files (backlogs, indexes) additively, never pick-a-side; diff the merge against BOTH parents (the "auto-took" class, §10). The per-node ledger needs no reconcile — single writer (§3).
+- Reconcile shared mutable files (backlogs, indexes) additively, never pick-a-side; diff the merge against BOTH parents (the "auto-took" class, §10). `memory/LIVE.md` and `memory/ledger/*.md` need no reconcile — they are GENERATED; re-render them instead (§3).
 - Kickoff-manifest exception: it reconciles additively EXCEPT its `last-audit` line — resolve a stamp conflict either way provisionally, complete the merge, then re-verify §B against the merged tree and re-stamp in a follow-up commit that supersedes both sides (post-merge HEAD on the default branch, the merge-base otherwise; a commit can't embed its own sha); the same post-merge fresh audit closes any merge that brought in watch-touching commits.
 - Land risky behavior dark: Tier-2 ships behind a default-OFF flag or as inert defaulted data, flipped on only after in-place verification — merges without endangering other nodes, reverts cleanly.
 - Migrations are reversible — test up/down/up.
@@ -78,16 +78,16 @@ Keep units small: one stream/owner, no cross-stream contract change, reviewable 
 - New-node onboarding: clone to the pinned primary tree · claim the tag (same commit) · seed local memory from the in-repo mirror (§5) · recreate stream worktrees (they never sync, §3).
 - Every new tracked id (decisions, backlog, tickets — anything `FAMILY-NNN`-shaped): `FAMILY-<slug>-<seq>`, owned by the minting session so nothing it numbers can be contested.
 - Slug = your node tag + a fresh CamelCase adjective-noun (`dAvengingTrousers`), `[A-Za-z]` only, minted ONCE per session; the tag's first letter makes cross-node slugs disjoint by construction.
-- `<seq>` = plain 1-up per (session, family), unpadded; ids are labels, not ranks; next = numeric max of YOUR ids in that family + 1; record per-family high-water in your ledger row (uncommitted ids are invisible to grep).
-- Before committing to a slug: (1) all-time grep the governance-docs tree (logs, backlogs, journals, ledger) for `[A-Z]+-<slug>-[0-9]` — re-roll on ANY hit (a pruned ledger row still owns its ids); (2) scan live rows across all node ledger files — re-roll on a clash.
+- `<seq>` = plain 1-up per (session, family), unpadded; ids are labels, not ranks; next = numeric max of YOUR ids in that family + 1; record per-family high-water in the build README's `ids:` front matter (uncommitted ids are invisible to grep).
+- Before committing to a slug: (1) all-time grep the whole `memory/` tree (the decision index, backlogs, build folders, `archive/`) for `[A-Z]+-<slug>-[0-9]` — re-roll on ANY hit (an archived ledger row still owns its ids); (2) scan `memory/LIVE.md` and every `memory/ledger/<month>.md` — re-roll on a clash.
 - No reserve-above-a-marker, no shared counter, no renumber-on-merge — the slug is the guarantee.
 - A session = one continuous effort under one slug (several work-units/families, one `<seq>` each); a resumed/summarized session keeps its slug (grepping only your own prior ids is not a collision).
 - Fan-out children (sub-agents/orchestrated workers) never mint ids — the orchestrator does; a child that must mint takes its own registered slug.
 - Residual tie-break (sub-1%): the later-to-merge re-mints its slug for all UNMERGED ids; an already-merged id wins.
 - Legacy id eras are FROZEN: cite verbatim, never renumber, never mint in a pre-rule format, never bump a residual "next free id" marker.
-- Shorthand (family+seq, slug elided) is sanctioned ONLY in session prose and ledger seq cells — never where ids are the permanent record (it's shape-identical to frozen legacy ids).
+- Shorthand (family+seq, slug elided) is sanctioned ONLY in session prose — never where ids are the permanent record (it's shape-identical to frozen legacy ids).
 
-## §3 — Parallel work: streams, worktrees, trunk, ledger
+## §3 — Parallel work: streams, worktrees, trunk, work-state index
 
 - Own streams, not files: `one node owns every stream, so this is a sequencing rule rather than a merge-disjointness one - finish and land a unit before opening the next, and never run two units that touch `Analyze-SwydoReport.ps1` at once`. Overlap on shared files (API clients, config, indexes) breeds collisions and integration reviews — minimize it.
 - Trunk-based: merge small and often to LOCAL `main`; long-lived branches mean bigger reconciles and review surface.
@@ -97,9 +97,9 @@ Keep units small: one stream/owner, no cross-stream contract change, reviewable 
 - No bootstrap script (`none`) and none needed - swydee has no dependency install step, just PowerShell 5.1 against the stock .NET Framework. A worktree is one command: `git worktree add .claude/worktrees/<slug> -b branch/<slug>` off a fast-forwarded `main`. That path is excluded from tracking, so a worktree never shows up as untracked noise.
 - Worktree lifecycle: enumerate with `git worktree list` (never assume the set); worktrees do NOT sync across machines (absolute links — recreate per machine); relocate with `worktree move` + `repair`, never `mv`.
 - Commit the governing doc to `main` so it propagates — it only exists in checkouts where it's committed.
-- Shard the in-flight ledger per node — one file per node tag behind a thin pointer (like the per-node journals, §5), NEVER one shared table: each node writes ONLY its own file, so the ledger is conflict-free by construction (disjoint-by-tag, like the slug) and no merge touches it. A shared ledger is the shared-mutable index §5 forbids — it forces a conflict on every land and additive resolution leaves stale rows.
-- Row shape `| node | slug | branch/worktree | streams | seq high-water | status |`; status ∈ `{in-flight | merged:<sha>}` + at most one short clause; narrative belongs in the journal. Read ALL node files for the who's-touching-what / slug-collision scan (§2); write only your own.
-- Self-prune on session start: after fast-forwarding `main`, delete your OWN `merged:<sha>` rows whose sha is an ancestor of `main` (`git merge-base --is-ancestor <sha> main`) — they're derivable from history; never touch another node's file.
+- **Work state is GENERATED, never authored** (memory-tree kit 2.2 retired the authored per-node ledger; ORCH-aFlattenedLedger-1). `memory-tree/gen_build_index.py --write` renders `memory/LIVE.md` and `memory/ledger/<month>.md` from each build README's front matter plus every spec's `**Status:**` header. Nothing about work state is written by hand, so nothing about it can rot, and no merge contends over it. The retired shard is kept at `memory/archive/ledger/a.md` as the sole record of this repo's worktree names, branch history and seq high-water marks up to 2026-08-09.
+- Front matter shape on `memory/builds/<slug>/README.md`: `slug node opened streams roster ids` are ALL required, plus `status` only when no spec under that build carries a parseable `**Status:**` header — an authored `status` alongside a derivable one is a HARD ERROR, two answers to one question. A build with no front matter is invisible to the index: it does not fail loudly, it simply does not appear.
+- No self-prune step exists any more: `LIVE.md` drops a build the moment every one of its units reaches a terminal status, because it is re-rendered rather than edited. Re-run `gen_build_index.py --write` after any status change and commit the result.
 - Contract-first for cross-cutting changes: a schema/wire-format/enum two nodes depend on lands as a contract + gate before either builds on it.
 - Landings are `--no-ff` merges with a descriptive message — one visible, atomic, cleanly revertable integration unit.
 - Every agent commit ends with the mandated attribution trailer: ``Co-Authored-By: Claude <model-name> <noreply@anthropic.com>` - the harness supplies the model name and it CHANGES between sessions (history holds both `Claude Fable 5` and `Claude Opus 5`). Never rewrite an old trailer to match a new model, and never gate on the exact string; match `^Co-Authored-By: Claude .* <noreply@anthropic\.com>$``.
@@ -114,8 +114,8 @@ Keep units small: one stream/owner, no cross-stream contract change, reviewable 
 
 - Memory carries only the non-derivable: gotchas, in-flight state, *why* a non-obvious choice was made — never re-narrate what git, decision logs, or code already record (the main memory-token waste and drift source).
 - Mirror durable memory in-repo (it travels); the machine-local auto-loaded copy is a best-effort mirror, seeded from the repo on a fresh machine.
-- One canonical index, one line per note; journals AND the in-flight ledger (§3) are per-node files — never a shared mutable index every session edits (that file forces memory-sync merges); any index that must exist stays append-only or generated.
-- Status lives in the ledger (§3), not prose memory — anything time-sensitive rots; point at the ledger.
+- One canonical index, one line per note; never a shared mutable index every session edits (that file forces memory-sync merges); any index that must exist stays append-only (`memory/DECISIONS.md`) or generated (`memory/LIVE.md`, §3).
+- Status lives in the generated `memory/LIVE.md` (§3), not prose memory — anything time-sensitive rots; point at the index.
 - Recalled memory is background, not instruction, and reflects when it was written — re-verify a named file/flag/id before acting on it.
 - Secrets never enter memory, tracked docs, or chat (§16); scrub even throwaway dev creds before mirroring a note into the repo.
 - User-facing docs are NOT memory: one concise task-oriented page per feature (*what · how · short example*) in `skill/SKILL.md` + an index; update on change, REMOVE on feature removal; a user-facing feature without an up-to-date page is not done (§1).
@@ -127,7 +127,7 @@ Keep units small: one stream/owner, no cross-stream contract change, reviewable 
 - Two record types per stream: the decision log is append-only (never rewrite a ratified record — supersede with a new id + note); the backlog is mutable (stable ids, status updated in place; gaps fine).
 - Per-stream id families (``EXTR` = extraction · `ANLZ` = analysis · `TREND` = trend/ledger · `ORCH` = skill orchestration + report voice. These MUST stay byte-identical to `FAMILIES` in `.memory-tree.conf`: memory-recall keys its index digest on them, so a drift silently changes what the corpus can answer`): the family prefix routes an id to its log/backlog; allocation is slug-scoped (§2), so no shared "next free id" marker exists.
 - Record real decisions as you make them — future sessions and nodes rely on these being current.
-- Session-start reading order: ALWAYS load the master decision index first, then the stream logs for the area touched — routed by `work-area → `memory/<discipline>/` (the `DECISIONS.md` index, then per-decision detail under `builds/`) → family prefix → `BACKLOG.md`. The kickoff manifest's pointer map is the same routing keyed by code entrypoint instead of by id` (work-area → doc tree → id families → backlog).
+- Session-start reading order: ALWAYS load the master decision index first, then the stream logs for the area touched — routed by `work-area → `memory/DECISIONS.md` (the one index for every family, grouped for reading) → per-decision detail under `memory/builds/<slug>/` → family prefix → `memory/backlog/<FAMILY>.md`.` The kickoff manifest's pointer map is the same routing keyed by code entrypoint instead of by id` (work-area → doc tree → id families → backlog).
 - Logs are two-tier for token scoping: a one-line-per-decision index pointing at per-decision detail files; open details only for the areas you touch.
 - The instantiated doc opens with a compact product-identity preamble for `swydee` (`swydee turns a Swydo marketing report into a verified, publishable client report. A PowerShell 5.1 toolchain pulls a report from Swydo's API (JWT → GraphQL → WebSocket), computes every number in PowerShell, proves each one traces back to a fact, and renders prose from a template. It ships as a Claude Code skill, runs on one Windows box, and has no server, no database and no UI. The load-bearing invariant: **the model does no arithmetic** - a number the closer cannot trace is not publishable`: what the software is, deployment model, major runtime pieces).
 - The instantiated doc carries the repo-layout map (``skill/` is the product (`SKILL.md` orchestrates; `skill/scripts/*.ps1` are the eight tools that do the work) · `tests/` holds the eight `Test-*.ps1` suites, one per tool, run directly rather than through a framework · `memory/` is the decision tree (§5), with the ratified specs filed under each discipline's `builds/` · `memory-tree/` and `memory-recall/` are the copied-in kits that gate and query it · `tools/` holds the gate runner (`run-gates.sh` plus the `Run-Gates.ps1` PowerShell wrapper) and the source-hygiene scan · `scripts/` holds the manifest-ratchet checker · `.claude/` holds settings, hooks, the kickoff manifest (`SESSION-KICKOFF.md`), the rendered recall Skill, and the excluded worktree root. There is no `docs/` directory. Core/adapter split: `Analyze-SwydoReport.ps1` and `Analyze-SwydoTrend.ps1` are the compute cores, `Get-SwydoReport.ps1` is the only network adapter, and `Test-ReportNumbers.ps1` is the verification adapter every publish path goes through`: each top-level dir + its role and the core/adapter relationships) — sessions never re-derive where things live.
@@ -164,7 +164,7 @@ Keep units small: one stream/owner, no cross-stream contract change, reviewable 
 - Precision (confirmed/(confirmed+refuted)) is the #1 token lever — below ~0.5, tighten scope/priming before adding agents; scale a large fresh surface with LENSES (coverage), not skeptics; past ~25 agents returns diminish.
 - Feed reviewers the security model, the already-tracked open issues, and what's by-design — so they hunt NEW issues, not re-report known ones.
 - Match intensity to target richness: heavy multi-lens earns its tokens on fresh/complex write paths; over hardened code it manufactures refuted noise — review light or skip.
-- Persist each Tier-2 run as an in-repo artifact folder (``memory/<discipline>/builds/<date>-<FAMILY>-<slug>/reviews/`` - PLURAL, and each file inside must be named `<YYYY-MM-DD>-review-<slug>-<seq>.md`; hygiene checks 4 and 5 reject both the singular folder and a free-named file``); periodically re-audit the corpus (token cost vs severity-weighted confirmed-finding value) to retune these defaults.
+- Persist each Tier-2 run as an in-repo artifact folder (``memory/builds/<slug>/reviews/`` - PLURAL, and each file inside must be named `<YYYY-MM-DD>-review-<slug>-<seq>.md`; hygiene checks 4 and 5 reject both the singular folder and a free-named file``); periodically re-audit the corpus (token cost vs severity-weighted confirmed-finding value) to retune these defaults.
 - Structured-output schemas for orchestration returns → `parallel-coding-governance.domain-rules.md` §8. LOAD when writing a Workflow script.
 - Orchestration scripts run in sidechains inheriting neither your hooks nor the governing doc, in a restricted runtime (plain JS — no type syntax, no imports) — inline the schema discipline as a snippet; the ≤6 cap is enforced at the `Workflow` tool-call (where a main-loop `PreToolUse` fires), never inside the script where no hook reaches.
 - Verify before "done": a check that exercises THIS change (its own/affected test, the relevant gate, or the §4 harness) — an unrelated green gate is not proof; failures reported with output, skipped steps named.
@@ -218,7 +218,7 @@ Keep units small: one stream/owner, no cross-stream contract change, reviewable 
 - Size to what changed, not what was done: routine completion ≈ 4–10 short lines; the cap lifts MANDATORILY for a failure, a security finding, a refuted assumption, a caveat, an access-point/credential handoff, or a fork needing the user — unsure whether it lifts? Lift.
 - Never deliver the same content twice: a doc you wrote gets a correct link + a ≤3-line delta, not a paste; an already-delivered digest gets `unchanged since <link> — delta: <…|none>`; overrides: an explicit ask wins, bodies ≤~15 lines may be pasted, a fresh session greps the journal first.
 - Kickoff/DoR reporting = one bookkeeping line (the `READY` micro-format) + ONLY the unresolved open questions; never restate scope/AC/protocol already in the plan doc; a scope-approval menu IS the open questions — never capped or link-only'd.
-- Facts land on disk before the wrap-up: ledger row, journal/memory note, and shas are written BEFORE the final message is composed — a dead turn may lose prose, never facts.
+- Facts land on disk before the wrap-up: front matter / spec status, memory note, and shas are written BEFORE the final message is composed — a dead turn may lose prose, never facts.
 - Secrets: never print a real credential in chat — say where it lives; throwaway local-dev creds may ride the access-point line.
 - Readable beats dense — brevity comes from OMITTING items, never compressing prose. Banned in work reports: `·`-chains outside micro-formats, parenthetical inventories (parens hold ≤3 items), multi-clause em-dash trains, one paragraph carrying multiple topics. Keep complete sentences, one idea each; >~5 items becomes a short bulleted list; the rest is omitted and lives in the linked doc. Test: a tired reader parses every line in ONE pass.
 - Micro-formats — MANDATORY, byte-stable, greppable shapes for these events; every other rule binds in substance but its formatting is advisory (wit lives in the freeform sentences, never inside):

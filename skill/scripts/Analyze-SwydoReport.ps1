@@ -456,7 +456,7 @@ function Derive-Periods($extractedAt,$dateRange,$periodResolved){
   } catch {}
   return $out
 }
-# U8/D-period read-through: facts.meta.period, consumed by U7b #6 (memory/analysis/builds/2026-07-07-ANLZ-aCrossWidget
+# U8/D-period read-through: facts.meta.period, consumed by U7b #6 (memory/builds/aCrossWidget
 # R18 gate 1). A pure COPY of the extractor-persisted resolution -- NO date arithmetic here (resolve
 # once, at extraction time, persist as data; the analyzer/model never derives months from a label).
 # Null triple (startYm/endYm=$null, calendarAligned=$false) for legacy/unresolved/unrecognized input;
