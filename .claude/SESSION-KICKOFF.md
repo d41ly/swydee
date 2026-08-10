@@ -2,9 +2,9 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-06T11:10:40+03:00 @ 0fb2230147335c3b4fc60d8a97885078eb5f036e
+last-audit: 2026-08-10T13:54:52+03:00 @ 6a1c4dd2ae052a1c8db06e857c1a5f0ab078a3a9
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
-verify-paths: AGENTS.md; memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
+verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
 -->
 
@@ -65,7 +65,7 @@ completes.
   with a merge commit (`Merge <branch>: <summary>`); docs/status-only commits may land directly on
   `main`. **Nothing mechanically enforces this** — the branch-guard hook was declined at adoption.
 - **Governing docs:** `AGENTS.md` is the ruleset. The **units index** (inside
-  `memory/trend/builds/2026-07-07-TREND-aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md`)
+  `memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md`)
   is authoritative for what is shipped/deferred. Inside a GRANDFATHERED 2026-07 spec, the v2
   AMENDMENTS/review-override block at the top OVERRIDES the unit bodies below it; a post-cutoff spec
   has no such block and its body is already the folded text. `SKILL_BUILD_SPEC.md` §13 (hardened design)
@@ -77,13 +77,13 @@ completes.
 
 | Area / stream | Governing doc(s) | First code entrypoints |
 |---|---|---|
-| Swydo extraction (API/JWT/GraphQL/WS) | `SWYDO_REPORT_EXTRACTION_SPEC.md` · `memory/extraction/` | `skill/scripts/Get-SwydoReport.ps1` · `tests/Test-Extractor.ps1` |
-| Single-report analysis + facts | `SKILL_BUILD_SPEC.md` §13 · `memory/analysis/` (U6 canonical total, U7a/U7b reconciliation, U9 rank precedence, U10 data-gap rules) | `skill/scripts/Analyze-SwydoReport.ps1` · `tests/Test-Analyze.ps1` |
-| Trend / ledger pipeline | `memory/trend/` (U1–U5 master spec + units index) · `memory/analysis/` (U7b) | `skill/scripts/Sync-SwydoTrend.ps1`, `ConvertTo-SwydoTrendFacts.ps1`, `Update-SwydoLedger.ps1`, `Analyze-SwydoTrend.ps1` · `tests/Test-Sync.ps1`, `tests/Test-TrendFacts.ps1`, `tests/Test-Ledger.ps1`, `tests/Test-TrendAnalyze.ps1` |
+| Swydo extraction (API/JWT/GraphQL/WS) | `SWYDO_REPORT_EXTRACTION_SPEC.md` · `memory/DECISIONS.md` §extraction | `skill/scripts/Get-SwydoReport.ps1` · `tests/Test-Extractor.ps1` |
+| Single-report analysis + facts | `SKILL_BUILD_SPEC.md` §13 · `memory/DECISIONS.md` §analysis (U6 canonical total, U7a/U7b reconciliation, U9 rank precedence, U10 data-gap rules) | `skill/scripts/Analyze-SwydoReport.ps1` · `tests/Test-Analyze.ps1` |
+| Trend / ledger pipeline | `memory/DECISIONS.md` §trend (U1–U5 master spec + units index) · §analysis (U7b) | `skill/scripts/Sync-SwydoTrend.ps1`, `ConvertTo-SwydoTrendFacts.ps1`, `Update-SwydoLedger.ps1`, `Analyze-SwydoTrend.ps1` · `tests/Test-Sync.ps1`, `tests/Test-TrendFacts.ps1`, `tests/Test-Ledger.ps1`, `tests/Test-TrendAnalyze.ps1` |
 | Closer (report number verification) | `SKILL_BUILD_SPEC.md` §13.1 | `skill/scripts/Test-ReportNumbers.ps1` · `tests/Test-Closer.ps1` |
-| Archive / client registry | `memory/trend/` (U1) | `skill/scripts/Manage-SwydoArchive.ps1` · `tests/Test-Archive.ps1` |
-| Skill orchestration + report voice | `skill/SKILL.md` · `skill/report-template.md` · `memory/orchestration/` | `skill/SKILL.md` |
-| Governance chain itself | `AGENTS.md` · `memory/HYGIENE.md` | `tools/run-gates.sh` · `tools/gate-legs.json` |
+| Archive / client registry | `memory/DECISIONS.md` §trend (U1) | `skill/scripts/Manage-SwydoArchive.ps1` · `tests/Test-Archive.ps1` |
+| Skill orchestration + report voice | `skill/SKILL.md` · `skill/report-template.md` · `memory/DECISIONS.md` §orchestration | `skill/SKILL.md` |
+| Governance chain itself | `AGENTS.md` · `memory/HYGIENE.md` · `memory/README.md` | `tools/run-gates.sh` · `tools/gate-legs.json` |
 
 ### Gate commands (the merge bar)
 
@@ -92,7 +92,7 @@ bash tools/run-gates.sh                # every leg below, per-leg pass/fail; thi
 bash scripts/manifest-check.sh         # manifest ratchet — standing line; path = check-script: above
 ```
 
-Legs: the 8 PowerShell suites · ps source hygiene (+ its self-test) · memory hygiene, 12 checks
+Legs: the 8 PowerShell suites · ps source hygiene (+ its self-test) · memory hygiene (kit 2.2: 19 checks, 12 armed here)
 (+ self-test) · the manifest ratchet (+ self-test) · memory-recall kit selftest + skill-drift ·
 agent-instructions wiring (+ self-test) · agent-cap self-test · check-wiring self-test · the
 run-gates canary.
@@ -115,7 +115,7 @@ ANLZ-aUniformLattice-8, and 1064 at adoption.
 
 Any change touching the extractor, a credential path, the closer contract, the facts schema, or
 the default report surface is **design-pass**: a written spec (goal · scope · non-goals ·
-acceptance) under `memory/<discipline>/builds/<YYYY-MM-DD>-<FAMILY>-<slug>/spec/`, adversarially
+acceptance) under `memory/builds/<slug>/spec/`, adversarially
 reviewed, with the review verdict folded in BEFORE building — into the BODY with a `rev-N` bump for a
 post-cutoff spec, as a top AMENDMENTS block only for the grandfathered 2026-07 ones — one
 commit/review boundary per unit. Docs, additive tests, and template wording are **direct**.
@@ -140,9 +140,11 @@ reading <file>:<line>`.
   `TREND` (trend/ledger) · `ORCH` (orchestration), and slug = node tag + CamelCase adjective-noun,
   minted ONCE per session. Collision check: grep the whole `memory/` tree for
   `[A-Z]+-<slug>-[0-9]` and re-roll on any hit.
-- **Session** ledger — who is touching what right now — is `memory/project/in-flight/<tag>.md`.
-  Write only your own file; read all of them. Distinct from the units index, which answers a
-  different question (what shipped, not who is working).
+- **Work state** — who is touching what right now — is the GENERATED `memory/LIVE.md`, rendered by
+  `memory-tree/gen_build_index.py --write` from build README front matter plus spec `**Status:**`
+  headers. Never authored. The retired authored ledger is at `memory/archive/ledger/a.md`, the sole
+  record of worktree names and seq high-water up to 2026-08-09. Distinct from the units index, which
+  answers a different question (what shipped, not who is working).
 - `FAMILIES` in `.memory-tree.conf` and the id families in `AGENTS.md` §6 MUST stay byte-identical;
   memory-recall keys its index digest on them, and `adopt-memory-recall.sh --check` is the leg
   that catches a drift.
@@ -257,10 +259,11 @@ true. Keep each to one line; link out for detail.*
 - memory-recall indexes **tracked files only** — `git add` a new record before expecting a query to
   find it.
 - Filing a new record costs three hygiene legs beyond writing it: a `DECISIONS.md` index line has a
-  **300-char cap** (check 7), any new `builds/` folder makes `TREE.md` stale (check 9), and inside a
+  **300-char cap** (check 7), any front-matter or spec-status change makes the generated build index
+  stale (check 9 — re-run `memory-tree/gen_build_index.py --write`), and inside a
   build folder only `README.md STATUS.md prompts/ spec/ build/ reviews/` are allowed - `reviews/` is
-  PLURAL and its files must be `<date>-review-<slug>-<seq>.md` (checks 4 and 5). Regenerate the tree
-  with `memory-tree/gen-memory-tree.sh --write` before re-running the gate.
+  PLURAL and its files must be `<date>-review-<slug>-<seq>.md` (checks 4 and 5). A build folder is
+  named for its SLUG alone: no date, no FAMILY prefix.
 - A spec dated on/after the `SPEC_FORMAT_CUTOFF` may NOT carry a top-level `## AMENDMENTS` block:
   check 12 demands exactly the ten canonical `##` sections, so a review folds into the body with a
   `rev-N` bump logged in §9. The grandfathered 2026-07 specs use the older top-block convention.

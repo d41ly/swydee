@@ -20,9 +20,15 @@
 # The gate leg manifest is runtime-read by run-gates.sh; a stray CR would corrupt leg names/argv.
 tools/gate-legs.json text eol=lf
 
-# memory-tree determinism: hygiene check 9 regenerates TREE.md and diffs it against the committed
-# copy, so a CRLF checkout would fail the check for a reason that has nothing to do with the tree.
-memory/**/TREE.md text eol=lf
+# memory-tree determinism. TREE.md is gone at kit 2.2; gen_build_index.py replaced it and emits LF
+# bytes in binary mode, while its --check reader normalises CRLF. So an unpinned generated artifact
+# checks GREEN and shows permanently modified in git status -- invisible churn, measured, not feared.
+# All THIRTEEN generated artifacts are pinned, the ten build READMEs included.
+memory/LIVE.md text eol=lf
+memory/ledger/*.md text eol=lf
+memory/DECISIONS.md text eol=lf
+memory/backlog/*.md text eol=lf
+memory/builds/*/README.md text eol=lf
 memory/project/legacy-files.txt text eol=lf
 memory/project/curation-debt.txt text eol=lf
 

@@ -10,14 +10,19 @@
 #
 # Exit 0 + no output = clean. Anything printed is a hygiene regression.
 set -u
-KIT_MEMORY_TREE_VERSION=1.4   # gov:kit memory-tree@1.4 — engine identity; set HERE, never from .memory-tree.conf (a project conf must not spoof it)
+KIT_MEMORY_TREE_VERSION=2.2   # gov:kit memory-tree@2.2 — engine identity; set HERE, never from .memory-tree.conf (a project conf must not spoof it)
 ROOT="$(git rev-parse --show-toplevel)" || exit 2
 cd "$ROOT" || exit 2
 MEMORY_ROOT=memory
+# DISCIPLINES is a CLOSED ENUM of stream values, not a directory list. Since 1.5 the tree is FLAT:
+# every build lives at <MEMORY_ROOT>/builds/<slug>/ and the discipline is declared in each spec's
+# status header as `streams <value>[+<value>]`. FAMILIES maps an enum value to its id prefix, its
+# backlog shard, and the optional FAMILY qualifier in a recording filename.
 DISCIPLINES="architecture deployment blocks design performance"
 FAMILIES="architecture:ARCH deployment:DEPLOY blocks:BLOCK design:DES performance:PERF"
 TOMBSTONE_ROOTS=""     # old tree root(s) a migrated project must keep empty (e.g. "docs"); blank = skip check 11
-SPEC_FORMAT_CUTOFF=""  # YYYY-MM-DD; specs whose filename date >= this must follow TEMPLATE-SPEC.md (check 12); blank = skip
+SPEC_FORMAT_CUTOFF=""  # date; specs whose filename date >= this must follow TEMPLATE-SPEC.md (check 12); blank = skip
+STREAMS_CUTOFF=""      # date; specs whose filename date >= this MUST carry `· streams <value>` (check 12); blank = never required
 [ -f "$ROOT/.memory-tree.conf" ] && . "$ROOT/.memory-tree.conf"
 M="$MEMORY_ROOT"
 HERE="$(cd "$(dirname "$0")" && pwd)"
@@ -34,6 +39,15 @@ STAGED=0; [ "${1:-}" = "--staged" ] && STAGED=1
 
 status=0
 FILES=$(git ls-files "$M/")
+
+# --- PRINT MODES: this script OWNS two sets that a sibling gate needs, and a transcription of
+# --- either is the drift class the kit exists to remove. `corpus_ids.py` ASKS instead of copying.
+# --- The dependency runs ONE WAY: these return before check 1, so nothing recurses back here.
+# --- The append-only set is check 2's exemption; the index set is check 6's byte-capped population.
+APPEND_ONLY_ERE="^$M/(DECISIONS\.md$|decisions/|archive/)"
+case "${1:-}" in
+  --print-append-only-ere) printf '%s\n' "$APPEND_ONLY_ERE"; exit 0 ;;
+esac
 LEGACY=$(grep -vE '^\s*(#|$)' "$M/project/legacy-files.txt" 2>/dev/null || true)
 DEBT=$(grep -vE '^\s*(#|$)' "$M/project/curation-debt.txt" 2>/dev/null || true)
 # Membership via associative arrays, NOT `grep -qxF <<<"$LIST"` — the here-string forks a grep per
@@ -46,8 +60,77 @@ while IFS= read -r _l; do [ -n "$_l" ] && DEBT_SET["$_l"]=1; done <<<"$DEBT"
 in_legacy() { [ -n "${LEGACY_SET[$1]+x}" ]; }
 in_debt()   { [ -n "${DEBT_SET[$1]+x}" ]; }
 fail() { echo "HYGIENE check $1 FAILED — $2"; status=1; }
+
+# The resolver, INLINE. This kit is copy-installed as a standalone directory, so `../lib/` does
+# not exist in an adopting repo. The block below is byte-identical to tools/lib/resolve-python.sh
+# and tools/lib/resolve-python.test.sh reds if any copy drifts.
+# Resolved ONCE for all three delegating checks (9, 13-16, 17-19) — the retired idiom sat at
+# three separate sites in this file, which is three chances to fix two of them.
+# >>> resolve_python — canonical copy: tools/lib/resolve-python.sh (byte-identical; gated)
+resolve_python() {
+  # Candidates in order: the caller's own published override, then $GOV_PYTHON, then the three
+  # launcher names. Every candidate is ONE WORD — `py -3` cannot work here, because the probe quotes
+  # the candidate and every consumer uses "$PY" as a single word (measured: exit 127).
+  _rp_tried=""
+  for _rp_c in "${1:-}" "${GOV_PYTHON:-}" python3 python py; do
+    [ -n "$_rp_c" ] || continue
+    _rp_tried="$_rp_tried $_rp_c"
+    if "$_rp_c" -c "import sys" >/dev/null 2>&1; then
+      printf '%s\n' "$_rp_c"
+      return 0
+    fi
+  done
+  {
+    echo "resolve_python: no usable python launcher. Each candidate was RUN with -c 'import sys' and"
+    echo "resolve_python: none exited 0 — being on PATH is not evidence (the Microsoft Store python3"
+    echo "resolve_python: stub answers \`command -v\` and exits 9009 without running anything)."
+    echo "resolve_python: tried:$_rp_tried"
+    if [ -n "${1:-}" ]; then
+      echo "resolve_python: the caller's override '$1' was tried FIRST and did not run."
+    fi
+    if [ -n "${GOV_PYTHON:-}" ]; then
+      echo "resolve_python: GOV_PYTHON is set to '$GOV_PYTHON' and did not run. An override that is"
+      echo "resolve_python: set and unusable is THIS failure, never a silent fall-through — the"
+      echo "resolve_python: operator believes they chose, and would not have."
+    fi
+  } >&2
+  return 1
+}
+# <<< resolve_python
+_PY=$(resolve_python) || { echo "HYGIENE — no usable python; checks 9 and 13-19 delegate to sibling modules"; exit 2; }
 FAMILY_of() { local p; for p in $FAMILIES; do case "$p" in "$1:"*) echo "${p#*:}"; return;; esac; done; }
 FAM_ALT=$(for p in $FAMILIES; do echo "${p#*:}"; done | paste -sd'|' -)   # ARCH|DEPLOY|... for regexes
+DISC_ALT=$(printf '%s\n' $DISCIPLINES | paste -sd'|' -)                   # the streams enum, for check 12
+# THE recording-name tail, in ONE place. A multi-unit build names its sub-specs
+# `<date>-spec-<slug>-<seq>-u6-indexed-join.md`, and both check 5's name grammar and check 12's
+# selector have to admit that suffix. They were two hand-copied EREs for one grammar and they had
+# already diverged — check 12 carried the tail, check 5 did not — so widening check 5's SELECTOR
+# without this would have redded 14 conforming files. Interpolated by both; never retyped.
+REC_TAIL='(-[a-z0-9][a-z0-9-]*)?'
+
+# A selector that matches NOTHING prints nothing, and nothing is what a passing check prints. The
+# 1.5 flatten changed the segment count of several path selectors at once, so each one asserts its
+# population is non-empty — but ONLY when the tree demonstrably holds files of that kind. A freshly
+# scaffolded repo with no builds yet is a legitimate empty, not a disarmed gate, and a guard that
+# cannot tell those apart makes `adopt --scaffold` produce a red tree.
+#
+# So the guard compares TWO granularities: the PRECONDITION asks "does a file of this kind exist
+# anywhere under the memory root?" and the POPULATION asks "does one exist at the exact path this
+# check expects?". Equal-and-zero is a young tree. Precondition non-zero with an empty population is
+# a mis-segmented selector — the only shape that silently disarms a check — and that is what reds.
+# `--staged` is exempt throughout: an empty staged set is the normal case.
+POP_MISSING=""
+pop_guard() { # check-number · label · population-count · precondition-count
+  [ "$STAGED" = 1 ] && return 0
+  [ "${3:-0}" -gt 0 ] && return 0
+  [ "${4:-0}" -gt 0 ] || return 0
+  POP_MISSING="${POP_MISSING}    check $1: $2 (but $4 file(s) of that kind exist elsewhere under $M/ — the selector is mis-segmented)"$'\n'
+}
+# Preconditions, deliberately un-segmented: they ask what KIND of file exists, never where.
+PRE_ANYBUILD=$(printf '%s\n' "$FILES" | grep -cE "/builds/" || true)
+PRE_RECORD=$(printf '%s\n' "$FILES" | grep -cE "/builds/.+/.+\.md$" || true)
+PRE_SPEC=$(printf '%s\n' "$FILES" | grep -cE "/[0-9]{4}-[0-9]{2}-[0-9]{2}-spec-[^/]*\.md$" || true)
+PRE_STATUSY=$(printf '%s\n' "$FILES" | grep -cE "(/STATUS\.md$|/BACKLOG\.md$|^$M/backlog/)" || true)
 # CR-stripped + marker-matched fences: only the marker that OPENED a fence closes it (a ~~~ line
 # inside a ``` fence is content, not a toggle), and \r is dropped so CRLF worktrees (autocrlf
 # smudge read by WSL/Linux bash) compare equal to LF sources.
@@ -74,8 +157,10 @@ c1=$(printf '%s\n' "$FILES" \
 [ -n "$c1" ] && fail 1 "prompt-kind files outside builds/*/prompts/ or archive/:
 $c1"
 
-# 2 — link integrity (exempt DECISIONS.md / decisions/ / archive/ / TREE.md and legacy-listed recording files).
-scan2=$(printf '%s\n' "$FILES" | grep -E '\.md$' | grep -vE '/(DECISIONS\.md$|decisions/|archive/|TREE\.md$)')
+# 2 — link integrity (exempt DECISIONS.md / decisions/ / archive/ and legacy-listed recording files).
+# LIVE.md and the ledger shards are NOT exempt: their rows link to build READMEs, and a link that
+# stops resolving is precisely the drift the generated index exists to prevent.
+scan2=$(printf '%s\n' "$FILES" | grep -E '\.md$' | grep -vE '/(DECISIONS\.md$|decisions/|archive/)')
 [ "$STAGED" = 1 ] && scan2=$(printf '%s\n' "$scan2" | { grep -xF -f <(printf '%s\n' "$STAGED_MD") || true; })
 # Drop grandfathered files first (fork-free), then extract every candidate link in ONE awk pass over
 # all remaining files — was `_unfenced | grep -oE | sed -E` PER FILE (3 forks × N files; the single
@@ -117,102 +202,132 @@ broken=$(awk '
 [ -n "$broken" ] && fail 2 "broken relative .md links:
 $broken"
 
-# 3 — structure lint (depth-2; decisions/guides/archive/journal opaque).
-disc_re=$(printf '%s\n' $DISCIPLINES | paste -sd'|' -)
+# 3 — structure lint (depth-2; decisions/ guides/ archive/ contents opaque).
+# FLAT (1.5): the root holds the four index files, one append-only DECISIONS.md, and the fixed
+# directory set. There is no discipline directory to descend into; `builds/` holds one folder per
+# slug and `backlog/` holds one shard per FAMILY.
 root1=$(printf '%s\n' "$FILES" | awk -F/ '{ if (NF==2) print "F:"$2; else print "D:"$2 }' | LC_ALL=C sort -u)
 bad3=$(printf '%s\n' "$root1" | grep . | while IFS= read -r e; do case "$e" in
-  F:README.md|F:TREE.md|F:HYGIENE.md|F:TEMPLATE-SPEC.md|D:project) ;;
-  D:*) d="${e#D:}"; { printf '%s\n' $DISCIPLINES | grep -qxF "$d" || [ "$d" = "$MAP_SUB" ]; } || echo "$M/$d";;
+  F:README.md|F:HYGIENE.md|F:TEMPLATE-SPEC.md|F:DECISIONS.md|F:LIVE.md) ;;
+  D:project|D:builds|D:backlog|D:decisions|D:guides|D:archive|D:ledger|D:gotchas) ;;
+  D:*) d="${e#D:}"; [ "$d" = "$MAP_SUB" ] || echo "$M/$d";;
   *) echo "$M/${e#*:}";; esac; done)
-for disc in $DISCIPLINES; do
-  d1=$(printf '%s\n' "$FILES" | grep "^$M/$disc/" | awk -F/ '{ if (NF==3) print "F:"$3; else print "D:"$3 }' | LC_ALL=C sort -u)
-  b=$(printf '%s\n' "$d1" | grep . | while IFS= read -r e; do case "$e" in
-    F:README.md|F:TREE.md|F:DECISIONS.md|F:BACKLOG.md|D:decisions|D:guides|D:archive|D:builds) ;;
-    *) echo "$M/$disc/${e#*:}";; esac; done)
-  bad3=$(printf '%s\n%s\n' "$bad3" "$b")
-done
+# backlog/ holds ONLY <FAMILY>.md, one shard per declared family — a stray name there is a backlog
+# nobody's status-vocabulary check will ever read.
+b3b=$(printf '%s\n' "$FILES" | grep -E "^$M/backlog/" | awk -F/ -v m="$M" -v fam="$FAM_ALT" '
+  { if (NF != 3) { print m "/backlog/" $3 " (nested)"; next }
+    if ($3 !~ "^(" fam ")\\.md$") print m "/backlog/" $3 }' | LC_ALL=C sort -u)
+# builds/ holds ONLY directories.
+b3c=$(printf '%s\n' "$FILES" | grep -E "^$M/builds/" | awk -F/ -v m="$M" '
+  NF == 3 { print m "/builds/" $3 " (file at the builds root — a build is a FOLDER)" }' | LC_ALL=C sort -u)
+bad3=$(printf '%s\n%s\n%s\n' "$bad3" "$b3b" "$b3c")
+# project/ holds the gate's OWN waiver registries and nothing else (aMendedLedger U3). The session
+# machinery it used to also hold — MEMORY.md, IN-FLIGHT.md, in-flight/, journal/, project/README.md —
+# is retired, and the `F:*.md` catch-all goes with it: a directory defined as five named files cannot
+# also admit any `.md` anyone drops in. Nothing scaffolds those names any more either, so an
+# admitted-but-never-written entry would be a third answer to a question this list is closing.
 p1=$(printf '%s\n' "$FILES" | grep "^$M/project/" | awk -F/ '{ if (NF==3) print "F:"$3; else print "D:"$3 }' | LC_ALL=C sort -u)
+# The precondition is deliberately UN-SEGMENTED (see pop_guard): `project/` is drained of session
+# machinery, not emptied — the five registries stay — so the population is 5 on a real tree and 0
+# only when the path expression is mis-segmented, which is the one shape that silently disarms this
+# sub-lint. A tree with no `.txt` anywhere is a young tree and stays silent.
+PRE_REGISTRY=$(printf '%s\n' "$FILES" | grep -cE '\.txt$')
+pop_guard 3 "no registry under $M/project/" \
+  "$(printf '%s\n' "$FILES" | grep -cE "^$M/project/[^/]+\.txt$")" "$PRE_REGISTRY"
 bp=$(printf '%s\n' "$p1" | grep . | while IFS= read -r e; do case "$e" in
-  F:README.md|F:MEMORY.md|F:IN-FLIGHT.md|F:legacy-files.txt|F:curation-debt.txt|D:journal|D:in-flight) ;;
-  F:*.md) ;;
+  F:legacy-files.txt|F:curation-debt.txt) ;;
+  F:id-orphan-waiver.txt|F:corpus-path-unresolved.txt|F:unarmed-branches.txt) ;;
   *) echo "$M/project/${e#*:}";; esac; done)
 bm=""
 if [ -n "$MAP_SUB" ]; then
   m1=$(printf '%s\n' "$FILES" | grep "^$M/$MAP_SUB/" | awk -F/ '{ if (NF==3) print "F:"$3; else print "D:"$3 }' | LC_ALL=C sort -u)
   bm=$(printf '%s\n' "$m1" | grep . | while IFS= read -r e; do case "$e" in
-    F:README.md|F:FOUNDATION.md|F:baseline.toml|D:features|D:generated) ;;
+    F:README.md|F:FOUNDATION.md|F:baseline.toml|F:affordance-exempt.toml|D:features|D:generated) ;;
     *) echo "$M/$MAP_SUB/${e#*:}";; esac; done)
 fi
 bad3=$(printf '%s\n%s\n%s\n' "$bad3" "$bp" "$bm" | grep . || true)
 [ -n "$bad3" ] && fail 3 "unexpected entries (structure):
 $bad3"
 
-# 4 — build-folder naming + FAMILY↔discipline pairing + internal shape.
-# One grep+awk PER DISCIPLINE — was a per-folder full-$FILES rescan + a per-entry grep, i.e.
-# O(build-folders × files): 82.5s of a 138s run on the upstream inCMS tree (137 folders / 1152 files;
-# PERF-eThriftyBellows-1 there). The awk groups build files by folder (git-ls-files input is
-# path-sorted, so folders and entries arrive in order), validates folder-name + FAMILY↔discipline +
-# entry-shape in-process, and insertion-sorts each folder's entry set so output byte-matches the old
-# `sort -u` (D: before F:, C byte order — hence LC_ALL=C). famalt/m come from the conf; the folder
-# field index derives from MEMORY_ROOT's segment count (the old hardcoded NF==5 mis-parsed a
-# multi-segment root). The `→` is the literal arrow byte, identical to the old message.
-bad4=""
-for disc in $DISCIPLINES; do
-  fam=$(FAMILY_of "$disc")
-  b=$(printf '%s\n' "$FILES" | grep -E "^$M/$disc/builds/[^/]+/" \
-    | LC_ALL=C awk -F/ -v m="$M" -v disc="$disc" -v fam="$fam" -v famalt="$FAM_ALT" '
+# 4 — build-folder naming + internal shape.
+# FLAT (1.5): ONE population, `<M>/builds/<slug>/`. The date prefix and the FAMILY prefix are gone
+# with the discipline directory — a folder is named for its slug and nothing else, so there is no
+# FAMILY↔discipline pairing left to assert here. A recording filename MAY carry a FAMILY qualifier
+# (`<date>-<kind>-<FAMILY>-<slug>-<seq>.md`), which is how one slug shared by two families survives
+# the merge into a single folder; the alternation is the CLOSED one from FAMILIES, never `[A-Z]+`.
+BUILD_N=$(printf '%s\n' "$FILES" | awk -F/ -v m="$M" '$0 ~ "^" m "/builds/" && NF > 3 { print $3 }' | LC_ALL=C sort -u | grep -c .)
+pop_guard 4 "no build folder under $M/builds/" "$BUILD_N" "$PRE_ANYBUILD"
+bad4=$(printf '%s\n' "$FILES" | grep -E "^$M/builds/[^/]+/" \
+  | LC_ALL=C awk -F/ -v m="$M" -v famalt="$FAM_ALT" '
       BEGIN {
-        n_m = split(m, _seg, "/"); fidx = n_m + 3    # <m>/<disc>/builds/<folder>
-        vre = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-(" famalt ")-[A-Za-z0-9][A-Za-z0-9-]*$"
+        n_m = split(m, _seg, "/"); fidx = n_m + 2    # <m>/builds/<folder>
+        vre = "^[A-Za-z][A-Za-z0-9-]*$"              # the slug, alone
+        rre = "^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-(prompt|spec|build|review)-((" famalt ")-)?[A-Za-z0-9]+-[0-9]+\\.md$"
       }
-      function flush(   n,i,j,k,keys,tmp,type,name,ffam) {
+      function flush(   n,i,j,k,keys,tmp,type,name) {
         if (folder=="") return
         if (folder !~ vre) {
-          print m "/" disc "/builds/" folder " (bad folder name)"; folder=""; delete ent; return }
-        ffam=folder; sub(/^[0-9-]+-/,"",ffam); sub(/-.*$/,"",ffam)   # a FAMILY token has no dash (id grammar)
-        if (ffam!=fam) print m "/" disc "/builds/" folder " (FAMILY " ffam " != " disc "→" fam ")"
+          print m "/builds/" folder " (bad folder name — expected the slug alone, no date and no FAMILY prefix)"
+          folder=""; delete ent; return }
         n=0; for (k in ent) keys[++n]=k
         for (i=2;i<=n;i++){ tmp=keys[i]; j=i-1; while(j>=1 && keys[j]>tmp){keys[j+1]=keys[j];j--} keys[j+1]=tmp }
         for (i=1;i<=n;i++){ k=keys[i]; type=substr(k,1,1); name=substr(k,3)
           if (k=="F:README.md"||k=="F:STATUS.md"||k=="D:prompts"||k=="D:spec"||k=="D:build"||k=="D:reviews") continue
-          if (type=="F"){ if (name !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-(prompt|spec|build|review)-[A-Za-z0-9]+-[0-9]+\.md$/) print m "/" disc "/builds/" folder "/" name }
-          else print m "/" disc "/builds/" folder "/" name }
+          if (type=="F"){ if (name !~ rre) print m "/builds/" folder "/" name }
+          else print m "/builds/" folder "/" name }
         folder=""; delete ent
       }
       { if ($fidx!=folder){ flush(); folder=$fidx }
         if (NF==fidx+1) ent["F:" $(fidx+1)]=1; else ent["D:" $(fidx+1)]=1 }
       END { flush() }')
-  bad4="$bad4
-$b"
-done
 bad4=$(printf '%s\n' "$bad4" | grep . || true)
 [ -n "$bad4" ] && fail 4 "build-folder naming/shape:
 $bad4"
 
+
 # 5 — recording-file naming (grandfather: legacy-files.txt).
-bad5=$(printf '%s\n' "$FILES" | grep -E "^$M/[^/]+/builds/[^/]+/(prompts|spec|build|reviews)/[^/]+\.md$" | while IFS= read -r f; do
+# The optional `-<FAMILY>-` qualifier is the CLOSED alternation from FAMILIES. A generic `[A-Z]+`
+# would admit a family that does not exist and make the rejection arm vacuous.
+# ANY DEPTH under the four subfolders. A file one level deeper used to be governed by nothing: check
+# 5 saw only direct children, and check 12's population is files that already match the dated name,
+# so a free-named nested file was outside both by construction.
+c5_sel=$(printf '%s\n' "$FILES" | grep -E "^$M/builds/[^/]+/(prompts|spec|build|reviews)/(.+/)?[^/]+\.md$" || true)
+pop_guard 5 "no recording file under $M/builds/*/{prompts,spec,build,reviews}/" \
+  "$(printf '%s\n' "$c5_sel" | grep -c . || true)" "$PRE_RECORD"
+bad5=$(printf '%s\n' "$c5_sel" | grep . | while IFS= read -r f; do
   in_legacy "$f" && continue
-  # Fork-free basename/parent-dir + bash ERE (was basename + awk + grep = 3 forks per recording file).
-  base=${f##*/}; sub=${f%/*}; sub=${sub##*/}
+  # Fork-free basename + SUBFOLDER extraction (was basename + awk + grep = 3 forks per recording file).
+  # The kind comes from the subfolder — the first segment after the build slug — NOT from the file's
+  # immediate parent: `spec/units/x.md` is a spec, and `units` is not a kind.
+  base=${f##*/}; rest=${f#"$M"/builds/}; rest=${rest#*/}; sub=${rest%%/*}
   case "$sub" in prompts) kind=prompt;; spec) kind=spec;; build) kind=build;; reviews) kind=review;; esac
-  [[ $base =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-$kind-[A-Za-z0-9]+-[0-9]+\.md$ ]] || echo "$f"
+  [[ $base =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}-$kind-(($FAM_ALT)-)?[A-Za-z0-9]+-[0-9]+$REC_TAIL\.md$ ]] || echo "$f"
 done)
-[ -n "$bad5" ] && fail 5 "recording-file names not matching YYYY-MM-DD-<kind>-<slug>-<seq>.md (and not grandfathered):
+# The DEPTH is not the problem, and the message says so on a CONTINUATION line — the first line is
+# this branch's check-arms signature and its arm sits exactly at the armed floor with no slack.
+[ -n "$bad5" ] && fail 5 "recording-file names not matching YYYY-MM-DD-<kind>[-<FAMILY>]-<slug>-<seq>.md (and not grandfathered):
+  (nesting is fine — a sub-folder under spec/ groups a multi-unit build; the NAME is what is wrong)
 $bad5"
 
 # index set for checks 6/7
 index_set() {
-  { echo "$M/README.md"; echo "$M/TREE.md"; echo "$M/project/MEMORY.md"; echo "$M/project/IN-FLIGHT.md"
-    printf '%s\n' "$FILES" | grep -E "^$M/project/in-flight/[^/]+\.md$"   # per-node ledger files: 20KB cap, entry-budget exempt
+  { echo "$M/README.md"; echo "$M/LIVE.md"; echo "$M/DECISIONS.md"
+    printf '%s
+' "$FILES" | grep -E "^$M/ledger/[^/]+\.md$"
     if [ -n "$MAP_SUB" ]; then
       echo "$M/$MAP_SUB/README.md"; echo "$M/$MAP_SUB/FOUNDATION.md"
       printf '%s\n' "$FILES" | grep -E "^$M/$MAP_SUB/features/[^/]+\.md$"   # dossiers: size caps, entry-budget exempt
     fi
-    for d in $DISCIPLINES; do for x in README DECISIONS BACKLOG TREE; do echo "$M/$d/$x.md"; done; done
-    printf '%s\n' "$FILES" | grep -E "^$M/[^/]+/builds/[^/]+/STATUS\.md$"
+    printf '%s\n' "$FILES" | grep -E "^$M/backlog/[^/]+\.md$"
+    printf '%s\n' "$FILES" | grep -E "^$M/builds/[^/]+/STATUS\.md$"
+    # A GUIDE is mandatory reading — the charter points a session at it — so it carries the same
+    # byte/line cap as an index. Check 16 says the same thing from the other side: a charter-cited
+    # file under no cap is a read budget nobody watches. Entry-budget exempt: a guide is prose.
+    printf '%s\n' "$FILES" | grep -E "^$M/guides/[^/]+\.md$"
   } | while IFS= read -r f; do [ -f "$f" ] && echo "$f"; done
 }
 INDEX_SET=$(index_set)   # compute ONCE; checks 6 and 7 both read it (was recomputed per check)
+case "${1:-}" in --print-index-set) printf '%s\n' "$INDEX_SET"; exit 0 ;; esac   # see the PRINT MODES note above
 
 # 6 — index size caps (grandfather: curation-debt.txt).
 # Batched wc: one `wc -c` + one `wc -l` over the whole selected set (was 2 forks PER index file).
@@ -233,10 +348,15 @@ fi
 [ -n "$bad6" ] && fail 6 "index files over cap (rotate to archive/<INDEX>.<YYYY-MM-DD>.md; a codebase-map dossier over cap is SPLIT into two dossiers instead — never rotate FOUNDATION.md, the map gate requires it):
 $bad6"
 
-# 7 — entry budget ≤300 chars (grandfather: curation-debt.txt; exempt TREE.md, IN-FLIGHT.md, in-flight/*.md,
-#     and — when the codebase-map kit is adopted under this tree — its dossiers/FOUNDATION (detail files).
-ex7='(/TREE\.md$|/IN-FLIGHT\.md$|/in-flight/[^/]+\.md$)'
-[ -n "$MAP_SUB" ] && ex7="(/TREE\.md$|/IN-FLIGHT\.md$|/in-flight/[^/]+\.md$|/$MAP_SUB/FOUNDATION\.md$|/$MAP_SUB/features/[^/]+\.md$)"
+# 7 — entry budget ≤300 chars (grandfather: curation-debt.txt; exempt guides/*.md — a guide is prose,
+#     not index rows — and, when the codebase-map kit is adopted under this tree, its
+#     dossiers/FOUNDATION (detail files).
+# ONE base plus an APPEND, never a second full spelling (aMendedLedger U3). The MAP_SUB branch used to
+# rebuild the whole expression, which silently dropped the guides/ alternative on any repo carrying a
+# .codebase-map.conf — every guide entered this check's population and nothing said so. Two spellings
+# of one expression is the two-answers-to-one-question class, and this is how it fired.
+ex7='/guides/[^/]+\.md$'
+[ -n "$MAP_SUB" ] && ex7="$ex7|/$MAP_SUB/FOUNDATION\.md\$|/$MAP_SUB/features/[^/]+\.md\$"
 # ONE awk over the whole selected set (was `_unfenced | awk` = 2 forks per file; measured 7.86s here,
 # TOOL-aBatchedLintel-1). `uln` counts the UNFENCED stream, which is what the old `FNR` counted — the
 # piped `_unfenced` output WAS the record source, so the reported line number was never the file line
@@ -281,7 +401,9 @@ $bad7"
 # following delimiter. uln counts the UNFENCED stream (== the old grep -n numbering). The two `·` in
 # the patterns are the LITERAL middot byte. Validated per-row against grep over the upstream inCMS
 # tree's 589 real rows — 0 mismatches (PERF-eThriftyBellows-1).
-files8=$( { for d in $DISCIPLINES; do echo "$M/$d/BACKLOG.md"; done; printf '%s\n' "$FILES" | grep -E "^$M/[^/]+/builds/[^/]+/STATUS\.md$"; } | while IFS= read -r f; do
+pop8=$( { printf '%s\n' "$FILES" | grep -E "^$M/backlog/[^/]+\.md$"; printf '%s\n' "$FILES" | grep -E "^$M/builds/[^/]+/STATUS\.md$"; } | grep -c . || true)
+pop_guard 8 "no backlog shard under $M/backlog/ and no STATUS.md under $M/builds/" "$pop8" "$PRE_STATUSY"
+files8=$( { printf '%s\n' "$FILES" | grep -E "^$M/backlog/[^/]+\.md$"; printf '%s\n' "$FILES" | grep -E "^$M/builds/[^/]+/STATUS\.md$"; } | while IFS= read -r f; do
   [ -f "$f" ] || continue; in_debt "$f" && continue; in_scope "$f" || continue; printf '%s\n' "$f"; done)
 bad8=""
 if [ -n "$files8" ]; then
@@ -308,20 +430,21 @@ fi
 [ -n "$bad8" ] && fail 8 "backlog/STATUS rows without exactly one status token (OPEN SPECCED INPROGRESS BLOCKED DEFERRED CLOSED WONTDO):
 $bad8"
 
-# 9 — TREE.md drift (delegates to the sibling generator).
+# 9 — build-index drift (delegates to the sibling generator). The retired directory listing carried
+# PATHS, which git already prints better; this carries STATUS, which git does not — and the status is
+# DERIVED from each build's front matter plus its specs' status headers, so nothing is authored here
+# and nothing rots.
 if [ "$STAGED" = 0 ] || printf '%s\n' "$STAGED_MD" | grep -q .; then
-  if ! drift=$(bash "$HERE/gen-memory-tree.sh" --check 2>&1); then fail 9 "TREE.md drift:
+  if ! drift=$("$_PY" "$HERE/gen_build_index.py" --check 2>&1); then fail 9 "generated build index differs from a fresh render:
 $drift"; fi
 fi
 
-# 10 — rotation note (always; cheap).
-bad10=$(for d in $DISCIPLINES; do
-  printf '%s\n' "$FILES" | grep -E "^$M/$d/archive/[^/]+\.[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$" | while IFS= read -r a; do
-    base=$(basename "$a"); idx="$M/$d/${base%%.*}.md"
+# 10 — rotation note (always; cheap). FLAT (1.5): one archive at the memory root.
+bad10=$(printf '%s\n' "$FILES" | grep -E "^$M/archive/[^/]+\.[0-9]{4}-[0-9]{2}-[0-9]{2}\.md$" | while IFS= read -r a; do
+    base=${a##*/}; idx="$M/${base%%.*}.md"
     [ -f "$idx" ] || continue
     head -3 "$idx" | grep -qF "$base" || echo "$a (not referenced in lines 1-3 of $idx)"
-  done
-done)
+  done)
 [ -n "$bad10" ] && fail 10 "rotated archives not referenced from their live index (lines 1-3):
 $bad10"
 
@@ -365,7 +488,9 @@ SPEC_CANON10="$SPEC_CANON
 # `P` = analyse. `[ -f ]` stays a bash builtin so the absent-file finding keeps its position in the
 # stream. The canon rides in on `-v canon=`: this kit has ONE nine-line canon and one equality, so it
 # needs no canon records in the driver and therefore has no TAB-truncation hazard to guard against.
-c12_sel=$(printf '%s\n' "$FILES" | grep -E "^$M/[^/]+/builds/[^/]+/spec/(.+/)?[0-9]{4}-[0-9]{2}-[0-9]{2}-spec-[A-Za-z0-9]+-[0-9]+(-[a-z0-9][a-z0-9-]*)?\.md$" | while IFS= read -r f; do
+c12_all=$(printf '%s\n' "$FILES" | grep -E "^$M/builds/[^/]+/spec/(.+/)?[0-9]{4}-[0-9]{2}-[0-9]{2}-spec-(($FAM_ALT)-)?[A-Za-z0-9]+-[0-9]+$REC_TAIL\.md$" || true)
+pop_guard 12 "no spec file under $M/builds/*/spec/" "$(printf '%s\n' "$c12_all" | grep -c . || true)" "$PRE_SPEC"
+c12_sel=$(printf '%s\n' "$c12_all" | grep . | while IFS= read -r f; do
   base=${f##*/}; d=${base:0:10}      # spawn-free date extract — this loop sees every spec file
   [ "$d" \< "$SPEC_FORMAT_CUTOFF" ] && continue
   in_scope "$f" || continue          # no-op in full mode; decides the WHOLE selection under --staged
@@ -378,7 +503,7 @@ if [ -n "$c12_sel" ]; then
 # portability would have to be argued rather than read. Interval expressions are spelled out
 # character by character for the same reason: on a build that does not honour `{8}` the header regex
 # would demand those literal bytes and never match, redding every post-cutoff spec.
-bad12_raw=$(printf '%s\n' "$c12_sel" | awk -F'\t' -v canon="$SPEC_CANON" -v canon10="$SPEC_CANON10" -v cut10="$SPEC10_CUTOFF" -v mroot="$M" '
+bad12_raw=$(printf '%s\n' "$c12_sel" | awk -F'\t' -v canon="$SPEC_CANON" -v canon10="$SPEC_CANON10" -v cut10="$SPEC10_CUTOFF" -v mroot="$M" -v discalt="$DISC_ALT" -v scut="$STREAMS_CUTOFF" '
   $1 == "M" { print $2 " (tracked but missing from worktree)"; next }
   $1 != "P" { next }
   {
@@ -412,17 +537,33 @@ bad12_raw=$(printf '%s\n' "$c12_sel" | awk -F'\t' -v canon="$SPEC_CANON" -v cano
     for (i = 1; i <= n; i++) if (body[i] ~ /<FAMILY-slug-seq>|YYYY-MM-DD/) { print f " (unfilled skeleton placeholder)"; break }
     if (hdr ~ /^\*\*Status:\*\* WONTDO/ && hdr !~ /base [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]* · ./)
       print f " (WONTDO needs a successor id or reason pointer in the header tail)"
+    # ---- the FILENAME date, computed once. Not the first date in the PATH: a build folder used to
+    # ---- be date-named itself, and matching the whole path grandfathered by the wrong date. Both
+    # ---- the streams ratchet and the section canon read this, and BOTH tiers need the streams one,
+    # ---- so it is computed above the Tier-1 exit rather than inside the Tier-2 block.
+    fbase = f; sub(/^.*\//, "", fbase)
+    fdate = ""
+    if (match(fbase, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) fdate = substr(fbase, RSTART, RLENGTH)
+    # ---- streams: the discipline is a SIGNAL, not a directory (1.5). Validated whenever present, on
+    # ---- either tier; REQUIRED once the filename date reaches STREAMS_CUTOFF. `streams ` is matched
+    # ---- as 8 ASCII bytes rather than by offsetting past the middot separator, whose length in
+    # ---- characters-versus-bytes is a property of the awk build and the ambient locale.
+    strv = ""
+    if (match(hdr, /streams [A-Za-z0-9]+(\+[A-Za-z0-9]+)*/)) strv = substr(hdr, RSTART + 8, RLENGTH - 8)
+    if (strv == "") {
+      if (scut != "" && fdate != "" && fdate >= scut)
+        print f " (filename date " fdate " is on/after STREAMS_CUTOFF " scut " but the header carries no `· streams <value>` segment; legal values: " discalt ")"
+    } else {
+      nsb = 0; sbad = ""
+      ns = split(strv, sv, "+")
+      for (si = 1; si <= ns; si++) if (sv[si] !~ "^(" discalt ")$") { nsb++; sbad = (nsb == 1) ? sv[si] : sbad ", " sv[si] }
+      if (nsb > 0) print f " (streams value(s) outside the enum: " sbad "; legal values: " discalt ")"
+    }
     if (hdr ~ /Tier-1/) next
     # ---- Tier-2 body assertions ----
     ng = 0; got = ""
     for (i = 1; i <= n; i++) if (body[i] ~ /^## /) { got = (++ng == 1) ? body[i] : got "\n" body[i] }
-    # pick the canon by FILENAME date, mirroring how the whole check is grandfathered
-    # FILENAME date, not the first date in the PATH: a build folder is itself date-named
-    # (2026-08-04-TOOL-x/spec/2026-07-20-spec-x-1.md), so matching the whole path grandfathers by
-    # the wrong date and reds a legitimately old spec. Caught by the mutation probe, not by reading.
-    fbase = f; sub(/^.*\//, "", fbase)
-    fdate = ""
-    if (match(fbase, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) fdate = substr(fbase, RSTART, RLENGTH)
+    # pick the canon by FILENAME date (computed above), mirroring how the whole check is grandfathered
     want = (fdate != "" && fdate >= cut10) ? canon10 : canon
     wantn = (want == canon10) ? "ten" : "nine"
     if (got != want) {
@@ -443,16 +584,22 @@ bad12_raw=$(printf '%s\n' "$c12_sel" | awk -F'\t' -v canon="$SPEC_CANON" -v cano
     }
     if (s != "" && cnt == 0) { ne++; emp = (ne == 1) ? "    " s : emp "\n    " s }
     if (ne > 0) print f " (section with an empty body — write N/A — <why>):" "\n" emp
-    # ---- header rev vs the §9 high-water. NO `/^## /{f=0}` reset, deliberately: that is this kit
-    # ---- engine s existing behaviour, and adding one can only SHRINK the scanned range and so
-    # ---- produce MORE findings on a non-conforming spec, which is a verdict change this unit
-    # ---- forbids. Tracked as its own backlog row instead.
+    # ---- header rev vs the §9 high-water. The range CLOSES on the next `## ` heading. Without that
+    # ---- close it ran to the end of the body, so any rev-N below §9 -- in §10, or in later prose --
+    # ---- raised the high-water and a header rev counted as logged whenever a larger number appeared
+    # ---- anywhere further down. Reproduced at 99 against a true 1.
+    # ---- A VERDICT change, measured before it landed: closing the range can only produce MORE
+    # ---- findings, and over the real corpus it changes 0 of 22 in-scope specs. Nobody paid, so the
+    # ---- two fixtures in the self-test are the only evidence this works -- one per sub-path, since
+    # ---- the branch fires both when §9 logs a SMALLER rev and when it logs NONE.
+    # ---- (No apostrophe below this line: the whole awk program is one single-quoted shell string.)
     k = "· rev-"; p = index(hdr, k); hrev = ""
     if (p > 0) { t = substr(hdr, p + length(k)); sp = index(t, " "); hrev = (sp > 0) ? substr(t, 1, sp - 1) : t }
     in9 = 0; seen = 0; mx = 0
     for (i = 1; i <= n; i++) {
       L = body[i]
       if (L ~ /^## 9\. Revision log/) in9 = 1
+      else if (in9 && L ~ /^## /) in9 = 0
       if (in9) while (match(L, /rev-[0-9]+/)) {
         v = substr(L, RSTART + 4, RLENGTH - 4) + 0
         if (!seen || v > mx) mx = v
@@ -504,6 +651,27 @@ esac
 $bad12"
 fi
 
+# 13-16 — id + path corpus classification (delegates to the sibling classifier). ONE grammar and ONE
+# walk: this script owns the append-only and index sets and PRINTS them on demand; the classifier
+# owns the id grammar it imports from the recall kit. Neither transcribes the other. Every pin the
+# classifier reads is measured per corpus, and blank pins turn the whole unit off.
+if [ "$STAGED" = 0 ]; then
+  if ! ids=$("$_PY" "$HERE/corpus_ids.py" --check 2>&1); then
+    printf '%s
+' "$ids"; status=1
+  fi
+fi
+
+# 17-19 — the bug-class catalogue (delegates to the sibling module). The catalogue's INDEX is
+# generated, every class record declares a gate or says it has none, and a record whose anchors reach
+# only the append-only tree is reachable on paper and dead in practice.
+if [ "$STAGED" = 0 ]; then
+  if ! got=$("$_PY" "$HERE/gotchas.py" --check 2>&1); then
+    printf '%s
+' "$got"; status=1
+  fi
+fi
+
 # grandfather stale-line guards (a listed path that no longer exists fails).
 # One `git ls-files` + set lookups, NOT `git ls-files --error-unmatch` per path — git is a heavyweight
 # fork, so a long grandfather list was one spawn per line (~80s at inCMS's 522 lines). Entries are
@@ -517,6 +685,17 @@ $badL"
   badD=$(printf '%s\n' "$DEBT" | grep . | while IFS= read -r p; do [ -n "${TRACKED_SET[$p]+x}" ] || echo "$p"; done)
   [ -n "$badD" ] && fail 6 "curation-debt.txt lists paths that no longer exist (stale-line guard):
 $badD"
+fi
+
+# --- empty-population report (see pop_guard). Reported ONCE, after every check has run, so the
+# --- message names every disarmed selector instead of the first one. A tree that genuinely has no
+# --- builds yet is a real case: scaffold it, or set MEMORY_ROOT to the tree that has one.
+if [ -n "$POP_MISSING" ]; then
+  echo "HYGIENE FAILED — a check selected an EMPTY population. An empty selection prints nothing,"
+  echo "HYGIENE which is exactly what a passing check prints, so the gate would be green over an"
+  echo "HYGIENE unlinted tree. Either the tree is unscaffolded or a path selector is mis-segmented."
+  printf '%s' "$POP_MISSING"
+  status=1
 fi
 
 exit "$status"
