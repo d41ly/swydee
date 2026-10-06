@@ -71,6 +71,14 @@ function Test-Additive($id){
   if($p -match 'impression|click|conversion|lead|spend|cost_micros|(^|_)cost$|session|user|order|send|open|revenue|(^|_)call|phone_call|amount_spent|value'){ return $true }
   return $false
 }
+# ANOM_BUDGET_CONSTRAINED context: the plain Search impression share headline entry, or $null.
+# Exact id suffix ':search_impression_share' only - a loose 'impression_share' match also hits
+# search_exact_match_impression_share (and last-match-wins quoted it). No plain metric -> $null.
+function Find-SearchImpressionShare($headline){
+  if(-not $headline){ return $null }
+  foreach($k in $headline.Keys){ $e=$headline[$k]; if([string]$e.id -match ':search_impression_share$' -and $null -ne $e.displayCurrent){ return $e } }
+  return $null
+}
 function Test-Money($id,$unit,$currency){
   if($unit -eq 'micros' -and $currency){ return $true }
   $p = Get-MetricPart $id
@@ -1409,8 +1417,10 @@ foreach($pk in $platforms.Keys){
   foreach($hk in $pf.headline.Keys){
     $h=$pf.headline[$hk]
     if((Get-MetricPart $h.id) -match 'search_lost_is' -and $null -ne $h.current -and [double]$h.current -ge 0.10){
-      $isTxt=''; foreach($hk2 in $pf.headline.Keys){ if((Get-MetricPart $pf.headline[$hk2].id) -match 'impression_share'){ $isTxt=" (impression share $($pf.headline[$hk2].displayCurrent))" } }
-      [void]$anoms.Add([ordered]@{ ruleId='ANOM_BUDGET_CONSTRAINED'; severity='major'; platform=$pf.name; metric=$h.metric; statement="$($pf.name) is budget-constrained: $($h.displayCurrent) of impressions lost to budget$isTxt"; evidence=[ordered]@{ lostToBudget=$h.displayCurrent } })
+      $isH=Find-SearchImpressionShare $pf.headline
+      $isTxt=if($isH){ " ($($isH.metric) $($isH.displayCurrent))" } else { '' }
+      $ev=[ordered]@{ lostToBudget=$h.displayCurrent }; if($isH){ $ev.impressionShare=$isH.displayCurrent }
+      [void]$anoms.Add([ordered]@{ ruleId='ANOM_BUDGET_CONSTRAINED'; severity='major'; platform=$pf.name; metric=$h.metric; statement="$($pf.name) is budget-constrained: $($h.displayCurrent) of impressions lost to budget$isTxt"; evidence=$ev })
     }
   }
 }
