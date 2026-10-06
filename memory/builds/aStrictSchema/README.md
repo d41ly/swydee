@@ -3,8 +3,8 @@ slug: aStrictSchema
 node: a
 opened: 2026-10-06
 streams: extraction
-roster: EXTR
-ids: EXTR-aStrictSchema-1/-3
+roster: EXTR+ANLZ
+ids: EXTR-aStrictSchema-1/-3 + ANLZ-aStrictSchema-1
 ---
 # aStrictSchema — Swydo schema drift fails fast instead of timing out
 
@@ -14,7 +14,7 @@ Records live under `spec/`, `build/`, `reviews/` and `prompts/`. The table below
 GENERATED from the status header of every spec in this folder — do not hand-edit it.
 
 <!-- gen:build-index -->
-**Build status:** CLOSED · 1 unit(s) · node a · opened 2026-10-06 · streams extraction · ids EXTR-aStrictSchema-1/-3
+**Build status:** CLOSED · 1 unit(s) · node a · opened 2026-10-06 · streams extraction · ids EXTR-aStrictSchema-1/-3 + ANLZ-aStrictSchema-1
 
 | Unit | Status | Rev | Last change |
 |---|---|---|---|
