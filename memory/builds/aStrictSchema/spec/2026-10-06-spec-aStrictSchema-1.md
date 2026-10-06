@@ -1,6 +1,6 @@
 # EXTR-aStrictSchema-1 — Swydo schema drift fails fast instead of timing out
 
-**Status:** INPROGRESS · rev-2 · 2026-10-06 · node a · Tier-2 · base b5f06bca · streams extraction · review 2026-10-06-review-aStrictSchema-1 · ratified 2026-10-06
+**Status:** CLOSED · rev-2 · 2026-10-06 · node a · Tier-2 · base b5f06bca · streams extraction · review 2026-10-06-review-aStrictSchema-1 · ratified 2026-10-06 · landed 5d36676e
 
 ## 1. Goal
 
