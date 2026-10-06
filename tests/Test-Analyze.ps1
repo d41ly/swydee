@@ -1788,6 +1788,31 @@ A ($f9a.meta.factsVersion -eq 4 -and $f9a.meta.canonicalVersion -eq 4 -and $f9a.
 A ((Row-LabelFull (NRow 'data' ([ordered]@{A='(group)';B='All'}) @{})) -eq '(group)') "ANLZ-9 D3 an all-sentinel row falls back to Row-Label rather than emitting empty"
 A ((Row-LabelFull (NRow 'data' ([ordered]@{A='x';B='y';C='z'}) @{})) -eq 'x / y / z') "ANLZ-9 D3 three dimensions join in order"
 
+Write-Host "== ANOM_BUDGET_CONSTRAINED: impression-share context picks the plain Search IS =="
+# Regression (QCU 2026-09): headline had Search IS (10.0% now, 11.6% prev) AND exact-match IS (11.6% now).
+# The loose 'impression_share' last-match-wins loop quoted the exact-match 11.6%.
+$bcIs = @{ id='google-adwords:1cc58fab:search_impression_share'; metric='Search impression share'; displayCurrent='10.0%'; displayPrevious='11.6%' }
+$bcEx = @{ id='google-adwords:5f491ddf:search_exact_match_impression_share'; metric='Search exact match impression share'; displayCurrent='11.6%'; displayPrevious='14.7%' }
+A ((Find-SearchImpressionShare ([ordered]@{a=$bcIs;b=$bcEx})).displayCurrent -eq '10.0%') "BUDGET-IS unit: plain Search IS wins when exact-match is listed after it"
+A ((Find-SearchImpressionShare ([ordered]@{b=$bcEx;a=$bcIs})).displayCurrent -eq '10.0%') "BUDGET-IS unit: plain Search IS wins when exact-match is listed before it"
+A ((Find-SearchImpressionShare ([ordered]@{a=@{id='google-adwords:search_impression_share';metric='Search impression share';displayCurrent='80.6%'}})).displayCurrent -eq '80.6%') "BUDGET-IS unit: unhashed id form matches"
+A ($null -eq (Find-SearchImpressionShare ([ordered]@{b=$bcEx}))) "BUDGET-IS unit: exact-match only => null (never substituted)"
+A ($null -eq (Find-SearchImpressionShare $null)) "BUDGET-IS unit: no headline => null"
+# e2e: both metrics present (exact-match LAST, the order that tripped the old loop) => current plain IS, named
+$bcMets = @((Met 'Search Lost IS (budget)' 'google-adwords:search_lost_is_budget' 'fraction'),(Met 'Search impression share' 'google-adwords:search_impression_share' 'fraction'),(Met 'Search exact match impression share' 'google-adwords:search_exact_match_impression_share' 'fraction'))
+$rbc = RunAnalyze (MkDoc @( (DW 'w-bc' 'google-adwords' 'Google Ads' @() $bcMets @((KRow ([ordered]@{'Search Lost IS (budget)'=(Cell 0.454 0.218);'Search impression share'=(Cell 0.100 0.116);'Search exact match impression share'=(Cell 0.116 0.147)})))) ))
+$fbc = GetFind $rbc.facts 'ANOM_BUDGET_CONSTRAINED'
+A ($null -ne $fbc) "BUDGET-IS e2e: rule fires at 45.4% lost to budget"
+A ($fbc.statement -match '\(Search impression share 10\.0%\)$') "BUDGET-IS e2e: statement quotes the CURRENT plain Search IS by name (got '$($fbc.statement)')"
+A ($fbc.statement -notmatch '11\.6%') "BUDGET-IS e2e: neither the exact-match current nor the Search IS previous (11.6%) leaks in"
+A ($fbc.evidence.lostToBudget -eq '45.4%' -and $fbc.evidence.impressionShare -eq '10.0%') "BUDGET-IS e2e: evidence keeps lostToBudget and adds impressionShare (closer-traceable)"
+# e2e: exact-match only => parenthetical omitted, no impressionShare evidence
+$bcMets2 = @((Met 'Search Lost IS (budget)' 'google-adwords:search_lost_is_budget' 'fraction'),(Met 'Search exact match impression share' 'google-adwords:search_exact_match_impression_share' 'fraction'))
+$rbc2 = RunAnalyze (MkDoc @( (DW 'w-bc2' 'google-adwords' 'Google Ads' @() $bcMets2 @((KRow ([ordered]@{'Search Lost IS (budget)'=(Cell 0.454 0.218);'Search exact match impression share'=(Cell 0.116 0.147)})))) ))
+$fbc2 = GetFind $rbc2.facts 'ANOM_BUDGET_CONSTRAINED'
+A ($null -ne $fbc2 -and $fbc2.statement -eq 'Google Ads is budget-constrained: 45.4% of impressions lost to budget') "BUDGET-IS e2e: no plain Search IS => parenthetical omitted (got '$($fbc2.statement)')"
+A ($null -ne $fbc2 -and -not ($fbc2.evidence.PSObject.Properties.Name -contains 'impressionShare')) "BUDGET-IS e2e: no plain Search IS => no impressionShare evidence"
+
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass,$fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }

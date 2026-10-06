@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-10-06T17:53:32+03:00 @ 5d36676ec590ef87f3fd1cf1a64cc8886132222a
+last-audit: 2026-10-06T18:09:59+03:00 @ 83c56361361ea699caaecb6d94f1920532b409ca
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -104,10 +104,11 @@ from the repo root).
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1473 assertions across the 8 suites after EXTR-aStrictSchema-1 --
+1484 assertions across the 8 suites after EXTR-aStrictSchema-1 + the ANOM_BUDGET_CONSTRAINED impression-share fix --
 the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 365,
-Analyze 731, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
-Was 1435 after ANLZ-aUniformLattice-9, 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +
+Analyze 742, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
+Was 1473 after EXTR-aStrictSchema-1 alone (1446 after the impression-share fix alone),
+1435 after ANLZ-aUniformLattice-9, 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +
 ANLZ-aCandidTally-1, 1276 after
 ANLZ-aUniformLattice-8, and 1064 at adoption.
 
