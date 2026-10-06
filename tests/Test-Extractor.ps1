@@ -805,6 +805,137 @@ Assert (-not ($srcP -match '\$script:cp\s*=\s*\$script:reportCp')) "AC11 the com
 Assert ($srcP -match 'Fetch-Widget [^\r\n]*cpForFetch') "AC11 the report fetch passes an EXPLICIT compare, not the inherit default"
 $trendNulls = @([regex]::Matches($srcP,'Fetch-Widget [^\r\n]*New-RelDateRange[^\r\n]*')).Count
 Assert ($trendNulls -ge 1) "AC11 trend fetches still pass \$null and inherit the saved spec"
+
+Write-Host "== EXTR-aStrictSchema-1: schema drift fails fast; 4xx bodies are read =="
+# 2026-10-06: Swydo dropped the socketId argument from Widget.fields. Every widget query then
+# answered 400 GRAPHQL_VALIDATION_FAILED, Invoke-GQL read the drained stream as '', and the fetch
+# loop waited out every budget on a populated report. AC1 pins the query; AC2-AC6 pin the HTTP path.
+$srcS = Get-Content $srcPath -Raw
+Assert (-not ($srcS -match 'fields\(socketId')) "AC1 no Widget.fields selection passes socketId"
+Assert ($srcS -match 'metrics:fields\(type:METRIC\)') "AC1 the metric field list is still requested"
+Assert ($srcS -match 'dims:fields\(type:DIMENSION\)') "AC1 the dimension field list is still requested"
+foreach($c in @(Get-FieldProbeCandidates)){
+  $usesSid = ([string]$c.sel -match '\$sid'); $declSid = ([string]$c.vars -like 'sid*')
+  Assert ($usesSid -eq $declSid) ("AC1 probe candidate '" + $c.field + "' declares sid exactly when its selection uses it")
+}
+
+if(-not ('StrictSchemaFakeHttpEx' -as [type])){
+  Add-Type -TypeDefinition 'public class StrictSchemaFakeHttpEx : System.Exception { public StrictSchemaFakeHttpEx(string m, object r) : base(m) { Response = r; } public object Response; }'
+}
+# An ErrorRecord shaped like PS 5.1's Invoke-WebRequest failure: the status on Exception.Response,
+# the body (if any) ONLY in ErrorDetails, and a response stream that is already drained.
+function New-StrictHttpError($code,$body,$streamBody){
+  $sb = [string]$streamBody
+  $resp = [pscustomobject]@{ StatusCode=$code; StreamBody=$sb }
+  Add-Member -InputObject $resp -MemberType ScriptMethod -Name GetResponseStream -Value { New-Object IO.MemoryStream (,([Text.Encoding]::UTF8.GetBytes([string]$this.StreamBody))) }
+  $ex = New-Object StrictSchemaFakeHttpEx ("The remote server returned an error: (" + $code + ")."), $resp
+  $er = New-Object Management.Automation.ErrorRecord ($ex, 'WebCmdletWebResponseException', [Management.Automation.ErrorCategory]::InvalidOperation, $null)
+  if($body){ $er.ErrorDetails = New-Object Management.Automation.ErrorDetails ([string]$body) }
+  return $er
+}
+# message and originalMessage differ on purpose, so AC2 proves WHICH one the error carries.
+$VALIDATION_400 = '{"errors":[{"message":"errors:validation failed","extensions":{"code":"GRAPHQL_VALIDATION_FAILED","originalMessage":"Unknown argument \"socketId\" on field \"Widget.fields\"."}}]}'
+$USERINPUT_400  = '{"errors":[{"message":"bad range","extensions":{"code":"BAD_USER_INPUT"}}]}'
+
+& {
+  # Child scope: the REAL Invoke-GQL / Invoke-ProbeRequest (earlier sections mocked them) are
+  # defined only inside this block. Only FUNCTIONS are isolated: the dot-source re-runs the
+  # extractor's top-level $script: assignments and this block's own $script: writes persist, so a
+  # section appended after this one must re-establish any $script: state it relies on.
+  . $srcPath -DefineOnly
+  function Connect-Ws { $script:pendingRecv=$null; $script:socketId='sock-reconnected'; return $true }
+  $script:jwt='test-jwt'; $script:jwtAt=Get-Date
+  # Each Invoke-WebRequest call consumes the next planned answer: an ErrorRecord is thrown, a
+  # string is returned as a 200 response's Content.
+  function Invoke-WebRequest {
+    $script:iwrCalls = $script:iwrCalls + 1
+    $next = $script:iwrPlan[[math]::Min($script:iwrCalls, $script:iwrPlan.Count) - 1]
+    if($next -is [Management.Automation.ErrorRecord]){ throw $next }
+    return [pscustomobject]@{ StatusCode=200; Content=[string]$next }
+  }
+  function Use-Plan($items){ $script:iwrCalls=0; $script:iwrPlan=@($items) }
+
+  # AC2: a validation failure ends the run at once with Swydo's own message - no retry, no wait.
+  Use-Plan @((New-StrictHttpError 400 $VALIDATION_400 ''))
+  $msg=$null; try { [void](Invoke-GQL 'query{x}' @{}) } catch { $msg=[string]$_.Exception.Message }
+  Assert ($null -ne $msg) "AC2 a GRAPHQL_VALIDATION_FAILED 400 throws"
+  Assert ($msg -match 'GRAPHQL_VALIDATION_FAILED' -and $msg -match 'Unknown argument "socketId" on field "Widget.fields"') "AC2 the error carries Swydo's originalMessage (got '$msg')"
+  Assert ($msg -notmatch 'errors:validation failed') "AC2 originalMessage is preferred over the prefixed message"
+  Assert ($script:iwrCalls -eq 1) "AC2 a validation failure is not retried (calls=$($script:iwrCalls))"
+  Use-Plan @((New-StrictHttpError 400 $VALIDATION_400 ''))
+  $msgN=$null; try { [void](Invoke-GQL 'query{x}' @{} -NoRetry) } catch { $msgN=[string]$_.Exception.Message }
+  Assert ($msgN -match 'GRAPHQL_VALIDATION_FAILED') "AC2 the -NoRetry startup path throws the same validation error"
+
+  # AC3: any other 4xx body is still returned as DATA, read from ErrorDetails rather than the stream.
+  Use-Plan @((New-StrictHttpError 400 $USERINPUT_400 ''))
+  $r3 = Invoke-GQL 'query{x}' @{}
+  Assert (($r3 -is [string]) -and ($r3 -match 'BAD_USER_INPUT')) "AC3 a non-validation 4xx body comes back as data (got '$r3')"
+  Assert ($script:iwrCalls -eq 1) "AC3 a 4xx with a body is answered, not retried"
+
+  # AC4: an EMPTY body is a fault, never an empty widget - for a 4xx and for a 200 alike.
+  Use-Plan @((New-StrictHttpError 400 '' ''))
+  $r4 = Invoke-GQL 'query{x}' @{}
+  Assert (Test-FetchFailed $r4) "AC4 a 4xx with no body is a fetch failure"
+  Assert ($script:iwrCalls -eq 3) "AC4 a body-less 4xx is retried to the transport budget (calls=$($script:iwrCalls))"
+  Assert ([string]$r4.lastError -match 'HTTP 400 with empty body') "AC4 the failure names the status (got '$($r4.lastError)')"
+  Use-Plan @('')
+  $r4b = Invoke-GQL 'query{x}' @{}
+  Assert ((Test-FetchFailed $r4b) -and ([string]$r4b.lastError -match 'empty response body')) "AC4 an empty 200 is a fetch failure"
+  Use-Plan @('', (RowsJson 2))
+  $r4c = Invoke-GQL 'query{x}' @{}
+  Assert ((-not (Test-FetchFailed $r4c)) -and ((Count-Edges ($r4c | ConvertFrom-Json)) -eq 2)) "AC4 an empty 200 followed by data recovers on retry"
+  Use-Plan @('')
+  $thrown=$false; try { [void](Invoke-GQL 'query{x}' @{} -NoRetry) } catch { $thrown=$true }
+  Assert $thrown "AC4 an empty 200 on the -NoRetry startup path throws"
+  Use-Plan @((New-StrictHttpError 400 '' ''), (RowsJson 1))
+  $r4d = Invoke-GQL 'query{x}' @{}
+  Assert ((-not (Test-FetchFailed $r4d)) -and ((Count-Edges ($r4d | ConvertFrom-Json)) -eq 1)) "AC4 an empty 4xx followed by data recovers on retry"
+  Use-Plan @((New-StrictHttpError 400 '' $USERINPUT_400))
+  $r4e = Invoke-GQL 'query{x}' @{}
+  Assert (($r4e -is [string]) -and ($r4e -match 'BAD_USER_INPUT')) "AC4 a body only in the stream (no ErrorDetails) is still read through Invoke-GQL"
+
+  # AC8: only a JSON 4xx is data. A 5xx/429 or a non-JSON page is a retryable fault - returned as
+  # data it would make the caller's ConvertFrom-Json throw and end the run (review finding F1).
+  Use-Plan @((New-StrictHttpError 502 '<html><body>502 Bad Gateway</body></html>' ''))
+  $r8 = Invoke-GQL 'query{x}' @{}
+  Assert ((Test-FetchFailed $r8) -and ([string]$r8.lastError -match 'HTTP 502 with a non-JSON body')) "AC8 an HTML 502 is a fetch failure, not data (got '$($r8.lastError)')"
+  Assert ($script:iwrCalls -eq 3) "AC8 the 502 is retried to the transport budget"
+  Assert ([string]$r8.lastError -notmatch 'Bad Gateway') "AC8 the failure does not echo the upstream page"
+  Use-Plan @((New-StrictHttpError 429 '{"errors":[{"message":"slow down"}]}' ''), (RowsJson 1))
+  $r8b = Invoke-GQL 'query{x}' @{}
+  Assert ((-not (Test-FetchFailed $r8b)) -and ((Count-Edges ($r8b | ConvertFrom-Json)) -eq 1)) "AC8 a 429 is retried and recovers, even with a JSON body"
+  Use-Plan @((New-StrictHttpError 503 '{"errors":[{"message":"down"}]}' ''))
+  $r8c = Invoke-GQL 'query{x}' @{}
+  Assert ((Test-FetchFailed $r8c) -and ([string]$r8c.lastError -match '^HTTP 503$')) "AC8 a JSON 5xx is a fetch failure too"
+  Use-Plan @((New-StrictHttpError 400 'GRAPHQL_VALIDATION_FAILED but not json' ''))
+  $m8=$null; try { [void](Invoke-GQL 'query{x}' @{}) } catch { $m8=[string]$_.Exception.Message }
+  Assert ($m8 -match 'GRAPHQL_VALIDATION_FAILED\): GRAPHQL_VALIDATION_FAILED but not json') "AC2 an unparseable validation body still reaches the message (got '$m8')"
+
+  # AC5: Get-HttpErrorBody prefers ErrorDetails, falls back to the stream, and never throws.
+  Assert ((Get-HttpErrorBody (New-StrictHttpError 400 'from-details' 'from-stream') ([pscustomobject]@{})) -eq 'from-details') "AC5 ErrorDetails wins over the stream"
+  $erS = New-StrictHttpError 400 '' 'from-stream'
+  Assert ((Get-HttpErrorBody $erS $erS.Exception.Response) -eq 'from-stream') "AC5 the stream is the fallback when ErrorDetails is empty"
+  Assert ((Get-HttpErrorBody $null $null) -eq '') "AC5 no record and no response => '' without throwing"
+
+  # AC6: the field probe now sees the 400 body it previously read as '' (its verdict needs it).
+  # The fixture is Swydo's live shape (2026-10-06), whose message names the offending argument.
+  $LIVE_400 = '{"errors":[{"message":"errors:Unknown argument \"socketId\" on field \"Widget.fields\".","extensions":{"code":"GRAPHQL_VALIDATION_FAILED","originalMessage":"Unknown argument \"socketId\" on field \"Widget.fields\"."}}]}'
+  Use-Plan @((New-StrictHttpError 400 $LIVE_400 ''))
+  $pr = Invoke-ProbeRequest 'query{x}' @{}
+  Assert ($pr.status -eq 400 -and ([string]$pr.body -match 'GRAPHQL_VALIDATION_FAILED')) "AC6 Invoke-ProbeRequest reads the 400 body from ErrorDetails"
+  Assert ((Get-FieldProbeVerdict $pr.status $pr.body 'socketId').present -eq $false) "AC6 the probe verdict is positive-evidence absent, not unknown"
+
+  # AC7: end to end, a validation failure stops Fetch-Widget instead of burning its budget.
+  Reset-FetchState
+  $script:fetchPlan = Get-FetchPlan 30; $script:runWaitCapSec=60; $script:socketId='sock1'
+  $script:ws = New-FakeWs
+  Use-Plan @((New-StrictHttpError 400 $VALIDATION_400 ''))
+  $sw7 = [Diagnostics.Stopwatch]::StartNew()
+  $m7=$null; try { [void](Fetch-Widget @{ id='w'; visual='KPI' } $null $null @{ plan=$script:fetchPlan; maxWaitSec=30 }) } catch { $m7=[string]$_.Exception.Message }
+  $sw7.Stop()
+  Assert ($m7 -match 'GRAPHQL_VALIDATION_FAILED') "AC7 Fetch-Widget surfaces the validation error"
+  Assert ($sw7.ElapsedMilliseconds -lt 5000) "AC7 and does so without waiting out the 30 s widget budget (took $($sw7.ElapsedMilliseconds) ms)"
+}
 Write-Host ""
 Write-Host ("RESULT: {0} passed, {1} failed" -f $pass, $fail) -ForegroundColor $(if($fail){'Red'}else{'Green'})
 if($fail){ exit 1 }
