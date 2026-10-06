@@ -7,4 +7,5 @@ terminal status. Nothing here is edited by hand.
 | Build | Status | Node | Opened | Streams | Ids |
 |---|---|---|---|---|---|
 | [aCandidTally](builds/aCandidTally/README.md) | INPROGRESS | a | 2026-08-05 | analysis | ANLZ-aCandidTally-1/-2 |
+| [aStrictSchema](builds/aStrictSchema/README.md) | INPROGRESS | a | 2026-10-06 | extraction | EXTR-aStrictSchema-1/-3 |
 | [aUniformLattice](builds/aUniformLattice/README.md) | INPROGRESS | a | 2026-08-04 | analysis+extraction+orchestration | ANLZ-aUniformLattice-1/-10 + EXTR-aUniformLattice-1 + ORCH-aUniformLattice-1/-3 |

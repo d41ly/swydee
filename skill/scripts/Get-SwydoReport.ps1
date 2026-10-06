@@ -103,6 +103,21 @@ function Test-FetchFailed($r){
   if($null -eq $r.PSObject){ return $false }
   return ($null -ne $r.PSObject.Properties['__fetchFailed'])
 }
+# The body of a non-2xx response, from the web cmdlet's ErrorRecord. PS 5.1 drains the response
+# stream before it throws and parks the body in ErrorDetails.Message, so the stream read is only the
+# fallback (EXTR-aStrictSchema-1). Returns '' when neither source has a body; never throws.
+function Get-HttpErrorBody($errRec,$resp){
+  $txt = ''
+  try { if ($errRec -and $errRec.ErrorDetails -and $errRec.ErrorDetails.Message) { $txt = [string]$errRec.ErrorDetails.Message } } catch { $txt = '' }
+  if (-not $txt -and $resp) {
+    try {
+      $st = $resp.GetResponseStream()
+      try { if ($st.CanSeek) { $st.Position = 0 } } catch {}
+      $txt = [string](New-Object IO.StreamReader($st)).ReadToEnd()
+    } catch { $txt = '' }
+  }
+  return $txt
+}
 function Invoke-GQL($q,$vars,[switch]$NoRetry){
   if ((((Get-Date) - $script:jwtAt).TotalSeconds) -gt 500) { $script:jwt = Mint-Jwt; $script:jwtAt = Get-Date }
   $maxTries = 3; if($NoRetry){ $maxTries = 1 }
@@ -111,19 +126,43 @@ function Invoke-GQL($q,$vars,[switch]$NoRetry){
   $reminted = $false    # hoisted: one 401 re-mint per call, never a re-mint loop
   for($try=1; $try -le $maxTries; $try++){
     try {
-      return (Invoke-WebRequest "https://graphql.swydo.com" -Method Post -UseBasicParsing -TimeoutSec $script:httpTimeoutSec `
+      $content = (Invoke-WebRequest "https://graphql.swydo.com" -Method Post -UseBasicParsing -TimeoutSec $script:httpTimeoutSec `
               -Headers @{authorization="Bearer $script:jwt"; "content-type"="application/json"} -Body $body).Content
+      # An empty 200 body parses to $null and would read as "no rows yet": a fault, never an empty widget.
+      if ($content) { return $content }
+      $lastErr = 'empty response body (HTTP 200)'
     } catch {
-      $lastErr = [string]$_.Exception.Message
-      $resp = $null; try { $resp = $_.Exception.Response } catch {}
+      $errRec = $_
+      $lastErr = [string]$errRec.Exception.Message
+      $resp = $null; try { $resp = $errRec.Exception.Response } catch {}
       if ($resp) {
         $code = 0; try { $code = [int]$resp.StatusCode } catch {}
         if ($code -eq 401 -and -not $reminted) {
           $reminted = $true
           try { $script:jwt = Mint-Jwt; $script:jwtAt = Get-Date; continue } catch { $lastErr = [string]$_.Exception.Message }
         }
-        # a real HTTP response (GraphQL errors, 4xx bodies) is DATA, not a transport fault
-        try { return (New-Object IO.StreamReader($resp.GetResponseStream())).ReadToEnd() } catch { }
+        # EXTR-aStrictSchema-1: this used to read only the drained stream and got '', which the fetch
+        # loop mistook for a widget still computing - when Swydo dropped socketId from Widget.fields on
+        # 2026-10-06, every data widget of a populated report waited out its budget as "incomplete".
+        $bodyTxt = Get-HttpErrorBody $errRec $resp
+        # A validation failure means our query no longer matches Swydo's schema. No retry or wait can
+        # fix that, so end the run with Swydo's own message instead of N silent budget exhaustions.
+        if ($bodyTxt -match 'GRAPHQL_VALIDATION_FAILED') {
+          $msgs = @()
+          try { $msgs = @(@(($bodyTxt | ConvertFrom-Json).errors) | ForEach-Object { if ($_.extensions.originalMessage) { [string]$_.extensions.originalMessage } else { [string]$_.message } }) } catch {}
+          $msgs = @($msgs | Where-Object { $_ })
+          if (@($msgs).Count -eq 0) { $msgs = @(([string]$bodyTxt).Substring(0, [math]::Min(300, ([string]$bodyTxt).Length))) }
+          throw ("Swydo rejected the GraphQL query (HTTP " + $code + ", GRAPHQL_VALIDATION_FAILED): " + ((@($msgs) | Sort-Object -Unique) -join ' | ') + " -- the Swydo API has changed; update the query in Get-SwydoReport.ps1")
+        }
+        # A 4xx JSON body (GraphQL errors) is DATA, not a transport fault. Anything else - a 5xx or
+        # 429, an HTML gateway page, an empty body - is retryable: returned as data it would make the
+        # caller's ConvertFrom-Json throw and end the run over a transient upstream hiccup.
+        $isJson = $false
+        if ($bodyTxt) { try { [void]($bodyTxt | ConvertFrom-Json); $isJson = $true } catch { $isJson = $false } }
+        if ($isJson -and $code -ge 400 -and $code -lt 500 -and $code -ne 429) { return $bodyTxt }
+        if (-not $bodyTxt) { $lastErr = ('HTTP ' + $code + ' with empty body') }
+        elseif (-not $isJson) { $lastErr = ('HTTP ' + $code + ' with a non-JSON body') }
+        else { $lastErr = ('HTTP ' + $code) }
       }
     }
     if($try -lt $maxTries){ Start-Sleep -Milliseconds ([int]([math]::Pow(2,$try) * 250)) }
@@ -399,7 +438,7 @@ function Flatten-Text($node){
 }
 
 # --- data fetch: cache-warm retry on page 1, then paginate ---
-$script:baseQ='query($sid:ID!,$dr:DateRange!,$cp:ComparePeriod!,$after:String){widget(id:"__ID__"){id content comparisonFormat visual{id} displayOptions{title} widgetTemplate{id linked} target{value} dateRange manualKpiOptions{value compareValue} source{id name parts{id provider{id name} dataSource{id}}} metrics:fields(socketId:$sid,type:METRIC){edges{node{id name}}} dims:fields(socketId:$sid,type:DIMENSION){edges{node{id name}}} data(first:__N__,after:$after,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){edges{node}pageInfo{hasNextPage endCursor}}}}'
+$script:baseQ='query($sid:ID!,$dr:DateRange!,$cp:ComparePeriod!,$after:String){widget(id:"__ID__"){id content comparisonFormat visual{id} displayOptions{title} widgetTemplate{id linked} target{value} dateRange manualKpiOptions{value compareValue} source{id name parts{id provider{id name} dataSource{id}}} metrics:fields(type:METRIC){edges{node{id name}}} dims:fields(type:DIMENSION){edges{node{id name}}} data(first:__N__,after:$after,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){edges{node}pageInfo{hasNextPage endCursor}}}}'
 # Budgeted, verdict-driven fetch. Returns the GraphQL object exactly as before; the per-widget
 # outcome record is left in $script:lastFetchOutcome for the caller to collect (probe and discovery
 # callers deliberately do NOT collect it - a REJECTED probe is the answer they wanted).
@@ -525,11 +564,11 @@ function New-RelDateRange($count,$measure){
 # template would fail every probe for the wrong reason.
 function Get-FieldProbeCandidates(){
   return @(
-    [ordered]@{ field='metrics[].aggregation';   leaf='aggregation';       vars='sid';       sel='metrics:fields(socketId:$sid,type:METRIC){edges{node{aggregation}}}' }
+    [ordered]@{ field='metrics[].aggregation';   leaf='aggregation';       vars='none';      sel='metrics:fields(type:METRIC){edges{node{aggregation}}}' }
     [ordered]@{ field='widget.dateRange';        leaf='dateRange';         vars='none';      sel='dateRange' }
     [ordered]@{ field='widget.filters';          leaf='filters';           vars='none';      sel='filters' }
     [ordered]@{ field='widget.segments';         leaf='segments';          vars='none';      sel='segments' }
-    [ordered]@{ field='dims[].isPartition';      leaf='isPartition';       vars='sid';       sel='dims:fields(socketId:$sid,type:DIMENSION){edges{node{isPartition}}}' }
+    [ordered]@{ field='dims[].isPartition';      leaf='isPartition';       vars='none';      sel='dims:fields(type:DIMENSION){edges{node{isPartition}}}' }
     [ordered]@{ field='widget.serverRowTotal';   leaf='serverRowTotal';    vars='none';      sel='serverRowTotal' }
     [ordered]@{ field='data.totalCount';         leaf='totalCount';        vars='sid-dr-cp'; sel='data(first:1,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){totalCount}' }
   )
@@ -546,10 +585,12 @@ function Limit-ProbeDetail($text){
   return $t
 }
 # The probe issues its OWN request rather than going through Invoke-GQL, because Invoke-GQL surfaces no
-# status code and its error-body read at the WebException path comes back EMPTY (the stream is already
-# drained by the time it is read). Verified live 2026-08-05: every absent field answers 400 with
-# GRAPHQL_VALIDATION_FAILED, every present field answers 200 -- so status is the reliable signal and the
-# body is the corroborating detail.
+# status code, and a validation failure is the ANSWER here while Invoke-GQL treats it as fatal.
+# Verified live 2026-08-05: every absent field answers 400 with GRAPHQL_VALIDATION_FAILED, every
+# present field answers 200. Get-FieldProbeVerdict needs the BODY to call a field absent (the code
+# plus the leaf name); status alone yields 'unknown'. The body comes from Get-HttpErrorBody
+# (EXTR-aStrictSchema-1); the stream-only read it replaced came back empty under PS 5.1, which
+# left every absent field 'unknown'.
 function Invoke-ProbeRequest($q,$vars){
   $payload = @{query=$q; variables=$vars} | ConvertTo-Json -Compress -Depth 40
   $out=[ordered]@{ status=0; body='' }
@@ -558,15 +599,12 @@ function Invoke-ProbeRequest($q,$vars){
            -Headers @{authorization="Bearer $script:jwt"; "content-type"="application/json"} -Body $payload
     $out.status=[int]$r.StatusCode; $out.body=[string]$r.Content
   } catch {
-    $resp=$null; try { $resp=$_.Exception.Response } catch {}
+    $errRec=$_
+    $resp=$null; try { $resp=$errRec.Exception.Response } catch {}
     if($resp){
       try { $out.status=[int]$resp.StatusCode } catch { $out.status=-1 }
-      try {
-        $st=$resp.GetResponseStream()
-        try { if($st.CanSeek){ $st.Position=0 } } catch {}
-        $out.body=(New-Object IO.StreamReader($st)).ReadToEnd()
-      } catch { $out.body='' }
-    } else { $out.status=-1; $out.body=[string]$_.Exception.Message }
+      $out.body = Get-HttpErrorBody $errRec $resp
+    } else { $out.status=-1; $out.body=[string]$errRec.Exception.Message }
   }
   return $out
 }

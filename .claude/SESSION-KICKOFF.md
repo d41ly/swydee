@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-08-10T14:36:35+03:00 @ cee59f475282ef907119181844d2d2af6ba86e48
+last-audit: 2026-10-06T17:52:49+03:00 @ b5f06bca8dcaa2f743f0ffb1b8d30fd6a74c5c71
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -104,10 +104,10 @@ from the repo root).
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1435 assertions across the 8 suites after ANLZ-aUniformLattice-9 --
-the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 327,
+1473 assertions across the 8 suites after EXTR-aStrictSchema-1 --
+the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 365,
 Analyze 731, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
-Was 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +
+Was 1435 after ANLZ-aUniformLattice-9, 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +
 ANLZ-aCandidTally-1, 1276 after
 ANLZ-aUniformLattice-8, and 1064 at adoption.
 
@@ -176,6 +176,12 @@ true. Keep each to one line; link out for detail.*
   identical tree was green from git-bash. `tools/run-ps-suite.sh` now `unset PSModulePath`, so 5.1
   rebuilds its default. Verified 2026-08-05 green from both parents (ORCH-aUniformLattice-1). Any NEW
   launcher that spawns `powershell.exe` must do the same, or it reintroduces the split.
+- **PS 5.1 hides every non-2xx body from a stream read.** `Invoke-WebRequest` drains the response
+  stream before it throws, so `Response.GetResponseStream()` reads `''`; the body is in the caught
+  ErrorRecord's `ErrorDetails.Message`. Read it via `Get-HttpErrorBody`. Missing this made a Swydo
+  schema change (`socketId` dropped from `Widget.fields`, 2026-10-06) look like 44 slow widgets
+  instead of one 400 (EXTR-aStrictSchema-1). Swydo's GraphQL has introspection DISABLED, so a
+  schema change is only discoverable from its validation errors.
 - Swydo orders the lists inside grouped cells **non-deterministically**: three QCU widgets differ
   between ANY two extractions of the same report, including two runs of identical code. A
   byte-comparison of two extractions is therefore only meaningful per-widget and after excluding

@@ -107,7 +107,7 @@ Body: {"query":"...","variables":{...}}
   - `GRAPHQL_VALIDATION_FAILED` (400) → malformed query (missing required arg, wrong sub-selection). Verbose and useful — iterate against it.
   - `BAD_USER_INPUT` (200) → bad variable value (e.g. malformed DateRange, §7.4).
   - `UNAUTHENTICATED` / HTTP 401 → JWT expired (~10 min). Re-mint.
-  - Note: for non-2xx responses the JSON error body is in the response stream — read it (curl shows it; in PowerShell catch the `WebException` and read `Response.GetResponseStream()`).
+  - Note: for non-2xx responses curl shows the JSON error body directly. Windows PowerShell 5.1 drains the response stream before it throws, so `Response.GetResponseStream()` reads back EMPTY there; the body is in the caught ErrorRecord's `ErrorDetails.Message` (EXTR-aStrictSchema-1, verified 2026-10-06).
 - **Scalar vs object fields** (learned by probing): `dateRange`, `compareDateRange`, `content`, `comparisonFormat`, and each `data`-connection `node` are JSON scalars (select bare); `visual`, `displayOptions`, `source`, `client`, `author`, `sections` need sub-selections.
 
 ## 6. Step 4 — Report structure
@@ -148,7 +148,7 @@ Returns the ordered widget list plus `dateRange`/`compareDateRange` as JSON obje
 
 ## 7. Step 5 — Widget data
 
-Each widget's data lives behind **Observable connections** requiring a `socketId`:
+Each widget's data lives behind an **Observable connection** (`data`) requiring a `socketId`; the field lists (`fields`) take none since 2026-10-06:
 
 ```graphql
 query($sid: ID!, $dr: DateRange!, $cp: ComparePeriod!, $after: String) {
@@ -159,8 +159,8 @@ query($sid: ID!, $dr: DateRange!, $cp: ComparePeriod!, $after: String) {
     visual { id }
     displayOptions { title }      # custom title, else null (falls back to metric name)
     source { id name parts { provider { id name } } }   # source.name IS in scope per-widget
-    metrics: fields(socketId: $sid, type: METRIC)    { edges { node { id name } } }
-    dims:    fields(socketId: $sid, type: DIMENSION) { edges { node { id name } } }
+    metrics: fields(type: METRIC)    { edges { node { id name } } }   # NO socketId: rejected since 2026-10-06
+    dims:    fields(type: DIMENSION) { edges { node { id name } } }
     data(first: 500, after: $after, socketId: $sid,
          referenceDateRange: $dr, referenceCompareDate: $cp) {
       edges { node cursor }
@@ -172,11 +172,11 @@ query($sid: ID!, $dr: DateRange!, $cp: ComparePeriod!, $after: String) {
 
 Variables: `$sid` = a socketId (§7.1), `$dr` = `report.dateRange` verbatim, `$cp` = `report.compareDateRange` verbatim, `$after` = `null` for page 1.
 
-Required args (from validation errors): `data`(`first:Int!`, `socketId:ID!`, `referenceDateRange:DateRange!`, `referenceCompareDate:ComparePeriod!`); `fields`(`socketId:ID!`, `type:FieldType!` = `METRIC`|`DIMENSION`). `fields.node` = `ProviderField{id name}`; `data.node` (`WidgetDataRow`) is a **JSON scalar** (select bare).
+Required args (from validation errors): `data`(`first:Int!`, `socketId:ID!`, `referenceDateRange:DateRange!`, `referenceCompareDate:ComparePeriod!`); `fields`(`type:FieldType!` = `METRIC`|`DIMENSION`) - it took `socketId:ID!` too until Swydo removed that argument on 2026-10-06, and passing it now fails the whole operation with `GRAPHQL_VALIDATION_FAILED` (EXTR-aStrictSchema-1). `fields.node` = `ProviderField{id name}`; `data.node` (`WidgetDataRow`) is a **JSON scalar** (select bare).
 
 ### 7.1 socketId & the websocket — what actually gates the data
 
-`data`/`fields`/`sort` are typed `Observable…Connection`. The real rule (verified — this corrects a common misconception):
+`data`/`sort` are typed `Observable…Connection` (`fields` was too, before 2026-10-06; UNVERIFIED whether its type changed or only its argument list). The real rule (verified — this corrects a common misconception):
 
 - **The gate is server-side CACHE STATE for the `(widget, dateRange)` pair — not the widget's visual type, and not socket liveness.**
 - For a **cached** `(widget, dateRange)` — which includes a report's own stored `dateRange`/`compareDateRange` (§6) once it has been viewed — the HTTP response returns the full rows **synchronously to ANY `socketId` string**. `socketId` is a required arg but its value is *not validated* for cache hits: `"x"`, `""`, a random GUID — all return the data. KPI and TABLE/chart widgets behave identically. **So plain `curl` (§10) can extract the entire report** for its stored date range.
@@ -327,7 +327,7 @@ curl -s https://graphql.swydo.com -H "authorization: Bearer $JWT" -H 'content-ty
   -d "{\"query\":\"query{report(id:\\\"$RID\\\"){name dateRange compareDateRange widgets{edges{node{id visual{id}}}}}}\"}"
 # any widget (cache path; any socketId string works). Paste report.dateRange/compareDateRange verbatim:
 curl -s https://graphql.swydo.com -H "authorization: Bearer $JWT" -H 'content-type: application/json' -d '{
- "query":"query($sid:ID!,$dr:DateRange!,$cp:ComparePeriod!){widget(id:\"<WIDGET_ID>\"){metrics:fields(socketId:$sid,type:METRIC){edges{node{name}}} data(first:500,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){edges{node}pageInfo{hasNextPage endCursor}}}}",
+ "query":"query($sid:ID!,$dr:DateRange!,$cp:ComparePeriod!){widget(id:\"<WIDGET_ID>\"){metrics:fields(type:METRIC){edges{node{name}}} data(first:500,socketId:$sid,referenceDateRange:$dr,referenceCompareDate:$cp){edges{node}pageInfo{hasNextPage endCursor}}}}",
  "variables":{"sid":"x","dr":<PASTE report.dateRange>,"cp":<PASTE report.compareDateRange>}}'
 # paginate: repeat with an extra $after:String var and after:"<endCursor>" while hasNextPage.
 ```
