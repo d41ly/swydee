@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-10-06T18:12:54+03:00 @ 01a5e215e90a7b299a5bc124d5554e7601e095d5
+last-audit: 2026-11-11T17:10:48+02:00 @ 94dc7491d7ba3b3de61a82e56eaaef5a78e72533
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -183,6 +183,10 @@ true. Keep each to one line; link out for detail.*
   schema change (`socketId` dropped from `Widget.fields`, 2026-10-06) look like 44 slow widgets
   instead of one 400 (EXTR-aStrictSchema-1). Swydo's GraphQL has introspection DISABLED, so a
   schema change is only discoverable from its validation errors.
+- **Swydo's validation error names no field** - just `GraphQL validation failed.` Find the dropped
+  field by sending each selection of the failing query ALONE via `Invoke-ProbeRequest` (dot-source
+  `-DefineOnly`, mint the JWT, no socket needed for `report{...}`). Found this way 2026-11-11:
+  `Report.teamName` was replaced by `Report.team{id name}`.
 - Swydo orders the lists inside grouped cells **non-deterministically**: three QCU widgets differ
   between ANY two extractions of the same report, including two runs of identical code. A
   byte-comparison of two extractions is therefore only meaningful per-widget and after excluding

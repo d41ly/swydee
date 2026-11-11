@@ -1066,7 +1066,7 @@ if(-not (Connect-Ws)){ throw "no socketId from wss://ws.swydo.com" }
 Write-Host "socketId=$script:socketId"
 
 # 4. structure
-$structQ='query($id:ID!){report(id:$id){id name subtitle orientation custom client{id name} author{id name email} dateRange compareDateRange sections{id name isHidden} widgets{edges{node{id visual{id} section{id} source{id parts{provider{id name}}}}}} teamName}}'
+$structQ='query($id:ID!){report(id:$id){id name subtitle orientation custom client{id name} author{id name email} dateRange compareDateRange sections{id name isHidden} widgets{edges{node{id visual{id} section{id} source{id parts{provider{id name}}}}}} team{name}}}'
 $structRaw = Invoke-GQL $structQ @{id=$reportId} -NoRetry
 $s = ($structRaw | ConvertFrom-Json).data.report
 if(-not $s){ throw "structure query returned no report: $structRaw" }
@@ -1219,7 +1219,7 @@ if($Trend){
       extractionComplete=$tcompleteness.extractionComplete; incompleteWidgets=@($tcompleteness.incompleteWidgets)
       fetchBudget=$tcompleteness.fetchBudget
     }
-    report=[ordered]@{ name=$s.name; client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName }
+    report=[ordered]@{ name=$s.name; client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.team.name }
     trendCells=@($cells)
   }
   $tpath=Join-Path $OutDir "$tstamp-$tslug.trend.json"
@@ -1340,7 +1340,7 @@ $doc = [ordered]@{
   }
   report = [ordered]@{
     name=$s.name; subtitle=$s.subtitle; orientation=$s.orientation
-    client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.teamName
+    client=$s.client.name; clientId=$s.client.id; author=[ordered]@{name=$s.author.name;email=$s.author.email}; team=$s.team.name
     dateRange=$s.dateRange; compareDateRange=$s.compareDateRange; dateRangeResolved=$script:drResolved
     sections=@($s.sections|ForEach-Object{ [ordered]@{id=$_.id;name=$_.name} }); custom=$s.custom
   }
