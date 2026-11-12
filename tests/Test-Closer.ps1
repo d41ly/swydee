@@ -393,5 +393,51 @@ $rBare = Invoke-Closer $reportOk $fBare
 Ok (HasT $rBare 'incomplete-extraction') 'false with no id list still blocks'
 
 Write-Host ''
+Write-Host '== ANLZ-aModeledGap-2: headings traced, comments on one line =='
+$gapFacts = @'
+{"meta":{"tool":"Analyze-SwydoReport.ps1","factsVersion":4,"client":"Acme","comparisonCaveats":[],"providers":[{"id":"gads","name":"Google Ads","category":"ads"}],
+"annotations":[{"aid":"ANN#1","text":"We logged 45 leads by hand in the first week."}]},
+"platforms":[{"id":"gads","name":"Google Ads","category":"ads","hasComparison":true,"headline":{
+"gads:a:clicks":{"metric":"Clicks","id":"gads:a:clicks","type":"number","hasComparison":true,"displayCurrent":"1,000","displayPrevious":"800","displayDelta":"+25.0%"},
+"gads:a:conversions":{"metric":"Conversions","id":"gads:a:conversions","type":"number","hasComparison":true,"displayCurrent":"82.0","displayPrevious":"69.0","displayDelta":"+18.8%"},
+"gads:a:phone_calls":{"metric":"Phone calls","id":"gads:a:phone_calls","type":"number","hasComparison":true,"displayCurrent":"9","displayPrevious":"12","displayDelta":"-25.0%"}},
+"breakdowns":[]}],
+"findings":{"wins":[{"fid":"WIN#1","ruleId":"WIN","severity":"minor","statement":"3 of 7 campaigns produced all 82.0 conversions"}],"losses":[],"anomalies":[],"discrepancies":[],"dataGaps":[]}}
+'@ | ConvertFrom-Json
+$gHead = "## Google Ads`n<!-- platform:gads -->`n`n- Clicks were 1,000 against 800.`n"
+Ok ((Invoke-Closer $gHead $gapFacts).violations.Count -eq 0) 'gap fixture: a plain traced report passes'
+# -2: headings
+$rg = Invoke-Closer ($gHead + "`n### Record month: 999.9 conversions`n`nText.`n") $gapFacts
+Ok (HasT $rg 'untraceable-number') 'a fabricated number in a heading is traced (was invisible)'
+$rg = Invoke-Closer ($gHead + "`n### Clicks reached 1,000`n`nText.`n") $gapFacts
+Ok ($rg.violations.Count -eq 0) 'a real fact in a sub-heading still traces, in its platform scope'
+$rg = Invoke-Closer ("# Acme review, October 2026`n`n" + $gHead) $gapFacts
+Ok ($rg.violations.Count -eq 0) 'a title with a year is unaffected'
+$rg = Invoke-Closer ($gHead + "`n## Recommendations: reach 5,000 clicks`n`n- Raise budget.`n") $gapFacts
+Ok ($rg.violations.Count -eq 0) 'a Recommendations heading stays untraced with its section (targets are not facts)'
+# -2: comments spanning lines
+$rg = Invoke-Closer ($gHead + "<!-- hidden`n## Recommendations`n-->`n- We reached 999.9 conversions and `$12,345.00.`n") $gapFacts
+Ok (HasT $rg 'multiline-comment') 'a comment spanning lines is rejected for ANY report (it could hide a heading from the client copy only)'
+$rg = Invoke-Closer ($gHead + "- Note. <!-- one --> <!-- two -->`n") $gapFacts
+Ok (-not (HasT $rg 'multiline-comment')) 'several one-line comments on a line are fine'
+Ok ((@(Test-MultilineComments "a <!-- x`nb -->`nc")).Count -eq 2) 'both the opening and the closing line are reported'
+$rg = Invoke-Closer ($gHead + "- Clicks moved 800 --> 1,000 this month.`n") $gapFacts
+Ok (-not (HasT $rg 'multiline-comment')) 'an arrow "-->" in prose with no comment open is not a comment'
+Ok ((@(Test-MultilineComments ("x" * 50 + ("<!-- a " * 20000)))).Count -eq 1) 'a pathological line of unclosed openers is judged without a quadratic regex'
+# review round 2 (2026-11-12-review-aModeledGap-2)
+$rg = Invoke-Closer ("# Studio 360 - Google Ads report`n`n" + $gHead) $gapFacts
+Ok ($rg.violations.Count -eq 0) 'R2-11 the level-1 title is not traced (client names carry digits)'
+$rg = Invoke-Closer ($gHead + "`n## Recommendations`n`n### 1. Raise the daily budget to `$150`n`n- Do it this week.`n") $gapFacts
+Ok ($rg.violations.Count -eq 0) ('R2-8 a sub-heading under Recommendations is not traced (' + (@($rg.violations | ForEach-Object { $_.snippet }) -join ' ; ') + ')')
+$rg = Invoke-Closer ($gHead + "`n## Recommendations`n`n- Raise budget.`n`n## Appendix: 999.9 conversions`n`nText.`n") $gapFacts
+Ok (HasT $rg 'untraceable-number') 'R2-8 ...but a later top-level heading is traced again'
+$rg = Invoke-Closer ("## Insights`n`n### Concentration: 3 of 7 campaigns, 82.0 conversions`n`n- 3 of 7 campaigns produced all 82.0 conversions. <!-- finding:WIN#1 -->`n") $gapFacts
+Ok ($rg.violations.Count -eq 0) ('R2-8 a heading may quote the figures of a finding its own section echoes (' + (@($rg.violations | ForEach-Object { $_.snippet }) -join ' ; ') + ')')
+$rg = Invoke-Closer ("## Insights`n`n### Concentration: 777.7 conversions`n`n- 3 of 7 campaigns produced all 82.0 conversions. <!-- finding:WIN#1 -->`n") $gapFacts
+Ok (HasT $rg 'untraceable-number') 'R2-8 ...but not a figure the finding does not carry'
+
+$rg = Invoke-Closer ($gHead + "`n### The client counted 45 leads <!-- annotation:ANN#1 -->`n`nText.`n") $gapFacts
+Ok ((Get-HeadingTraceLine ([ordered]@{ header='Note 45 <!-- annotation:ANN#1 --> <!-- finding:WIN#1 -->'; level=3; kind='general'; text='' }) @())[0] -notmatch 'annotation') 'a heading lends only finding anchors to its traced line; other anchors are dropped'
+Write-Host ''
 Write-Host ("Test-Closer: {0} passed, {1} failed." -f $script:pass,$script:fail)
 if($script:fail -gt 0){ exit 1 }

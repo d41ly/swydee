@@ -29,6 +29,8 @@ a note; never rewrite a row. Detail lives under `builds/<slug>/`.
 - ANLZ-aCandidTally-2 - a key-resolution change under an unchanged reduce moves the version marker of EVERY layer whose published values it changes; today that rule exists only as an inference from two negative statements
 - ANLZ-aUniformLattice-9 · row findings name their cut and disclose their denominator against the computed platform total; no dedup rung → [detail](builds/aUniformLattice/spec/2026-08-05-spec-ANLZ-aUniformLattice-9.md)
 - ANLZ-aUniformLattice-10 · the cross-widget discrepancy layer obeys the compare-suppression gate; it was the fourth `.compare` read and the only ungated one → [detail](builds/aUniformLattice/spec/2026-08-05-spec-ANLZ-aUniformLattice-10.md)
+- ANLZ-aModeledGap-1 - a metric DECLARED incomplete gets a modeled estimate, never inferred and never mixed with measured figures; built on `main` before its spec at the owner's request -> [spec](builds/aModeledGap/spec/2026-11-12-spec-aModeledGap-1.md)
+- ANLZ-aModeledGap-2 - the closer traces heading text and rejects comments that span lines; a small-count phrase rule was built, reviewed and withdrawn rather than shipped half-working -> [spec](builds/aModeledGap/spec/2026-11-12-spec-aModeledGap-2.md)
 
 ## trend
 

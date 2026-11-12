@@ -2,7 +2,7 @@
 name: swydee
 description: Generate a senior-performance-marketer client report from a Swydo shared report — either a swy.do share link or an already-parsed v2 extraction/facts JSON. Use ONLY when the user runs /swydee or explicitly asks to analyze / write a report on a Swydo report. Do NOT auto-invoke on unrelated marketing or data questions.
 disable-model-invocation: true
-argument-hint: "<swy.do link | path\\to\\extraction.json | trend <swy.do link|client:name> | list | cleanup older-than:<7d|1mo|3mo|1yr> (client:<name>|all)> [--password <pw>] [voice:<causal|correlational|executive|analytical|consultative>] [--platform <id>] [--fast|--thorough|--no-trend] [--out <dir>]"
+argument-hint: "<swy.do link | path\\to\\extraction.json | trend <swy.do link|client:name> | list | cleanup older-than:<7d|1mo|3mo|1yr> (client:<name>|all)> [--password <pw>] [voice:<causal|correlational|executive|analytical|consultative>] [--platform <id>] [--fast|--thorough|--no-trend] [forecast:"<which metric/actions are incomplete, first-last day lost>"] [--out <dir>]"
 allowed-tools: Bash, PowerShell, Read, Write
 ---
 
@@ -11,6 +11,8 @@ allowed-tools: Bash, PowerShell, Read, Write
 Turns a Swydo report into a client-ready report: per-platform overviews with previous-period comparison, analytical insights (wins / needs-attention / anomalies), and recommendations — with **every number deterministically traced to the data**.
 
 **Tools (bundled with this skill).** The PowerShell tools ship inside this skill at `${CLAUDE_SKILL_DIR}/scripts/`: `Get-SwydoReport.ps1` (extractor), `Analyze-SwydoReport.ps1` (analyzer), `Test-ReportNumbers.ps1` (closer), `Manage-SwydoArchive.ps1` (archive + retention), and for the cumulative-trend feature `ConvertTo-SwydoTrendFacts.ps1` + `Update-SwydoLedger.ps1` + `Analyze-SwydoTrend.ps1` + `Sync-SwydoTrend.ps1` (the fail-soft refresh wrapper; see "Trend mode" + Flow step 8). `${CLAUDE_SKILL_DIR}` is this skill's own install directory (the folder holding this SKILL.md), so the paths resolve wherever the skill is installed (personal, project, or plugin). Invoke each with the PowerShell tool as `powershell -NoProfile -File "${CLAUDE_SKILL_DIR}/scripts/<name>.ps1" <args>`. The report template sits beside this file at `${CLAUDE_SKILL_DIR}/report-template.md`.
+
+**Forecast tool.** `Invoke-SwydoForecast.ps1` (also in `scripts/`) estimates what a metric that was DECLARED incomplete would have been (for example conversions lost to a tracking outage) and adds a separate `estimates` block to the facts. It is the only source of a modeled number; see Flow step 2b. Its closer rules live in `scripts/_EstimateCheck.ps1`, which `Test-ReportNumbers.ps1` loads by itself.
 
 ## Non-negotiables
 - **The model narrates; the tools compute.** You may cite ONLY the pre-formatted display strings that appear in the facts JSON. Do NOT do arithmetic, re-round, sum, average, or derive any number. If a number you want isn't in the facts, you may not use it.
@@ -24,6 +26,7 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 - If the first token matches `^(https?://)?(swy\.do/shares/|app\.swydo\.com/g/)` → **Mode A (link)**.
 - Else if it ends in `.json` and the file exists → **Mode B (file)**.
 - Else → stop with a usage message. Any token starting `--` is a flag; a share password must be given via `--password <pw>` (never positionally).
+- A `forecast:"..."` token asks for a modeled estimate of a metric the user says is incomplete (e.g. `forecast:"web form conversions untracked Oct 10-28"`). It carries the declaration for Flow step 2b: which metric or conversion action(s), and the first and last day with lost tracking. It is a request to run the tool, never a number source.
 - A `voice:<type>` token selects the report's attribution profile (`causal` (default) | `correlational` | `executive` | `analytical` | `consultative`; unknown → fall back to `causal`). See the voice section of `${CLAUDE_SKILL_DIR}/report-template.md`.
 
 ### 2. Produce the facts
@@ -33,6 +36,16 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
 - Check `meta.compareBasis` before writing any comparison: `untrusted` forbids comparative language outright. See **Comparison basis** in Notes.
 - Every flag either tool accepts, with its default, is in **## Parameters** below. Reach for it before
   guessing a flag or re-deriving a default from a script.
+
+### 2b. Forecast an incomplete metric — ONLY when it is declared incomplete
+Run this step when, and only when, someone has STATED that a metric is incomplete: the user (a `forecast:"..."` token or a plain request), or a client note in `meta.annotations` (e.g. "tracking was cut off after Oct 9 and fixed on Oct 29"). **Never infer an outage from the numbers** - a metric that merely fell is a loss, not a gap. Skip the step otherwise, and for Mode C (trend facts are not supported).
+- **What you must have before running:** (1) who declared it (`-DeclaredBy "client note ANN#1"` or `"user"`, in words - never a link or key); (2) the window as the FIRST and LAST day with lost tracking, inclusive ("cut off after Oct 9, fixed on Oct 29" → `2026-10-10` to `2026-10-28`); (3) which conversion action(s) lost tracking, by their exact row label in the facts' "Conversion action name" breakdown. If the statement does not name the actions or the dates, **ask the user** (show the action rows with their current and previous display strings); do not pick the affected actions yourself from how far each one dropped. Omit `-Action` only when the whole metric was untracked. The metric must be additive: a count (conversions, calls, leads) or money that sums (conversion value, revenue). A rate, a score or a per-unit price such as cost per conversion is refused.
+- **Run:** `${CLAUDE_SKILL_DIR}/scripts/Invoke-SwydoForecast.ps1 -Facts <facts.json> -DeclaredBy "<who>" -OutageStart <yyyy-MM-dd> -OutageEnd <yyyy-MM-dd> [-Action "<label>[;<label>]"] [-Ledger ${CLAUDE_SKILL_DIR}/archive/<client-slug>/ledger.json] [-HistoryMonths <n>]`. Pass `-Ledger` when the client has one (it is read for the trailing conversion-rate history; it is credential-free). For anything the flags cannot say, write a small spec file and pass `-Spec <path>`: `{ "declaredBy": "...", "platform": "<providerId>", "metric": "Conversions", "actions": ["<label>"], "outage": {"start": "yyyy-MM-dd", "end": "yyyy-MM-dd"}, "partials": [ {"action": "<label>", "value": <number recorded in a tracked window>, "start": "...", "end": "...", "source": "<where that number came from>"} ], "excludeMonths": ["yyyy-MM"], "metricNames": {"clicks": "...", "impressions": "...", "cost": "...", "conversionRate": "...", "costPerConversion": "..."} }`. A spec value wins over the matching flag. A `partials` entry names one of the declared actions exactly; for the whole metric leave its `action` out; an entry that matches no target is an input error (exit 2). A `partials` value must itself come from a tool or the user (e.g. "the client says 12 forms were recorded Oct 1-9") - never from your own arithmetic. If the platform's action breakdown is cut by a dimension with another name, add `"actionDimension": "<dimension name>"`.
+- **What it does:** computes several simple methods side by side - last period's rate per click and per impression applied to this period's traffic, last period's value moved in step with the actions that kept tracking, and the tracked-day pace extended to the full period - then reports low (smallest), high (largest) and a base (a blend of the prior-level evidence and the tracked-day evidence, with the tracked-day pace weighted by the share of the period that was tracked). With per-action estimates it also derives the account total, the conversion rate and the cost per conversion. The ledger's trailing conversion rate is a cross-check on the total (a method only when the whole metric is incomplete), and is refused when that history is unstable.
+- **Exit codes:** `0` = the facts file now carries a top-level `estimates` block (re-read the facts); `1` = every estimate was refused - nothing is written, an `estimates` block left by an earlier run is REMOVED, so tell the user the printed reasons and write the report WITHOUT estimates; `2` = bad input (unreadable JSON, wrong arguments, a non-count metric, an unmatched partial; it also refuses a raw extraction) - the facts are untouched, so fix the arguments and run again. Partial refusals are listed under `estimates.refused[]` with their reasons - say so in the report rather than filling the gap yourself.
+- **Using the result:** each `estimates.items[]` entry has an `eid` (`EST#n`), `display` / `displayLow` / `displayHigh`, the `measuredDisplay` it sits beside, a ready `statement`, the `methods[]` (each with `display`, a plain-words `formula`, `inputs[]` with their sources, and its `assumption`), `skippedMethods[]`, `crossChecks[]` and an `uncertainty` statement. Cite them ONLY in the report's `## Estimates (modeled)` section, following `report-template.md`. Everywhere else the report keeps the measured figures, and the measured-data caveat stays in force.
+- Run it after any other tool that adds to the facts and before writing the draft; re-running replaces the block. To drop an estimate that was produced, re-run `Analyze-SwydoReport.ps1` for clean facts.
+- **Fan-out (step 3):** the per-category slices do not carry the `estimates` block. The synthesizing (orchestrating) pass writes `## Estimates (modeled)` itself from the full facts; analyst subagents never cite an estimate.
 
 ### 3. Decide single-pass vs fan-out
 - Count distinct `meta.providers[].category`. **Single-pass** if 1 category (and not `--thorough`). **Fan-out** if ≥ 2 distinct categories (or `--thorough`); `--fast` forces single-pass.
@@ -67,7 +80,7 @@ Turns a Swydo report into a client-ready report: per-platform overviews with pre
   `report-template.md` whitelists.
 
 ### 4. Write the report DRAFT — follow `${CLAUDE_SKILL_DIR}/report-template.md` exactly
-Write the **draft** (with anchors) to a working path `<out>\<stamp>-<slug>-report.draft.md`. Fill the template from the facts in the selected voice profile (default `causal`). Obey every hard rule in it: verbatim numbers; ALL comparisons narrated as prose (no tables/charts); mandatory caveats; the `<!-- platform:id -->` / `<!-- finding:fid -->` / `<!-- caveat:id -->` anchors (these are the verifier's scaffold and get stripped from the delivered file). The voice changes only tone and attribution confidence — never the numbers or caveats.
+Write the **draft** (with anchors) to a working path `<out>\<stamp>-<slug>-report.draft.md`. Fill the template from the facts in the selected voice profile (default `causal`). Obey every hard rule in it: verbatim numbers; ALL comparisons narrated as prose (no tables/charts); mandatory caveats; the `<!-- platform:id -->` / `<!-- finding:fid -->` / `<!-- caveat:id -->` anchors, plus `<!-- estimate:EST#n -->` on every estimate line when the facts carry an `estimates` block (these are the verifier's scaffold and get stripped from the delivered file). The voice changes only tone and attribution confidence — never the numbers or caveats.
 
 ### 5. Verify + publish — run the closer, fail-closed
 Run `${CLAUDE_SKILL_DIR}/scripts/Test-ReportNumbers.ps1 -Report <draft.md> -Facts <facts.json> -PublishTo <out>\<stamp>-<slug>-report.md`. On PASS the closer writes the client copy with all anchors stripped to `-PublishTo` (deterministic strip → the delivered file is the verified text minus comments). If it exits non-zero, it publishes NOTHING — read the violations, **fix the draft** (untraceable numbers, missing caveats/gaps, comparison claims, leaked credentials), and re-run. Never hand-strip anchors or deliver a report the closer rejects. If `meta.compareBasis` is `untrusted`, the closer's comparison-without-data check is what catches comparative language that slipped in — see **Comparison basis** in Notes.
@@ -108,9 +121,9 @@ Then **continue at step 3 of the Flow** using `*.trendanalysis.facts.json` as th
 
 ## Parameters
 
-Every flag the eight tools accept. Defaults are the `param()` defaults; where a default is an empty
+Every flag the tools accept. Defaults are the `param()` defaults; where a default is an empty
 sentinel or an expression, the **effective** value and where it resolves are given instead, because
-publishing a literal `""` would be misleading. `-DefineOnly` is on all eight: it dot-sources the
+publishing a literal `""` would be misleading. `-DefineOnly` is on every script tabled here: it dot-sources the
 script's functions and runs nothing, and is how the suites and any reusing caller load them.
 
 **`Get-SwydoReport.ps1`** — the only network adapter (11)
@@ -153,6 +166,24 @@ script's functions and runs nothing, and is how the suites and any reusing calle
 | `-TraceRecommendations` | off | also tracing numbers inside the recommendations section |
 | `-DefineOnly` | off | loading the functions without running |
 
+**`Invoke-SwydoForecast.ps1`** — modeled estimates for a declared-incomplete metric (13)
+
+| flag | default | reach for it when |
+|---|---|---|
+| `-Facts <path>` | required | always; updated in place unless `-OutFile` |
+| `-DeclaredBy <text>` | required (flag or `-Spec`; the spec wins) | always - who states the data is incomplete (`"client note ANN#1"`, `"user"`) |
+| `-OutageStart <yyyy-MM-dd>` | required (flag or `-Spec`; the spec wins) | first day with lost tracking |
+| `-OutageEnd <yyyy-MM-dd>` | required (flag or `-Spec`; the spec wins) | last day with lost tracking (inclusive) |
+| `-Action "<label>[;<label>]"` | none (the whole metric) | only some conversion actions lost tracking |
+| `-Metric <name>` | `Conversions` | the incomplete metric has another display name (it must be additive: a count, or money that sums) |
+| `-Ledger <path>` | none | the client has a ledger - adds the trailing-rate history |
+| `-HistoryMonths <n>` | `6` | the recent history has a setup change; a shorter stable stretch (minimum 3 months) |
+| `-MinTrackedDays <n>` | `3` | tuning how few tracked days the run-rate method accepts |
+| `-Platform <id>` | the only platform | the facts hold more than one platform |
+| `-Spec <path>` | none | passing partial-window observations, excluded months or other metric names |
+| `-OutFile <path>` | `-Facts` (in place) | keeping the original facts file untouched |
+| `-DefineOnly` | off | loading the functions without running |
+
 **`Manage-SwydoArchive.ps1`** — archive + registry (16). Modes: `-Store`, `-List`, `-Cleanup`,
 `-MergeClient`. `-ArchiveRoot` defaults to the installed skill's own `archive/` (:35) — the client
 history lives there, so override it rather than moving it. `-Store` takes `-Facts`, `-Report`,
@@ -170,6 +201,8 @@ history lives there, so override it rather than moving it. `-Store` takes `-Fact
 
 ## Notes
 - Coverage: surface every finding with `confidence` normal and every anomaly in the insights section; every `dataGaps`/`discrepancies` finding of severity ≥ major and every `meta.comparisonCaveats` MUST appear (the closer enforces the major ones).
+- **Closer coverage (headings, comments).** The closer traces numbers in headings too, in the heading's own section scope (a heading may quote the figures of a finding its own section echoes). Every HTML comment / anchor must open and close on ONE line (`multiline-comment` otherwise): the client copy strips comments across lines, so a spanning comment could hide text from the client only. Not traced: the level-1 title and headings at or under Recommendations. Known gap (backlog ANLZ-aModeledGap-3): a bare whole number under 100 is not a measure token, so a small count such as "45 leads" is not traced - the no-arithmetic and verbatim rules are the only guard there.
+- **Estimates are not facts.** Numbers from `estimates` (Flow step 2b) are modeled. The closer traces them only on a body line carrying `<!-- estimate:EST#n -->` directly under a heading that reads exactly `## Estimates (modeled)`, and on such a line requires a visible estimate word and no comparison with a previous period. Report-wide it requires every action / total estimate to be presented with its base, low and high, a plain "not measured" statement in the section, no visible `EST#n`, and no HTML comment spanning lines. A stated estimate number anywhere else (including Recommendations), or a rounded one ("about 57"), fails as `estimate-misuse`; the one case it cannot tell apart is an estimate that happens to equal a measured figure already in scope. Violation types: `unknown-estimate-anchor`, `estimate-outside-section`, `estimate-label-missing`, `estimate-compared-to-previous`, `estimate-misuse`, `estimates-not-surfaced`, `estimate-base-missing`, `estimate-range-missing`, `estimate-disclosure-missing`, `estimate-internal-id-visible`, `estimate-anchor-on-heading`, `estimate-multiline-comment`, `estimate-item-without-eid`. Never move an estimate into a platform section, a headline bullet, the insights, or a comparison against a previous period.
 - **Context annotations.** Analyze collects real client notes from the report's TEXT widgets (layout headers like "Google Ads" are filtered out) into `meta.annotations`. To add external context (e.g. an account-change log the user placed in the client folder), pass `Analyze-SwydoReport.ps1 -NotesFile <path>` (repeatable; plain text). Surface annotations verbatim in the report's "Context (unverified, client-supplied)" section with each `<!-- annotation:<aid> -->` anchor, and cite them ONLY as temporal co-occurrence — never as cause (the closer scopes a note's numbers to its anchored line and treats them as non-comparison, so a note can't launder a fabricated or comparative figure).
 - **--platform filter.** `--platform <providerId>` (repeatable) pulls/analyzes only those platforms; the report MUST then surface the forced `PROVIDER_FILTERED` data-gap naming the excluded platforms (it is a partial view).
 - If Mode A extraction returns warnings (`meta.warnings`) or empty widgets, surface them as data gaps — never present a clean report over incomplete data.
