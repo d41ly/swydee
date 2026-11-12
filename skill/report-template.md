@@ -1,14 +1,14 @@
 # /swydee report template
 
-Fill this from the facts JSON. **Every number must be copied verbatim from a facts display string** (`headline[].displayCurrent/displayPrevious/displayDelta`, `breakdowns[].rows[].values[].display/displayPrevious/delta`, `timeSeries[].buckets[].derived.*` and `pacing.*.display`, or a `findings[].evidence.*` string). No arithmetic, no re-rounding, no summing. `platforms[].metrics` is a COVERAGE record, not a number source: read it to know what a platform can and cannot be said to have measured, and NEVER quote its display strings. `breakdowns[].rows[].valuesById` is deliberately NOT quotable either: the closer does not index it, so a number taken from there cannot be traced and will block publish. Promoting it needs the closer and this file changed together (ANLZ-aCandidTally-1 S12). One further source exists only when the facts carry an `estimates` block: its display strings are quotable ONLY under hard rule 6, inside `## Estimates (modeled)`.
+Write the report FROM the analysis worksheet (`analysis-playbook.md`, SKILL.md step 3b), citing numbers from the facts JSON. **Every number must be copied verbatim from a facts display string** (`headline[].displayCurrent/displayPrevious/displayDelta`, `breakdowns[].rows[].values[].display/displayPrevious/delta`, `timeSeries[].buckets[].derived.*` and `pacing.*.display`, or a `findings[].evidence.*` string). No arithmetic, no re-rounding, no summing. `platforms[].metrics` is a COVERAGE record, not a number source: read it to know what a platform can and cannot be said to have measured, and NEVER quote its display strings. `breakdowns[].rows[].valuesById` is deliberately NOT quotable either: the closer does not index it, so a number taken from there cannot be traced and will block publish. Promoting it needs the closer and this file changed together (ANLZ-aCandidTally-1 S12). One further source exists only when the facts carry an `estimates` block: its display strings are quotable ONLY under hard rule 6, inside `## Estimates (modeled)`.
 
 ## Voice
 **Persona (constant):** a senior practitioner writing to a client you have a good relationship with — warm, direct, honest about bad news. Role is category-derived from the dominant `meta.providers[].category`: `ads` → senior media buyer; `seo` → senior SEO strategist; `email-crm` → senior lifecycle/email marketer; mixed / `other` → senior performance marketer.
 
-**Attribution profile — selected by the `voice:<type>` argument (default `causal`).** A profile changes ONLY tone and how confidently results are attributed; it NEVER changes the numbers, the structure, or the mandatory caveats/anchors below.
+**Attribution profile — selected by the `voice:<type>` argument (default `causal`).** A profile changes ONLY tone and how confidently results are attributed; it NEVER changes the numbers, the structure, the depth of the analysis, or the mandatory caveats/anchors below. Every profile delivers the full argument: what happened, why, what it means, what to do.
 - **causal** (default): confident, takes credit — "drove", "funded", "generated", "delivered", "because". Attribute the movements to the work.
 - **correlational**: cautious about causation — "alongside", "while", "as", "coincided with"; state what moved without claiming the campaign caused it.
-- **executive**: top-line first, terse, decision-oriented; short paragraphs / tight bullets; lead each platform with the single number that matters. Attribution as in causal.
+- **executive**: top-line first, terse, decision-oriented; short paragraphs; lead each insight with the decision it supports and keep only the figures that decision needs. Attribution as in causal.
 - **analytical**: precise and methodology-aware; foreground confidence, what the data does and doesn't support, and every caveat; neutral attribution.
 - **consultative**: teaching tone; explain the *why* and the levers behind each move and orient every point toward a next step; moderate attribution.
 
@@ -17,39 +17,79 @@ If `voice:<type>` names an unknown profile, fall back to `causal` and say so in 
 ## Hard rules
 1. Numbers verbatim from facts only. State comparisons as `<displayCurrent> (<displayDelta>)` or "from `<displayPrevious>` to `<displayCurrent>`" — **both ends must be facts display strings**. If a metric's fact has `hasComparison:false`, do NOT use any comparative word/number for it.
 2. **No blended/portfolio numbers** (there is no portfolio total in the facts) — report each platform separately. **No hand-summed segment figures** (cite the single-bucket concentration the facts give, e.g. "65+ = 53% of clicks", not a summed "55+ = 73%").
-3. Reproduce **every** `meta.comparisonCaveats[]` at least once — write its `.text` and put its anchor `<!-- caveat:<id> -->` (e.g. `<!-- caveat:seasonality -->`) on that line so the verifier can confirm it. For every surfaced finding with `requiresDownstreamData:true`, its point/recommendation carries a "confirm downstream / lead-quality before acting" clause.
-4. Surface every `dataGaps`/`discrepancies` finding (sev ≥ major) and every `GAP_UNIT_UNCONFIRMED`.
+3. Reproduce **every** `meta.comparisonCaveats[]` at least once (in Data notes unless the narrative already made it) — write its `.text` and put its anchor `<!-- caveat:<id> -->` (e.g. `<!-- caveat:seasonality -->`) on that line so the verifier can confirm it. For every surfaced finding with `requiresDownstreamData:true`, its point/recommendation carries a "confirm downstream / lead-quality before acting" clause.
+4. Surface every finding of severity ≥ major (anomalies, `dataGaps`, `discrepancies`), every `requiresDownstreamData` finding and every `GAP_UNIT_UNCONFIRMED`, each with its anchor: in the narrative where it bears on an insight, otherwise in Data notes. Findings below major are surfaced only as evidence for an insight.
 5. **Anchors** (machine-read verification scaffold; keep exactly in the draft). These are HTML comments the verifier uses to scope numbers and confirm surfacing — they are **stripped from the delivered client report** (the closer's `-PublishTo` writes the clean copy on PASS), so they never reach the client; include them in the draft anyway. Each platform gets its own `##` section header with `<!-- platform:<providerId> -->` immediately under it — **exactly one** platform anchor per section (two in one section is flagged, and an anchor whose id isn't in the facts is flagged). Put `<!-- finding:<fid> -->` on the **same line** as that finding's numbers (a finding's figures only trace on the line carrying its fid — don't split the comment onto its own line), and `<!-- caveat:<id> -->` on the caveat's line. Every comment opens and closes on ONE line - a comment that spans lines is rejected, and so is a literal `<!--` shown in the text, even in backticks. The prose around them is free to paraphrase.
 6. **Estimates are modeled, never measured.** A number from the facts `estimates` block (written by `Invoke-SwydoForecast.ps1`) appears ONLY under a heading that reads exactly `## Estimates (modeled)` (no sub-headings inside it), on a body line that carries its `<!-- estimate:EST#n -->` anchor AND a visible word saying what it is ("estimated", "modeled", "projected") - the anchor is stripped from the client copy, the word is what the client sees. EVERY line in that section that carries a number needs both. Each action / total estimate in the facts must be presented, with its base (`display`) and its range (`displayLow` to `displayHigh`); the cost-per-conversion and conversion-rate estimates are optional. Quote the display strings verbatim - never round one ("about 57" for an estimated 56.7 is rejected anywhere in the report). Set an estimate beside what was recorded THIS period (`measuredDisplay`), never beside a previous period. Never show the id `EST#n` in visible text, and keep every HTML comment on one line. Measured sections keep the measured figures; do not restate a headline, a delta or a finding using an estimate, and do not put an estimate in Recommendations. You still do no arithmetic: not a midpoint, not a rounded range, not a difference between an estimate and a measured figure.
 7. **Derived metrics are calculated, not reported by the platform.** A number from the facts `derivedMetrics` block (written by `Resolve-SwydoMetric.ps1`) appears ONLY in its own platform's section, on a body line (not a heading) that carries its `<!-- derived:<id> -->` anchor and says so in words the client still sees once the anchor is stripped. Exactly three wordings are accepted, where `<P>` is the platform's name as in the facts, "the platform" or "the dashboard": **"derived — not a figure `<P>` reports"**, **"calculated, not reported by `<P>`"**, or **"computed: `<P>` does not report it"** ("derived", "calculated" and "computed" are interchangeable; "doesn't" is accepted). Quote the entry's `formula` verbatim on an anchored line, once per entry. When `approximate` is true, put "about" (or approximately / roughly / around) **directly before each such figure**, or give the range as "between `<displayLow>` and `<displayHigh>`"; quote every derived figure at the precision given, never rounder. Compare with the previous period only when `comparison.hasComparison` is true. A `refused` entry gets one line saying it could not be calculated, with the reason in plain words and **no number at all**. **No derived figure and no derived anchor in Recommendations** - refer to the metric there by name. Do not put figures in a request `label`: nothing typed into a request can be cited. See **Derived metrics** under Structure.
 
+## What the report is for
+
+The client already has the dashboard. The report is an analyst advising them on how to run their
+paid account: what happened, why, what it means for their business, and what to do next. It is read
+top to bottom as one argument in one voice.
+
+- **Every number earns its place.** A figure appears only as evidence for a point, and the sentence
+  or the one after it says what the figure means. Never list a metric because the dashboard has it.
+- **Interpret, then advise.** Each part of the narrative ends in a consequence: a recommendation, a
+  decision for the client, or a stated reason for leaving things alone.
+- **No inventory sections.** There is no list of headline metrics and no list of findings. A finding
+  that carries no argument is not in the narrative (see Data notes for the few that must be on
+  record).
+- **Honest about limits.** Say what the data shows, what it suggests, and what it cannot tell us.
+  Confidence words follow the worksheet's confidence levels and the voice profile.
+- **Plain, fluent prose.** Short paragraphs that connect ("because", "which means", "so"). Bullets
+  only for genuinely parallel items such as the recommendations. A reader who skips to any section
+  should still follow it.
+
 ## Structure
 
-*(intro: 1–2 warm sentences — the quarter in one breath.)*
-
-For each platform in `meta.providers`:
+The order below is fixed. Section titles in quotation marks may be reworded to fit the client; the
+ones in backticks are read by the closer and must be exact.
 
 ```
+# <Client>: <platform(s)> review, <period in words>
+
+<"The short version": no heading needed. One paragraph, or three to five short bullets, that a busy
+ client can stop after: the verdict on the period, the two or three things that drove it, and the
+ main thing we recommend or need from them. A handful of figures at most. If the data for the
+ period is compromised (a declared outage, an untrusted comparison), say so here, first.>
+
 ## <client-facing platform name, e.g. Google Ads / Meta>
 <!-- platform:<providerId> -->
 
-- <Metric> was/were <displayCurrent> in <meta.currentPeriod> against <displayPrevious> in <meta.previousPeriod> (a <qualifier> <increase|decrease|improvement> of <displayDelta>).
-- ...one bullet per headline metric worth featuring...
+<One short orienting paragraph: what this account is and what it is for (the worksheet's account
+ model), and the period compared (meta.currentPeriod against meta.previousPeriod, in words).>
 
-One-line takeaway.
+### <Insight 1, as a plain-sentence heading with NO figures, e.g. "Clicks cost more, and one keyword explains most of it">
+<The argument, in prose: what moved (with the figures that prove it), where it sits (the breakdown
+ rows that carry it), why we think it happened and how sure we are, and what it means. End on the
+ consequence, pointing to the recommendation it leads to by name.>
 
-<optional: intra-period pacing/CPL ONLY from timeSeries (pacing.series, derived.CPL), and a short
- prose call-out of a key breakdown row — again as prose, not a table.>
+### <Insight 2 ...>
+### <Insight 3 ...>
+<Usually three to five insights, in order of importance to the client, not in dashboard order.
+ Include what is working when it is real - a client needs to know what to protect - and say plainly
+ when nothing improved.>
 ```
-**Narrate EVERY comparison as prose — never a table, chart, or other structured format.** This applies to
-the per-platform QoQ headline, breakdown/segment comparisons, pacing, and any period-over-period or
-across-segment contrast. The client already sees the tabular/visual layer as Swydo widgets, so the report's
-job is the narrative. Use bullets or sentences, one point per featured metric, e.g. *"Impressions were
-95,302 in Q2 against 53,398 in Q1 (a whopping increase of 78.5%)."* The qualifier
-("whopping/strong/healthy/concerning") carries the voice; the numbers are verbatim facts display strings
-(`displayCurrent`, `displayPrevious`, `displayDelta` — drop the delta's sign in prose, the increase/decrease
-word carries direction). Only include the against-last-period clause for metrics whose fact has
-`hasComparison:true`. Do not emit markdown tables anywhere in the report.
+
+**Writing an insight.**
+- Open with the point, not with a metric. *"October paid more for the same traffic"* comes before
+  *"Cost was $4,125.03 against $3,745.79 (an increase of 10.1%) while clicks held at 2,014 against
+  2,037"*.
+- State a comparison as `<displayCurrent>` against `<displayPrevious>` with the `<displayDelta>`
+  (drop the sign; the word "increase" or "decrease" carries direction), only for facts with
+  `hasComparison:true`. Both ends are facts display strings.
+- Bring in a breakdown row to LOCATE a movement, and a finding to show a pattern. Keep each
+  finding's figures on the same physical line as its `<!-- finding:<fid> -->` anchor. A paragraph is
+  one physical line, so an anchor at the end of the paragraph covers it; never hard-wrap a paragraph
+  that quotes a finding.
+- When two data points pull in different directions, say so and say which you believe and why.
+- Use the client's own campaign and conversion-action names the first time, then a short plain name.
+- Platform section sub-headings (`###`) inherit the platform's scope. Keep figures out of headings.
+
+**Narrate every comparison as prose - never a table, chart, or other structured format.** The client
+already sees the tabular layer as Swydo widgets. Do not emit markdown tables anywhere in the report.
 
 **Derived metrics** [include ONLY if the facts have a `derivedMetrics` block; then every entry is required].
 Put each entry in its platform's section (`platformId`), next to the reported metric it qualifies. One
@@ -82,15 +122,21 @@ bullet per entry, written on ONE physical line (the closer reads line by line - 
   seasonality caveat, a major discrepancy) applies to it too - say so where it matters.
 - Recommendations: name the metric ("cost per lead without Directions"), never its figure, and no anchor.
 
-Then:
+Then, after the last platform section:
 
 ```
-## Analytical insights
-**What's working** — wins, each citing the finding's numbers.  <!-- finding:WIN#n -->
-**Needs attention** — losses.  <!-- finding:LOSS#n -->
-**Anomalies worth knowing** — the anomalies (concentration, share-mismatch, segment-divergence,
-  new/paused, budget-constrained, front-loading from timeSeries).  <!-- finding:ANOM_*#n -->
-(Every major data-gap / discrepancy appears here too.)
+## Data notes
+<Short and plain: what a careful reader needs to know about the data behind this report. Prose or a
+ few bullets, one physical line each. Required here unless already made in the narrative, each with
+ its anchor on the same line:
+ * every `dataGaps` / `discrepancies` finding of severity major or above, and every
+   `GAP_UNIT_UNCONFIRMED`, in plain words and with what it means for the conclusions;  <!-- finding:<fid> -->
+ * every major anomaly or `requiresDownstreamData` finding that the narrative did not use, with one
+   clause on why it does not change the advice;  <!-- finding:<fid> -->
+ * every `meta.comparisonCaveats[]` text;  <!-- caveat:<id> -->
+ * "period labels approximate" when `meta.periodConfidence` is `unconfirmed`.
+ Do NOT list info-level findings here to be complete. An info-level finding appears in the report
+ only where it is evidence for an insight.>
 
 ## Context (unverified, client-supplied)   [include ONLY if meta.annotations is non-empty]
 For each meta.annotations[] item, quote its `.text` verbatim and put its anchor `<!-- annotation:<aid> -->`
@@ -116,12 +162,25 @@ attribute the estimate to campaign performance, and do not set it beside a previ
 period's level" as a description of a method is fine; "down from <n> last period" is not).
 
 ## Recommendations
-Concrete next steps from the losses/anomalies. Any recommendation resting on a requiresDownstreamData
-finding says to confirm downstream/lead-quality first. State the seasonality caveat once.
+<Three to six, numbered in priority order: impact on the client's business first, then confidence,
+ then effort. Each is one short paragraph that a client could approve as written:
+ **<the action, specific and executable>.** Why: the insight it follows from. What we expect: the
+ direction and the metric that should move (no invented forecast figure; a proposed target is fine
+ when it is clearly a proposal). How we will check, and when. What must be confirmed first, or the
+ risk. Who does it (us or the client).
+ Any recommendation resting on a `requiresDownstreamData` finding says to confirm downstream / lead
+ quality before acting. No recommendation without an insight behind it.>
+
+### What we need from you
+<Decisions and information only the client can give, each with what it unblocks. Omit if none.>
+
+### What we will watch next period
+<The two or three measures that will show whether the advice worked. Omit if it repeats the above.>
 ```
 
 ## Reminders
-- Prefer quoting a finding's `statement` as the basis for a win/loss/anomaly point, then paraphrase around it — this keeps the number anchored and the role/period correct.
+- When a finding is evidence for an insight, take its figures from its `statement` / `evidence` and keep them on the line with its anchor - this keeps the number, role and period correct - then say what it means in your own words. Never strip a scope clause ("within a N% subset of ...").
+- Before the closer runs, the draft is reviewed for reasoning (SKILL.md step 4b): each claim supported by the figures it cites, direction and scope right, no cause asserted beyond the voice profile and the worksheet's confidence, no figure without a point, no recommendation without an insight. The closer checks numbers; it cannot check an argument.
 - Annotations (`meta.annotations`) are client-supplied CONTEXT, not measured facts: quote verbatim under "Context", anchor each with `<!-- annotation:<aid> -->`, and never let a note's presence become a causal claim ("the June 8 refresh drove the lift" is forbidden; "the lift coincided with a June 8 refresh" is fine).
 - If `meta.periodConfidence` is `unconfirmed`, add "period labels approximate" once.
 - Estimates (`estimates.items[]`) are the tool's model, not data: quote `display` / `displayLow` / `displayHigh` and method results verbatim, only under "Estimates (modeled)", each on its anchored line with the word "estimated" (or "modeled" / "projected"). When a client note asked for a projection, the "Context" section still quotes the note verbatim; the projection itself goes in "Estimates (modeled)".

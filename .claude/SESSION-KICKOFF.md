@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-11-12T07:59:23+02:00 @ 145eb44553350aaa2fcd37351e6eaa63eaa671b0
+last-audit: 2026-11-12T08:17:47+02:00 @ 0946539642a662ac0091f1133c5a37356d7cc6fc
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -82,7 +82,7 @@ completes.
 | Trend / ledger pipeline | `memory/DECISIONS.md` §trend (U1–U5 master spec + units index) · §analysis (U7b) | `skill/scripts/Sync-SwydoTrend.ps1`, `ConvertTo-SwydoTrendFacts.ps1`, `Update-SwydoLedger.ps1`, `Analyze-SwydoTrend.ps1` · `tests/Test-Sync.ps1`, `tests/Test-TrendFacts.ps1`, `tests/Test-Ledger.ps1`, `tests/Test-TrendAnalyze.ps1` |
 | Closer (report number verification) | `SKILL_BUILD_SPEC.md` §13.1 | `skill/scripts/Test-ReportNumbers.ps1` · `tests/Test-Closer.ps1` |
 | Archive / client registry | `memory/DECISIONS.md` §trend (U1) | `skill/scripts/Manage-SwydoArchive.ps1` · `tests/Test-Archive.ps1` |
-| Skill orchestration + report voice | `skill/SKILL.md` · `skill/report-template.md` · `memory/DECISIONS.md` §orchestration | `skill/SKILL.md` |
+| Skill orchestration + report voice | `skill/SKILL.md` · `skill/analysis-playbook.md` (how to analyze) · `skill/report-template.md` (report shape) · `memory/DECISIONS.md` §orchestration | `skill/SKILL.md` |
 | Governance chain itself | `AGENTS.md` · `memory/HYGIENE.md` · `memory/README.md` | `tools/run-gates.sh` · `tools/gate-legs.json` |
 
 ### Gate commands (the merge bar)
