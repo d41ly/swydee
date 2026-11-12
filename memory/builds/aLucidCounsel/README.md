@@ -18,5 +18,5 @@ GENERATED from the status header of every spec in this folder — do not hand-ed
 
 | Unit | Status | Rev | Last change |
 |---|---|---|---|
-| [ORCH-aLucidCounsel-1 — the report is analysis and advice, not an inventory of the dashboard](spec/2026-11-12-spec-aLucidCounsel-1.md) | CLOSED | rev-2 | 2026-11-12 |
+| [ORCH-aLucidCounsel-1 — the report is analysis and advice, not an inventory of the dashboard](spec/2026-11-12-spec-aLucidCounsel-1.md) | CLOSED | rev-3 | 2026-11-12 |
 <!-- /gen:build-index -->
