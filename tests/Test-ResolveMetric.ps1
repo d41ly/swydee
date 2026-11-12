@@ -588,6 +588,16 @@ try {
   Nothing (RunTool @('-RequestFile',$rf)) 'e2e: trend facts are refused -> exit 2, nothing written'
 } finally { Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue }
 
+# review 2026-11-12-review-aModeledGap-3 (H7, H4): interactions with the general closer rules
+$rArrow = Invoke-Closer ((Rep $lineX) + "- Avg. CPC moved `$1.84 --> `$2.05.`n") $fX
+Ok (-not (HasT $rArrow 'multiline-comment')) 'closer: with derived metrics in the facts a bare "-->" arrow is not a comment'
+$rSpan = Invoke-Closer ((Rep $lineX) + "- Note <!-- open`nstill open -->`n") $fX
+Ok ((@($rSpan.violations | Where-Object { $_.type -eq 'multiline-comment' })).Count -eq 2) 'closer: a spanning comment is reported once per line by the general rule, not a third time by a derived-only check'
+$rRecHead = Invoke-Closer ((Rep $lineX) + "`n## Recommendations: hold lead cost at `$19.91`n`n- Keep going.`n") $fX
+Ok (HasT $rRecHead 'derived-misuse') 'closer: a derived figure in the Recommendations heading is refused (the heading is scanned)'
+$rRecSub = Invoke-Closer ((Rep $lineX) + "`n## Recommendations`n`n- Keep going.`n`n### Hold lead cost at `$19.91`n`n- Next month.`n") $fX
+Ok (HasT $rRecSub 'derived-misuse') 'closer: ...and in a sub-heading under Recommendations'
+
 Write-Host ''
 Write-Host ("Test-ResolveMetric: {0} passed, {1} failed." -f $script:pass,$script:fail)
 if($script:fail -gt 0){ exit 1 }

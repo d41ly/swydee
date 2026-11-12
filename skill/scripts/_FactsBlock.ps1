@@ -1,20 +1,25 @@
 <#
 .SYNOPSIS
-  The single way a tool adds ONE top-level member to a facts JSON file without re-serializing it.
+  Add ONE top-level member to a facts JSON file without re-serializing the measured content.
 .DESCRIPTION
-  A facts file is the record of provenance: its measured content must stay byte-for-byte what
+  A facts file is the record of provenance: its measured content must stay what
   Analyze-SwydoReport.ps1 wrote. Round-tripping it through ConvertFrom-Json / ConvertTo-Json can
-  change number formatting, escapes and depth, so a tool that enriches the facts (modeled estimates,
-  derived metrics, ...) splices its member into the TEXT instead.
+  change number formatting, escapes and depth, so a tool that enriches the facts splices its member
+  into the TEXT instead.
 
-  Every such tool dot-sources THIS file rather than keeping a copy (AGENTS.md section 12; backlog
-  ANLZ-aModeledGap-4). The member is always re-appended LAST, so two tools can each own a member and
-  re-run in any order without disturbing the other's.
+  WHAT IS PRESERVED. For compact, BOM-less JSON - which is what the analyzer writes - every byte
+  outside the member is kept. Whitespace directly adjacent to a replaced or removed member (pretty-
+  printed input) is not restored, and a byte-order mark is not re-emitted by the callers.
+
+  WHO USES IT. Invoke-SwydoForecast.ps1 (member `estimates`). Resolve-SwydoMetric.ps1 still keeps
+  its own splicer for `derivedMetrics`; moving it here is backlog ANLZ-aDerivedMetric-3. The two
+  coexist: each re-appends its own member last and leaves the other's alone.
 
   Find-FactsMember   locate "<name>": <value> at depth 1 (strings and nesting respected)
-  Remove-FactsMember drop it wherever it sits; every other byte is kept
+  Remove-FactsMember drop EVERY member of that name wherever it sits
   Set-FactsMember    remove any existing one, append the new JSON value as the last member, then
-                     verify: the result parses, the member is there, no other member appeared or vanished
+                     verify: the value is ONE JSON value, the result parses, the member is there, and
+                     no other member appeared or vanished
 #>
 function Find-FactsMember($text,$name){
   # -> @{ keyStart; valueEnd } where valueEnd indexes the ',' or '}' after the value, or $null.
@@ -38,18 +43,27 @@ function Find-FactsMember($text,$name){
   return $null
 }
 function Remove-FactsMember($factsText,$name){
+  # repeats until no member of that name is left: a hand-edited file with two must not keep a stale one
   $t = [string]$factsText
-  $span = Find-FactsMember $t $name
-  if($null -eq $span){ return $t }
-  $head = $t.Substring(0,$span.keyStart).TrimEnd()
-  $tail = $t.Substring($span.valueEnd)                  # starts at ',' (more members follow) or the closing '}'
-  if($tail.StartsWith(',')){ $tail = $tail.Substring(1) }
-  elseif($head.EndsWith(',')){ $head = $head.Substring(0,$head.Length-1) }
-  return ($head + $tail)
+  for($guard = 0; $guard -lt 50; $guard++){
+    $span = Find-FactsMember $t $name
+    if($null -eq $span){ break }
+    $head = $t.Substring(0,$span.keyStart).TrimEnd()
+    $tail = $t.Substring($span.valueEnd)                # starts at ',' (more members follow) or the closing '}'
+    if($tail.StartsWith(',')){ $tail = $tail.Substring(1) }
+    elseif($head.EndsWith(',')){ $head = $head.Substring(0,$head.Length-1) }
+    $t = $head + $tail
+  }
+  return $t
 }
 function Set-FactsMember($factsText,$name,$valueJson){
   # $valueJson: the member's value, already serialized. Throws 'INPUT: ...' when the text is not a JSON
   # object, and a plain error when the spliced result fails verification.
+  # the value must be exactly ONE JSON value: 1,"meta":{...} would otherwise smuggle in a second member
+  # under an existing name, which the name-set check below cannot see (duplicate keys collapse on parse)
+  $one = $null
+  try { $one = ('[' + [string]$valueJson + ']') | ConvertFrom-Json } catch { throw "internal: the value for member '$name' is not valid JSON" }
+  if(@($one).Count -ne 1){ throw "internal: the value for member '$name' is not a single JSON value" }
   $t = Remove-FactsMember $factsText $name
   $end = $t.LastIndexOf('}')
   if($end -lt 0){ throw 'INPUT: the facts file is not a JSON object.' }

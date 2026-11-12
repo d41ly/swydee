@@ -1,6 +1,6 @@
 # ANLZ-aModeledGap-2 — closer traces headings and rejects comments that span lines
 
-**Status:** CLOSED · rev-2 · 2026-11-12 · node a · Tier-2 · base d7f015b1 · streams analysis+orchestration · review 2026-11-12-review-aModeledGap-2 · ratified 2026-11-12 · landed dddfe20
+**Status:** CLOSED · rev-3 · 2026-11-12 · node a · Tier-2 · base d7f015b1 · streams analysis+orchestration · review 2026-11-12-review-aModeledGap-2 · ratified 2026-11-12 · landed dddfe20
 
 ## 1. Goal
 
@@ -31,7 +31,8 @@ on 2026-11-12 while the first unit waited to merge.
   extractor work against the live API, and a share link from the owner.
 - Moving the unmerged derived-metrics tool onto `_FactsBlock.ps1`. That tool is another unit.
 - Changing how a section is classified as Recommendations. A heading that merely contains
-  "recommend" still switches its section's tracing off; recorded under ANLZ-aModeledGap-2.
+  "recommend" still switches its section's tracing off; tracked as ANLZ-aModeledGap-7 and closed
+  by ANLZ-aModeledGap-8.
 
 ## 4. Design
 
@@ -62,7 +63,7 @@ before commit. A real fix binds each candidate to its metric.
 ### Files touched (estimate)
 
 New: `skill/scripts/_CloserGaps.ps1`, `skill/scripts/_FactsBlock.ps1`. Edited:
-`skill/scripts/Test-ReportNumbers.ps1` (four hook lines), `skill/scripts/Invoke-SwydoForecast.ps1`,
+`skill/scripts/Test-ReportNumbers.ps1` (three executable hook lines), `skill/scripts/Invoke-SwydoForecast.ps1`,
 `skill/scripts/_EstimateCheck.ps1`, `tests/Test-Closer.ps1`, `tests/Test-Forecast.ps1`,
 `skill/SKILL.md`, `skill/report-template.md`.
 
@@ -75,8 +76,8 @@ New: `skill/scripts/_CloserGaps.ps1`, `skill/scripts/_FactsBlock.ps1`. Edited:
 ## 5. Production-readiness checklist
 
 - security: N/A — no new input or output surface; the splicer verifies its result by re-parsing.
-- perf / scale: a 140 KB line of unclosed comment openers is judged without the lazy regex; a test
-  pins it.
+- perf / scale: a 140 KB line of unclosed comment openers is judged without the lazy regex. The
+  test asserts the result only; the speed is not pinned.
 - a11y: N/A — no UI.
 - i18n: N/A — no locale-dependent text.
 - error / empty / loading states: `Set-FactsMember` throws on a non-object; the closer rules add
@@ -116,6 +117,9 @@ none
 - rev-2 · 2026-11-12 · folded review 2026-11-12-review-aModeledGap-2: small-count rule withdrawn,
   title and Recommendations sub-headings exempt, a heading borrows its section's finding anchors,
   a bare `-->` is no longer a comment, the comment check avoids a quadratic regex.
+- rev-3 · 2026-11-12 · corrections from review 2026-11-12-review-aModeledGap-3: the "recommend" gap
+  is ANLZ-aModeledGap-7, the closer gained three executable hook lines, and no test pins the
+  speed of the comment check.
 
 ## 10. Reuse audit
 

@@ -28,7 +28,8 @@ $script:EstNotMeasRx = '(?i)(\bnot\b|n[''' + [char]0x2019 + ']t\b|\bnever\b|\bra
 # a COMPARISON with another period: a comparing word followed (same clause) by last/previous/prior <period>.
 # "last period's level" on its own is how a prior-level method is described, and is allowed.
 $script:EstPrevRx    = '(?i)\b(from|than|versus|vs\.?|against|compared (?:to|with))\b[^.;]{0,40}?\b(last|previous|prior)\s+(period|month|week|quarter|year)\b(?![''' + [char]0x2019 + ']s\s+(level|rate|value|pace))|\b(vs\.?|versus)\s+(last|previous|prior)\b|\b(MoM|YoY|QoQ)\b|\b(month|quarter|year|week|period)-over-(month|quarter|year|week|period)\b'
-$script:EstApproxIntRx = '(?i)(?:\b(?:about|around|roughly|approximately|approx\.?|nearly|almost|estimated|projected|model+ed)\s+|[~' + [char]0x2248 + ']\s*)(\d[\d,]*)(?![\d.,]*\d)(?!\s*%)'
+# an approximation word, an optional currency symbol, then a whole number (group 1 = symbol, 2 = digits)
+$script:EstApproxIntRx = '(?i)(?:\b(?:about|around|roughly|approximately|approx\.?|nearly|almost|estimated|projected|model+ed)\s+|[~' + [char]0x2248 + ']\s*)([\$' + [char]0x20AC + [char]0xA3 + '])?\s?(\d[\d,]*)(?![\d.,]*\d)(?!\s*%)'
 $script:EstNoEid = 0
 
 function Add-EstimateCandidate($list,$disp,$type,$role){
@@ -121,10 +122,18 @@ function Find-EstimateOwners($tok,$estIndex){
   # eids whose base / low / high or method / cross-check result this token states. The token must be
   # written at least as precisely as the estimate itself: a round "100" or "$4" in a recommendation is a
   # target, not the estimate 100.0 or $3.68 (a ROUNDED estimate is caught by Test-EstimateRounded).
+  # Money is the exception to "at least as precisely": "$1,025" IS the estimate $1,025.00 written without
+  # its cents, so a currency token within half a cent of a money estimate's base / low / high states it.
   $owners = @()
   foreach($eid in @($estIndex.Keys | Sort-Object)){
     $own = @($estIndex[$eid].cands | Where-Object { $_.role -in @('base','low','high','method','crosscheck') -and ((Get-Ulp $tok.raw) -le ([double]$_.ulp + 1e-12)) })
-    if(@(Find-Candidates $tok $own).Count -gt 0){ $owners += $eid }
+    $hit = (@(Find-Candidates $tok $own).Count -gt 0)
+    if(-not $hit -and $tok.type -eq 'currency'){
+      foreach($c in $estIndex[$eid].cands){
+        if($c.role -in @('base','low','high') -and $c.type -eq 'currency' -and ([math]::Abs([math]::Abs([double]$tok.value) - [math]::Abs([double]$c.value)) -le 0.005)){ $hit = $true; break }
+      }
+    }
+    if($hit){ $owners += $eid }
   }
   return $owners
 }
@@ -154,15 +163,20 @@ function Test-EstimateRounded($visibleLine,$estIndex,$sectionHeader){
   # "about 57" for an estimated 56.7: a whole number introduced by an approximation word that equals a
   # count estimate's base / low / high rounded either way. Small whole numbers are not measure tokens
   # for the tracer, so without this a rounded estimate could be written anywhere.
+  # Money: "about $1,025" for an estimated $1,025.40 - only for estimates of 100 or more, so an ordinary
+  # small target ("about $4" beside a $3.68 estimate) stays legal.
   $out = New-Object System.Collections.ArrayList
   foreach($m in [regex]::Matches([string]$visibleLine,$script:EstApproxIntRx)){
-    $n = Normalize-Num $m.Groups[1].Value
+    $n = Normalize-Num $m.Groups[2].Value
     if($null -eq $n){ continue }
+    $isMoney = $m.Groups[1].Success
     foreach($eid in @($estIndex.Keys | Sort-Object)){
       $hit = $false
       foreach($c in $estIndex[$eid].cands){
-        if($c.role -notin @('base','low','high') -or $c.type -ne 'number'){ continue }
+        if($c.role -notin @('base','low','high')){ continue }
         $v = [double]$c.value
+        if($isMoney){ if($c.type -ne 'currency' -or [math]::Abs($v) -lt 100){ continue } }
+        elseif($c.type -ne 'number'){ continue }
         if([math]::Abs($v - [math]::Round($v)) -lt 1e-9){ continue }   # already whole: nothing was rounded
         if($n -eq [math]::Floor($v) -or $n -eq [math]::Ceiling($v)){ $hit = $true; break }
       }

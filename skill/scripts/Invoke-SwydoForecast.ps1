@@ -37,7 +37,7 @@
   carrying <!-- estimate:EST#n --> inside the "Estimates (modeled)" section.
 
   Fail-closed: exit 2 on bad input (unreadable JSON, a credential-bearing or non-facts file - this
-  tool never reads a raw extraction, a non-count metric, an unmatched partial); the facts are left
+  tool never reads a raw extraction, a non-additive metric, an unmatched or out-of-scale partial); the facts are left
   untouched. Exit 1 when every requested estimate was refused: no estimate is written, and an
   estimates block left by an EARLIER run is removed from the facts so a stale estimate cannot survive.
   Exit 0 when at least one estimate was written.
@@ -254,9 +254,10 @@ function Get-FcMethods($t){
   $skipped = New-Object System.Collections.ArrayList
   function _add($id,$family,$name,$value,$formula,$inputs,$assumption){
     $note = $null
-    if($null -ne $t.floor -and $value -lt [double]$t.floor){ $value = [double]$t.floor; $note = 'result was below what was actually recorded, so it is held at the recorded value' }
+    $beforeFloor = $null
+    if($null -ne $t.floor -and $value -lt [double]$t.floor){ $beforeFloor = [double]$value; $value = [double]$t.floor; $note = 'result was below what was actually recorded, so it is held at the recorded value' }
     $m = [ordered]@{ id=$id; family=$family; name=$name; value=[math]::Round([double]$value,4); display=(Format-FcTarget $value); formula=$formula; inputs=@($inputs); assumption=$assumption }
-    if($note){ $m.note = $note }
+    if($note){ $m.note = $note; $m.valueBeforeFloor = [math]::Round($beforeFloor,4) }
     [void]$methods.Add($m)
   }
   function _skip($id,$reason){ [void]$skipped.Add([ordered]@{ id=$id; reason=[string]$reason }) }
@@ -350,11 +351,28 @@ function Get-FcUncertainty($methods,$range,$t){
     [void]$parts.Add(("Range {0} to {1} across {2} methods, base {3} (their mean)." -f (Format-FcTarget $range.low),(Format-FcTarget $range.high),@($methods).Count,(Format-FcTarget $range.base)))
   }
   $rrm = @($methods | Where-Object { $_.id -eq 'run-rate' })
-  if($rrm.Count -gt 0 -and $null -ne $t.runRateObserved -and [double]$t.runRateObserved -lt 30){
+  if($rrm.Count -gt 0 -and -not $script:FcTargetMoney -and $null -ne $t.runRateObserved -and [double]$t.runRateObserved -lt 30){
     [void]$parts.Add(("The tracked-day pace rests on only {0} recorded, a small sample." -f $t.runRateObservedDisplay))
   }
   [void]$parts.Add('This is a modeled figure, not a measurement.')
   return ($parts -join ' ')
+}
+
+function Assert-FcPartialScale($mres,$tgt,$metricName){
+  # A supplied partial is in the metric's DISPLAY unit (a count, or currency units - never micros). A
+  # value in the wrong unit, or a typo, shows up as a run-rate far above every other line of evidence.
+  # The bound is loose on purpose: a partial above the recorded value is legitimate (that is what the
+  # floor is for), a run-rate ten times the largest other method is not.
+  if(-not ($tgt.partial -and $tgt.partial.ok)){ return }
+  $rr = @($mres.methods | Where-Object { $_.id -eq 'run-rate' })
+  $others = @($mres.methods | Where-Object { $_.id -ne 'run-rate' })
+  if($rr.Count -eq 0 -or $others.Count -eq 0){ return }
+  $mx = 0.0
+  foreach($o in $others){ $v = [double]$o.value; if($o.Contains('valueBeforeFloor')){ $v = [double]$o.valueBeforeFloor }; if($v -gt $mx){ $mx = $v } }
+  if($mx -gt 0 -and [double]$rr[0].value -gt 10 * $mx){
+    $unit = 'a count'; if($script:FcTargetMoney){ $unit = 'currency units (dollars, not micros or cents)' }
+    throw ("INPUT: the partial observation for '{0}' ({1} over {2} days) implies {3} for the period, more than ten times every other method (largest {4}). A partial value is given in the metric's display unit - {5}. Check the value and its unit." -f $metricName,$tgt.partial.display,$tgt.partial.days,$rr[0].display,(Format-FcTarget $mx),$unit)
+  }
 }
 
 # ---- spec ----
@@ -392,6 +410,7 @@ function Resolve-FcSpec($specObj,$flags){
 
 # ---- the core ----
 function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDays=3,$nowIso=$null){
+  $script:FcTargetMoney = $false; $script:FcTargetCurrency = $null   # first: no early throw may leave a stale flag
   # -> [ordered] estimates block { ..., items=[...], refused=[...] }. Throws 'INPUT: ...' on unusable input.
   if($null -eq $factsDoc -or $null -eq $factsDoc.meta -or $null -eq $factsDoc.platforms){ throw 'INPUT: not a facts document (no meta/platforms).' }
   $meta = $factsDoc.meta
@@ -404,7 +423,6 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
   $plid = [string]$plat.id
   $items = New-Object System.Collections.ArrayList
   $refused = New-Object System.Collections.ArrayList
-  $script:FcTargetMoney = $false; $script:FcTargetCurrency = $null
   $compareOk = ([string]$meta.compareBasis -ne 'untrusted') -and ($meta.hasComparison -ne $false)
 
   # period + declared window
@@ -440,24 +458,32 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
   # the incomplete metric's headline
   $hm = Get-FcHeadline $plat $fcSpec.metric
   $hCur = $null; $hPrev = $null
+  # The gate needs the metric's own headline cell: without it the tool cannot tell a count from a rate
+  # or from money, so it refuses in EVERY mode (a metric that exists only as breakdown rows cannot be
+  # estimated).
+  if(-not $hm.ok){ throw ("INPUT: {0}; without its headline cell the tool cannot tell whether '{1}' is an additive quantity, so it will not estimate it." -f $hm.reason,$fcSpec.metric) }
   if($hm.ok){
     # A tracking gap removes ADDITIVE quantities day by day: plain counts, and money that sums
     # (conversion value, revenue). A rate, a score or a per-unit price (cost per conversion, CPC) is
-    # refused. The facts' own coverage record decides (aggClass 'sum'); facts without one fall back
-    # to "a number that is neither a fraction nor money".
+    # refused. Money needs BOTH unit 'micros' and a coverage record that says it sums; a count needs a
+    # coverage record that says 'sum', or - for facts without one - to be a plain number.
     $mt = [string]$hm.cell.type; $mu = [string]$hm.cell.unit
     $agg = $null
-    if($plat.metrics){ foreach($cp in $plat.metrics.PSObject.Properties){ if([string]$cp.Value.id -eq [string]$hm.cell.id){ $agg = [string]$cp.Value.aggClass; break } } }
-    $summable = $false
-    if($agg){ $summable = ($agg -eq 'sum') -and ($mu -ne 'fraction') -and ($mt -in @('number','currency','')) }
-    else { $summable = ((-not $mt) -or $mt -eq 'number') -and ($mu -notin @('fraction','micros')) }
-    if(-not $summable){
-      $kindWord = $mt; if(-not $kindWord){ $kindWord = $mu }
-      if($agg -and $agg -ne 'sum'){ $kindWord = "$kindWord, not summable" }
-      throw ("INPUT: '{0}' is a {1} metric. Only additive quantities (counts such as conversions, calls, leads, or money that sums such as conversion value) can be estimated; a rate, a score or a per-unit price is not something a tracking gap removes day by day." -f $fcSpec.metric,$kindWord)
-    }
-    if($mu -eq 'micros'){ $script:FcTargetMoney = $true; $script:FcTargetCurrency = $hm.cell.currency }
+    $cellId = [string]$hm.cell.id
+    if($cellId -and $plat.metrics){ foreach($cp in $plat.metrics.PSObject.Properties){ if([string]$cp.Value.id -eq $cellId){ $agg = [string]$cp.Value.aggClass; break } } }
+    $refuseTail = "Only additive quantities (counts such as conversions, calls, leads, or money that sums such as conversion value) can be estimated; a rate, a score or a per-unit price is not something a tracking gap removes day by day."
+    $isMoneyLike = ($mt -eq 'currency' -or $mu -eq 'micros')
+    if($mu -eq 'fraction' -or $mt -in @('percent','ratio')){ throw ("INPUT: '{0}' is a {1} metric. {2}" -f $fcSpec.metric,$(if($mt){$mt}else{$mu}),$refuseTail) }
+    if($agg -and $agg -ne 'sum'){ throw ("INPUT: '{0}' is a {1}, not summable metric. {2}" -f $fcSpec.metric,$(if($mt){$mt}else{'number'}),$refuseTail) }
+    if($isMoneyLike){
+      if($mu -ne 'micros'){ throw ("INPUT: '{0}' is money in an unknown unit ('{1}'); the tool formats money only from micros, so it will not estimate it." -f $fcSpec.metric,$mu) }
+      if(-not $agg){ throw ("INPUT: no coverage record says the money metric '{0}' sums (platforms[].metrics has no entry for it). Re-run Analyze-SwydoReport.ps1 for current facts; money is estimated only when the facts say it is additive." -f $fcSpec.metric) }
+      $curCode = [string]$hm.cell.currency
+      if($curCode -and -not $script:FcCurSym[$curCode]){ throw ("INPUT: '{0}' is in {1}, a currency the closer cannot read as money (it knows {2}); an estimate in it could never be published." -f $fcSpec.metric,$curCode,((@($script:FcCurSym.Keys | Sort-Object)) -join ', ')) }
+      $script:FcTargetMoney = $true; $script:FcTargetCurrency = $hm.cell.currency
+    } elseif(-not $agg -and $mt -and $mt -ne 'number'){ throw ("INPUT: '{0}' is a {1} metric. {2}" -f $fcSpec.metric,$mt,$refuseTail) }
     $hCur = Get-FcRaw $hm.cell 'current'; $hPrev = Get-FcRaw $hm.cell 'previous'
+    if($script:FcTargetMoney -and (($null -ne $hCur -and $hCur -lt 0) -or ($null -ne $hPrev -and $hPrev -lt 0))){ throw ("INPUT: '{0}' is negative in this report; a negative money figure cannot be written in a form the closer reads, so it is not estimated." -f $fcSpec.metric) }
   }
   # M4: every supplied partial observation must belong to a declared target - a typo must not silently
   # fall back to the tracked-days run-rate
@@ -579,6 +605,7 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
       $cur = ConvertFrom-FcDisplay $cell.display
       $prev = $null; $prevDisp = $null
       if($cell.hasComparison -eq $true){ $prevDisp = [string](Get-FcProp $cell 'displayPrevious'); $prev = ConvertFrom-FcDisplay $prevDisp }
+      if($script:FcTargetMoney -and (($null -ne $cur -and $cur -lt 0) -or ($null -ne $prev -and $prev -lt 0))){ throw ("INPUT: action '{0}' has a negative money value; it is not estimated." -f $a) }
       $pt = _partial $a
       $floor = $cur; if($pt -and $pt.ok -and ($null -eq $floor -or $pt.value -gt $floor)){ $floor = $pt.value }
       $tgt = @{ label=$a; cur=$cur; curDisplay=[string]$cell.display; curSource=("facts breakdown '{0}' row '{1}' display" -f $fcSpec.actionDimension,$a)
@@ -588,6 +615,7 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
                 runRateObserved=$cur; runRateObservedDisplay=[string]$cell.display }
       if($pt -and $pt.ok){ $tgt.runRateObserved = $pt.value; $tgt.runRateObservedDisplay = $pt.display }
       $mres = Get-FcMethods $tgt
+      Assert-FcPartialScale $mres $tgt ("'{0}' {1}" -f $a,$fcSpec.metric)
       if($mres.methods.Count -lt 2){
         $why = @($mres.skipped | ForEach-Object { "{0}: {1}" -f $_.id,$_.reason }) -join '; '
         [void]$refused.Add([ordered]@{ target=("'{0}' {1}" -f $a,$fcSpec.metric); reason=("only {0} method could be computed, and a range needs at least two ({1})" -f $mres.methods.Count,$why) })
@@ -603,7 +631,8 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
     elseif(-not $complete){ [void]$refused.Add([ordered]@{ target=$tw; reason=("the action breakdown shows {0} of {1} rows, so it cannot be reconciled to the headline" -f $bd.shown,$bd.rowCount) }) }
     else {
       $sum = 0.0; foreach($r in $rows){ $v = ConvertFrom-FcDisplay $r.values.($fcSpec.metric).display; if($null -ne $v){ $sum += $v } }
-      $tol = 0.05 * $rows.Count + 0.06
+      $tol = 0.05 * $rows.Count + 0.06                                   # one-decimal counts: half a display step per row
+      if($script:FcTargetMoney){ $tol = 0.005 * $rows.Count + 0.006 }      # money: half a cent per row
       if([math]::Abs($sum - $hCur) -gt $tol){
         [void]$refused.Add([ordered]@{ target=$tw; reason=("the action rows sum to {0} but the headline is {1}; the breakdown is not the full account split, so estimates cannot be added back into the total" -f (Format-FcTarget $sum),$hm.cell.displayCurrent) })
       } else {
@@ -648,6 +677,7 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
               runRateObserved=$hCur; runRateObservedDisplay=[string]$hm.cell.displayCurrent }
     if($pt -and $pt.ok){ $tgt.runRateObserved = $pt.value; $tgt.runRateObservedDisplay = $pt.display }
     $mres = Get-FcMethods $tgt
+    Assert-FcPartialScale $mres $tgt $fcSpec.metric
     if($mres.methods.Count -lt 2){
       $why = @($mres.skipped | ForEach-Object { "{0}: {1}" -f $_.id,$_.reason }) -join '; '
       [void]$refused.Add([ordered]@{ target=("'{0}'" -f $fcSpec.metric); reason=("only {0} method could be computed, and a range needs at least two ({1})" -f $mres.methods.Count,$why) })
@@ -749,9 +779,8 @@ function Find-FcTopLevelMember($text,$name){ return (Find-FactsMember $text $nam
 function Remove-FcBlock($factsText){ return (Remove-FactsMember $factsText 'estimates') }
 function Add-FcBlock($factsText,$block){
   # -> facts text with `estimates` as the LAST top-level member (replacing any earlier one).
-  $out = Set-FactsMember $factsText 'estimates' (ConvertTo-Json -InputObject $block -Depth 20 -Compress)
-  if(@(($out | ConvertFrom-Json).estimates.items).Count -ne @($block.items).Count){ throw 'internal: spliced facts failed re-parse verification' }
-  return $out
+  # Set-FactsMember verifies the result itself (one JSON value, re-parse, same member set)
+  return (Set-FactsMember $factsText 'estimates' (ConvertTo-Json -InputObject $block -Depth 20 -Compress))
 }
 
 if($DefineOnly){ return }
