@@ -84,6 +84,12 @@ $script:FcMaxSpread = 2.0   # ledger history: largest month may be at most this 
 # Estimated counts are ALWAYS one decimal: a whole-number display under 100 is not a measure token to
 # the closer, and an estimate must never be able to slip past the tracer.
 function Format-FcCount($v){ return ([double]$v).ToString('N1',$script:FcInv) }
+# the TARGET metric's own format: a count (one decimal) or, for a summable money metric, money
+$script:FcTargetMoney = $false; $script:FcTargetCurrency = $null
+function Format-FcTarget($v){
+  if($script:FcTargetMoney){ return (Format-FcMoney $v $script:FcTargetCurrency) }
+  return (Format-FcCount $v)
+}
 function Format-FcPercent($frac){ return ((([double]$frac)*100).ToString('N1',$script:FcInv) + '%') }
 function Format-FcMoney($v,$currency){
   $sym = '$'
@@ -249,7 +255,7 @@ function Get-FcMethods($t){
   function _add($id,$family,$name,$value,$formula,$inputs,$assumption){
     $note = $null
     if($null -ne $t.floor -and $value -lt [double]$t.floor){ $value = [double]$t.floor; $note = 'result was below what was actually recorded, so it is held at the recorded value' }
-    $m = [ordered]@{ id=$id; family=$family; name=$name; value=[math]::Round([double]$value,4); display=(Format-FcCount $value); formula=$formula; inputs=@($inputs); assumption=$assumption }
+    $m = [ordered]@{ id=$id; family=$family; name=$name; value=[math]::Round([double]$value,4); display=(Format-FcTarget $value); formula=$formula; inputs=@($inputs); assumption=$assumption }
     if($note){ $m.note = $note }
     [void]$methods.Add($m)
   }
@@ -330,7 +336,7 @@ function Get-FcUncertainty($methods,$range,$t){
   $wWhy = 'the share of the period that was tracked'
   if($t.partial -and $t.partial.ok -and $t.period -and $t.period.ok){ $wWhy = ("the share of the period covered by the supplied tracked window, {0} of {1} days" -f $t.partial.days,$t.period.days) }
   if($both){
-    [void]$parts.Add(("Range {0} to {1} across {2} methods; the base of {3} blends the two independent lines of evidence, giving this period's tracked-day pace a weight of {4} ({5}) and last period's level the rest." -f (Format-FcCount $range.low),(Format-FcCount $range.high),@($methods).Count,(Format-FcCount $range.base),(Format-FcPercent $range.runWeight),$wWhy))
+    [void]$parts.Add(("Range {0} to {1} across {2} methods; the base of {3} blends the two independent lines of evidence, giving this period's tracked-day pace a weight of {4} ({5}) and last period's level the rest." -f (Format-FcTarget $range.low),(Format-FcTarget $range.high),@($methods).Count,(Format-FcTarget $range.base),(Format-FcPercent $range.runWeight),$wWhy))
     $pl = [double]$fm['prior-level']; $rr = [double]$fm['current-run-rate']
     if($pl -gt 0){
       $ratio = $rr/$pl
@@ -339,9 +345,9 @@ function Get-FcUncertainty($methods,$range,$t){
       }
     }
   } elseif($fm.Contains('prior-level')){
-    [void]$parts.Add(("Range {0} to {1} across {2} methods, base {3} (their mean). Every method assumes last period's level carried into this one; there is no usable evidence from this period's tracked days, so the range understates the real uncertainty." -f (Format-FcCount $range.low),(Format-FcCount $range.high),@($methods).Count,(Format-FcCount $range.base)))
+    [void]$parts.Add(("Range {0} to {1} across {2} methods, base {3} (their mean). Every method assumes last period's level carried into this one; there is no usable evidence from this period's tracked days, so the range understates the real uncertainty." -f (Format-FcTarget $range.low),(Format-FcTarget $range.high),@($methods).Count,(Format-FcTarget $range.base)))
   } else {
-    [void]$parts.Add(("Range {0} to {1} across {2} methods, base {3} (their mean)." -f (Format-FcCount $range.low),(Format-FcCount $range.high),@($methods).Count,(Format-FcCount $range.base)))
+    [void]$parts.Add(("Range {0} to {1} across {2} methods, base {3} (their mean)." -f (Format-FcTarget $range.low),(Format-FcTarget $range.high),@($methods).Count,(Format-FcTarget $range.base)))
   }
   $rrm = @($methods | Where-Object { $_.id -eq 'run-rate' })
   if($rrm.Count -gt 0 -and $null -ne $t.runRateObserved -and [double]$t.runRateObserved -lt 30){
@@ -398,6 +404,7 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
   $plid = [string]$plat.id
   $items = New-Object System.Collections.ArrayList
   $refused = New-Object System.Collections.ArrayList
+  $script:FcTargetMoney = $false; $script:FcTargetCurrency = $null
   $compareOk = ([string]$meta.compareBasis -ne 'untrusted') -and ($meta.hasComparison -ne $false)
 
   # period + declared window
@@ -434,8 +441,22 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
   $hm = Get-FcHeadline $plat $fcSpec.metric
   $hCur = $null; $hPrev = $null
   if($hm.ok){
+    # A tracking gap removes ADDITIVE quantities day by day: plain counts, and money that sums
+    # (conversion value, revenue). A rate, a score or a per-unit price (cost per conversion, CPC) is
+    # refused. The facts' own coverage record decides (aggClass 'sum'); facts without one fall back
+    # to "a number that is neither a fraction nor money".
     $mt = [string]$hm.cell.type; $mu = [string]$hm.cell.unit
-    if(($mt -and $mt -ne 'number') -or $mu -in @('fraction','micros')){ throw ("INPUT: '{0}' is a {1} metric. Only plain counts (conversions, calls, leads) can be estimated; a rate or a money figure is not something a tracking gap removes day by day." -f $fcSpec.metric,$(if($mt){$mt}else{$mu})) }
+    $agg = $null
+    if($plat.metrics){ foreach($cp in $plat.metrics.PSObject.Properties){ if([string]$cp.Value.id -eq [string]$hm.cell.id){ $agg = [string]$cp.Value.aggClass; break } } }
+    $summable = $false
+    if($agg){ $summable = ($agg -eq 'sum') -and ($mu -ne 'fraction') -and ($mt -in @('number','currency','')) }
+    else { $summable = ((-not $mt) -or $mt -eq 'number') -and ($mu -notin @('fraction','micros')) }
+    if(-not $summable){
+      $kindWord = $mt; if(-not $kindWord){ $kindWord = $mu }
+      if($agg -and $agg -ne 'sum'){ $kindWord = "$kindWord, not summable" }
+      throw ("INPUT: '{0}' is a {1} metric. Only additive quantities (counts such as conversions, calls, leads, or money that sums such as conversion value) can be estimated; a rate, a score or a per-unit price is not something a tracking gap removes day by day." -f $fcSpec.metric,$kindWord)
+    }
+    if($mu -eq 'micros'){ $script:FcTargetMoney = $true; $script:FcTargetCurrency = $hm.cell.currency }
     $hCur = Get-FcRaw $hm.cell 'current'; $hPrev = Get-FcRaw $hm.cell 'previous'
   }
   # M4: every supplied partial observation must belong to a declared target - a typo must not silently
@@ -501,7 +522,7 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
     if(-not $period.ok){ return @{ ok=$false; reason=$period.reason } }
     if($a -lt $period.start -or $b -gt $period.end){ return @{ ok=$false; reason='the partial window is not inside the report period' } }
     if($a -le $period.clipEnd -and $b -ge $period.clipStart){ return @{ ok=$false; reason='the partial window overlaps the declared outage window' } }
-    return @{ ok=$true; value=[double]$pv; display=(Format-FcCount $pv); days=(Get-FcDays $a $b); start=$a.ToString('yyyy-MM-dd'); end=$b.ToString('yyyy-MM-dd'); source=("spec partial: {0}" -f $src) }
+    return @{ ok=$true; value=[double]$pv; display=(Format-FcTarget $pv); days=(Get-FcDays $a $b); start=$a.ToString('yyyy-MM-dd'); end=$b.ToString('yyyy-MM-dd'); source=("spec partial: {0}" -f $src) }
   }
   function _item($kind,$actionName,$mres,$tgt){
     # share of the period actually observed: the supplied partial window if one was used, else the tracked days
@@ -513,11 +534,11 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
     $what = "'$($fcSpec.metric)'"; if($actionName){ $what = "'$actionName' $($fcSpec.metric)" }
     $rec = 'nothing usable was recorded'; if($null -ne $tgt.cur){ $rec = "$($tgt.curDisplay) were actually recorded" }
     $it = [ordered]@{
-      eid=$eid; kind=$kind; platformId=$plid; metric=$fcSpec.metric; action=$actionName; period=$periodLabel; type='number'
-      display=(Format-FcCount $rng.base); displayLow=(Format-FcCount $rng.low); displayHigh=(Format-FcCount $rng.high)
+      eid=$eid; kind=$kind; platformId=$plid; metric=$fcSpec.metric; action=$actionName; period=$periodLabel; type=$(if($script:FcTargetMoney){'currency'}else{'number'})
+      display=(Format-FcTarget $rng.base); displayLow=(Format-FcTarget $rng.low); displayHigh=(Format-FcTarget $rng.high)
       value=[math]::Round($rng.base,4); low=[math]::Round($rng.low,4); high=[math]::Round($rng.high,4)
       measuredDisplay=$tgt.curDisplay; measuredSource=$tgt.curSource
-      statement=("Modeled estimate: {0} for {1} would have been about {2} (range {3} to {4}) with complete tracking; {5}." -f $what,$periodLabel,(Format-FcCount $rng.base),(Format-FcCount $rng.low),(Format-FcCount $rng.high),$rec)
+      statement=("Modeled estimate: {0} for {1} would have been about {2} (range {3} to {4}) with complete tracking; {5}." -f $what,$periodLabel,(Format-FcTarget $rng.base),(Format-FcTarget $rng.low),(Format-FcTarget $rng.high),$rec)
       method='Several simple methods are computed side by side. Low is the smallest result, high is the largest, and the base blends the two lines of evidence: the tracked-day pace is weighted by the share of the period that was observed (the tracked days, or a supplied tracked window), and the prior-level methods (which count as one line of evidence) get the rest.'
       methods=@($mres.methods); skippedMethods=@($mres.skipped); crossChecks=@()
       uncertainty=(Get-FcUncertainty $mres.methods $rng $tgt)
@@ -548,7 +569,7 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
       }
       if($bad){ $unaffected = @{ ok=$false; reason="unaffected action '$bad' has no current or previous value" } }
       elseif($up -le 0){ $unaffected = @{ ok=$false; reason='the unaffected actions had no previous-period volume' } }
-      else { $unaffected = @{ ok=$true; cur=$uc; prev=$up; curDisplay=(Format-FcCount $uc); prevDisplay=(Format-FcCount $up); names=((@($unRows | ForEach-Object { "'" + [string]$_.label + "'" })) -join ' + ')
+      else { $unaffected = @{ ok=$true; cur=$uc; prev=$up; curDisplay=(Format-FcTarget $uc); prevDisplay=(Format-FcTarget $up); names=((@($unRows | ForEach-Object { "'" + [string]$_.label + "'" })) -join ' + ')
                               source=("sum of the '{0}' breakdown rows not declared affected ({1})" -f $fcSpec.actionDimension,((@($unRows | ForEach-Object { [string]$_.label })) -join '; ')) } }
     }
     $actionItems = @(); $measAffected = 0.0
@@ -584,7 +605,7 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
       $sum = 0.0; foreach($r in $rows){ $v = ConvertFrom-FcDisplay $r.values.($fcSpec.metric).display; if($null -ne $v){ $sum += $v } }
       $tol = 0.05 * $rows.Count + 0.06
       if([math]::Abs($sum - $hCur) -gt $tol){
-        [void]$refused.Add([ordered]@{ target=$tw; reason=("the action rows sum to {0} but the headline is {1}; the breakdown is not the full account split, so estimates cannot be added back into the total" -f (Format-FcCount $sum),$hm.cell.displayCurrent) })
+        [void]$refused.Add([ordered]@{ target=$tw; reason=("the action rows sum to {0} but the headline is {1}; the breakdown is not the full account split, so estimates cannot be added back into the total" -f (Format-FcTarget $sum),$hm.cell.displayCurrent) })
       } else {
         $eLow = 0.0; $eBase = 0.0; $eHigh = 0.0
         foreach($ai in $actionItems){ $eLow += $ai.low; $eBase += $ai.value; $eHigh += $ai.high }
@@ -592,24 +613,24 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
         $eids = (@($actionItems | ForEach-Object { $_.eid }) -join ', ')
         $mk = {
           param($id,$nm,$val,$est)
-          [ordered]@{ id=$id; family='bottom-up'; name=$nm; value=[math]::Round($val,4); display=(Format-FcCount $val)
-            formula=("{0} measured total - {1} recorded for the affected action(s) + {2} estimated for them" -f $hm.cell.displayCurrent,(Format-FcCount $measAffected),(Format-FcCount $est))
+          [ordered]@{ id=$id; family='bottom-up'; name=$nm; value=[math]::Round($val,4); display=(Format-FcTarget $val)
+            formula=("{0} measured total - {1} recorded for the affected action(s) + {2} estimated for them" -f $hm.cell.displayCurrent,(Format-FcTarget $measAffected),(Format-FcTarget $est))
             inputs=@((New-FcInput 'measured account total' $hCur ([string]$hm.cell.displayCurrent) ("facts headline '{0}' displayCurrent" -f $fcSpec.metric)),
-                     (New-FcInput 'recorded for the affected action(s)' $measAffected (Format-FcCount $measAffected) ("sum of the affected rows of the '{0}' breakdown" -f $fcSpec.actionDimension)),
-                     (New-FcInput 'estimated for the affected action(s)' ([math]::Round($est,4)) (Format-FcCount $est) ("estimates {0}" -f $eids)))
+                     (New-FcInput 'recorded for the affected action(s)' $measAffected (Format-FcTarget $measAffected) ("sum of the affected rows of the '{0}' breakdown" -f $fcSpec.actionDimension)),
+                     (New-FcInput 'estimated for the affected action(s)' ([math]::Round($est,4)) (Format-FcTarget $est) ("estimates {0}" -f $eids)))
             assumption='the actions not declared affected are complete as measured' }
         }
         $tm = @((& $mk 'bottom-up-low' 'measured total with the low action estimate(s)' $tLow $eLow), (& $mk 'bottom-up-base' 'measured total with the base action estimate(s)' $tBase $eBase), (& $mk 'bottom-up-high' 'measured total with the high action estimate(s)' $tHigh $eHigh))
         $eid = 'EST#' + ($items.Count + 1)
         $totalItem = [ordered]@{
-          eid=$eid; kind='total'; platformId=$plid; metric=$fcSpec.metric; action=$null; period=$periodLabel; type='number'
-          display=(Format-FcCount $tBase); displayLow=(Format-FcCount $tLow); displayHigh=(Format-FcCount $tHigh)
+          eid=$eid; kind='total'; platformId=$plid; metric=$fcSpec.metric; action=$null; period=$periodLabel; type=$(if($script:FcTargetMoney){'currency'}else{'number'})
+          display=(Format-FcTarget $tBase); displayLow=(Format-FcTarget $tLow); displayHigh=(Format-FcTarget $tHigh)
           value=[math]::Round($tBase,4); low=[math]::Round($tLow,4); high=[math]::Round($tHigh,4)
           measuredDisplay=[string]$hm.cell.displayCurrent; measuredSource=("facts headline '{0}' displayCurrent" -f $fcSpec.metric)
-          statement=("Modeled estimate: total '{0}' for {1} would have been about {2} (range {3} to {4}) with complete tracking; {5} were actually recorded." -f $fcSpec.metric,$periodLabel,(Format-FcCount $tBase),(Format-FcCount $tLow),(Format-FcCount $tHigh),$hm.cell.displayCurrent)
+          statement=("Modeled estimate: total '{0}' for {1} would have been about {2} (range {3} to {4}) with complete tracking; {5} were actually recorded." -f $fcSpec.metric,$periodLabel,(Format-FcTarget $tBase),(Format-FcTarget $tLow),(Format-FcTarget $tHigh),$hm.cell.displayCurrent)
           method=("The measured total, with the affected action(s) swapped from what was recorded to what was estimated. The actions that kept tracking stay exactly as measured.")
           methods=$tm; skippedMethods=@(); crossChecks=@()
-          uncertainty=("Range {0} to {1}, base {2}; the whole range comes from the affected-action estimate(s), so it inherits their uncertainty. This is a modeled figure, not a measurement." -f (Format-FcCount $tLow),(Format-FcCount $tHigh),(Format-FcCount $tBase))
+          uncertainty=("Range {0} to {1}, base {2}; the whole range comes from the affected-action estimate(s), so it inherits their uncertainty. This is a modeled figure, not a measurement." -f (Format-FcTarget $tLow),(Format-FcTarget $tHigh),(Format-FcTarget $tBase))
         }
         [void]$items.Add($totalItem)
       }
@@ -642,8 +663,8 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
         $lv = [double]$ledgerRate.mean * [double]$clicks.cur
         $inside = ($lv -ge $totalItem.low -and $lv -le $totalItem.high)
         $word = 'inside'; if($lv -lt $totalItem.low){ $word = 'below' } elseif($lv -gt $totalItem.high){ $word = 'above' }
-        $totalItem.crossChecks = @([ordered]@{ id='ledger-rate'; display=(Format-FcCount $lv); value=[math]::Round($lv,4); withinRange=$inside
-          explanation=("Independent check from the client's history: {0} average conversion rate over {1} to {2} x {3} current-period clicks = {4}, which is {5} the estimated range. It is a check, not part of the estimate, because it ignores what the unaffected actions actually measured." -f $ledgerRate.display,$ledgerRate.months[0],$ledgerRate.months[-1],$clicks.curDisplay,(Format-FcCount $lv),$word)
+        $totalItem.crossChecks = @([ordered]@{ id='ledger-rate'; display=(Format-FcTarget $lv); value=[math]::Round($lv,4); withinRange=$inside
+          explanation=("Independent check from the client's history: {0} average conversion rate over {1} to {2} x {3} current-period clicks = {4}, which is {5} the estimated range. It is a check, not part of the estimate, because it ignores what the unaffected actions actually measured." -f $ledgerRate.display,$ledgerRate.months[0],$ledgerRate.months[-1],$clicks.curDisplay,(Format-FcTarget $lv),$word)
           inputs=@((New-FcInput 'trailing average conversion rate' $ledgerRate.mean $ledgerRate.display $ledgerRate.source), (New-FcInput 'current-period clicks' $clicks.cur $clicks.curDisplay $clicks.curSource)) })
       } else {
         $why = $ledgerRate.reason; if($ledgerRate.ok){ $why = 'current-period clicks are not available' }
@@ -722,54 +743,14 @@ function Get-FcEstimates($factsDoc,$ledgerDoc,$fcSpec,[int]$histN=6,[int]$minDay
   }
 }
 
-# ---- textual splice: add/replace the block without re-serializing the measured facts ----
-function Find-FcTopLevelMember($text,$name){
-  # locate the top-level member "<name>": <value> by scanning the JSON text (strings and nesting
-  # respected). -> @{ keyStart; valueEnd } where valueEnd indexes the ',' or '}' after the value, or $null.
-  $depth = 0; $inStr = $false; $esc = $false; $strStart = -1; $lastStr = $null; $keyStart = -1
-  $n = $text.Length
-  for($i = 0; $i -lt $n; $i++){
-    $ch = $text[$i]
-    if($inStr){
-      if($esc){ $esc = $false }
-      elseif($ch -eq '\'){ $esc = $true }
-      elseif($ch -eq '"'){ $inStr = $false; if($depth -eq 1){ $lastStr = @{ start=$strStart; text=$text.Substring($strStart+1,$i-$strStart-1) } } }
-      continue
-    }
-    if($ch -eq '"'){ $inStr = $true; $strStart = $i }
-    elseif($ch -eq ':'){ if($depth -eq 1 -and $keyStart -lt 0 -and $lastStr -and $lastStr.text -ceq $name){ $keyStart = $lastStr.start }; $lastStr = $null }
-    elseif($ch -eq '{' -or $ch -eq '['){ $depth++ }
-    elseif($ch -eq ']'){ $depth-- }
-    elseif($ch -eq '}'){ $depth--; if($depth -eq 0 -and $keyStart -ge 0){ return @{ keyStart=$keyStart; valueEnd=$i } } }
-    elseif($ch -eq ','){ if($depth -eq 1){ if($keyStart -ge 0){ return @{ keyStart=$keyStart; valueEnd=$i } }; $lastStr = $null } }
-  }
-  return $null
-}
-function Remove-FcBlock($factsText){
-  # drop an existing top-level `estimates` member wherever it sits; every other byte is kept.
-  $t = [string]$factsText
-  $span = Find-FcTopLevelMember $t 'estimates'
-  if($null -eq $span){ return $t }
-  $head = $t.Substring(0,$span.keyStart).TrimEnd()
-  $tail = $t.Substring($span.valueEnd)                  # starts at ',' (more members follow) or the closing '}'
-  if($tail.StartsWith(',')){ $tail = $tail.Substring(1) }
-  elseif($head.EndsWith(',')){ $head = $head.Substring(0,$head.Length-1) }
-  return ($head + $tail)
-}
+# ---- textual splice: the shared helper adds/replaces ONE top-level member without re-serializing ----
+. "$PSScriptRoot\_FactsBlock.ps1"
+function Find-FcTopLevelMember($text,$name){ return (Find-FactsMember $text $name) }
+function Remove-FcBlock($factsText){ return (Remove-FactsMember $factsText 'estimates') }
 function Add-FcBlock($factsText,$block){
   # -> facts text with `estimates` as the LAST top-level member (replacing any earlier one).
-  $t = Remove-FcBlock $factsText
-  $end = $t.LastIndexOf('}')
-  if($end -lt 0){ throw 'INPUT: the facts file is not a JSON object.' }
-  $head = $t.Substring(0,$end).TrimEnd()
-  $sep = ','; if($head.EndsWith('{')){ $sep = '' }
-  $json = ConvertTo-Json -InputObject $block -Depth 20 -Compress
-  $out = $head + $sep + '"estimates":' + $json + $t.Substring($end)
-  # verify: still parses, the block is there, and no other top-level member appeared or vanished
-  $before = @(($t | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $_.Name })
-  $chk = $out | ConvertFrom-Json
-  $after = @($chk.PSObject.Properties | ForEach-Object { $_.Name } | Where-Object { $_ -ne 'estimates' })
-  if($null -eq $chk.estimates -or @($chk.estimates.items).Count -ne @($block.items).Count -or (($before -join '|') -ne ($after -join '|'))){ throw 'internal: spliced facts failed re-parse verification' }
+  $out = Set-FactsMember $factsText 'estimates' (ConvertTo-Json -InputObject $block -Depth 20 -Compress)
+  if(@(($out | ConvertFrom-Json).estimates.items).Count -ne @($block.items).Count){ throw 'internal: spliced facts failed re-parse verification' }
   return $out
 }
 

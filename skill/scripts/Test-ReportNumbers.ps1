@@ -317,6 +317,8 @@ function Split-Sections($reportText){
 
 # modeled estimates (Invoke-SwydoForecast.ps1): rules live in _EstimateCheck.ps1, the closer only hooks them
 . "$PSScriptRoot\_EstimateCheck.ps1"
+# headings traced, comments on one line (ANLZ-aModeledGap-2)
+. "$PSScriptRoot\_CloserGaps.ps1"
 
 function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   $violations = New-Object System.Collections.ArrayList
@@ -374,7 +376,8 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
     if($null -eq $eff){ $base = $index.global }
     elseif($eff -eq ''){ $base = (New-Object System.Collections.ArrayList) }
     else { $base = $index.byPlatform[$eff] }
-    foreach($line in (($sec.text -replace "`r`n","`n") -split "`n")){
+    # the heading text is traced too, in its own section's scope (it used to escape every check)
+    foreach($line in (@(Get-HeadingTraceLine $sec $sections) + @(($sec.text -replace "`r`n","`n") -split "`n"))){
       $fids = @(); foreach($fm in [regex]::Matches($line,'<!--\s*finding:([^\s]+?)\s*-->')){ $fids += $fm.Groups[1].Value }
       $anns = @(); foreach($am in [regex]::Matches($line,'<!--\s*annotation:([^\s]+?)\s*-->')){ $anns += $am.Groups[1].Value }
       $cands = New-Object System.Collections.ArrayList
@@ -471,6 +474,9 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   if($reqDownSurfaced -and ($reportText -notmatch $script:DownRx)){
     [void]$violations.Add([ordered]@{ type='missing-downstream-caveat'; section='(report)'; detail='a surfaced requiresDownstreamData finding has no downstream/lead-quality clause'; snippet='downstream/lead-quality' })
   }
+
+  # a comment spanning lines can hide text from the client copy only (it strips across lines)
+  foreach($mv in @(Test-MultilineComments $reportText)){ [void]$violations.Add($mv) }
 
   # 4: credential hygiene (fail-closed)
   foreach($cm in [regex]::Matches($reportText,$script:CredRx)){

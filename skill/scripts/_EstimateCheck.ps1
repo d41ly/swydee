@@ -14,8 +14,9 @@
     * the section says in plain words that the figures are not measured,
     * an estimate number anywhere else is flagged as misuse - including inside Recommendations, which
       the tracer otherwise skips, and including a rounded "about 57" of an estimated 56.7,
-    * no internal id (EST#n) is visible, no estimate anchor sits on a heading, and - because the client
-      copy strips comments across lines while the checks read line by line - no HTML comment may span lines.
+    * no internal id (EST#n) is visible and no estimate anchor sits on a heading. (A comment spanning
+      lines, which could hide a heading or a label from the client copy only, is rejected for every
+      report by _CloserGaps.ps1.)
   Everything here is inert when the facts carry no `estimates` block and the report no estimate
   anchor, so every pre-existing facts file verifies exactly as before.
 #>
@@ -183,12 +184,7 @@ function Test-EstimateSurfacing($reportText,$estIndex){
   $lines = (([string]$reportText) -replace "`r`n","`n") -split "`n"
   $cited = @{}; $curHeader = '(intro)'; $inSec = $false; $secText = New-Object System.Text.StringBuilder
   foreach($ln in $lines){
-    # the client copy strips comments ACROSS lines; these checks read line by line. A comment that opens
-    # or closes on another line could hide a heading, a label or the disclosure from the client only.
     $rest = $ln -replace '<!--.*?-->',''
-    if($rest -match '<!--|-->'){
-      [void]$out.Add([ordered]@{ type='estimate-multiline-comment'; section=$curHeader; detail='an HTML comment spans lines; with modeled estimates in the facts every comment must open and close on one line'; snippet=$rest.Trim() })
-    }
     $hm = [regex]::Match($ln,'^(#{1,6})\s+(.*)$')
     if($hm.Success){
       $curHeader = $hm.Groups[2].Value.Trim(); $inSec = (Test-EstimateSection $curHeader)

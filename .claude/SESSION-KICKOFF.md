@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-11-12T05:21:16+02:00 @ 0283552969a9a62499e099f29d37450060d03e6e
+last-audit: 2026-11-12T06:36:46+02:00 @ d7f015bb6b843c3155588088e6e2bfe549d38346
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -104,10 +104,10 @@ from the repo root).
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1678 assertions across the 9 suites after ANLZ-aModeledGap-1 (which added the Forecast suite) --
+1712 assertions across the 9 suites after ANLZ-aModeledGap-2 (ANLZ-aModeledGap-1 added the Forecast suite) --
 the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 365,
-Analyze 742, Forecast 194, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
-Was 1484 across 8 suites after EXTR-aStrictSchema-1 + the ANOM_BUDGET_CONSTRAINED impression-share fix.
+Analyze 742, Forecast 213, Closer 144, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
+Was 1678 after ANLZ-aModeledGap-1 alone, and 1484 across 8 suites after EXTR-aStrictSchema-1 + the ANOM_BUDGET_CONSTRAINED impression-share fix.
 Was 1473 after EXTR-aStrictSchema-1 alone (1446 after the impression-share fix alone),
 1435 after ANLZ-aUniformLattice-9, 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +
 ANLZ-aCandidTally-1, 1276 after

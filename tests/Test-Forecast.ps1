@@ -291,9 +291,9 @@ function CloneEst(){ return ($out | ConvertFrom-Json) }
 
 Write-Host '== review: closer rules =='
 $rv = Invoke-Closer ($head + "<!-- note`n-->`n" + $sec + $recs) $factsEst
-Ok (HasT $rv 'estimate-multiline-comment') 'C1 a comment spanning lines is rejected when the facts carry estimates'
+Ok (HasT $rv 'multiline-comment') 'C1 a comment spanning lines is rejected when the facts carry estimates'
 $hidden = $head + "<!-- x`n## Estimates (modeled) <!-- y -->`n- Conversions: 176.7 (140.0 to 220.0). <!-- estimate:EST#2 --> <!-- estimated, not measured`n-->`n`n" + $recs
-Ok (HasT (Invoke-Closer $hidden $factsEst) 'estimate-multiline-comment') 'C1 a section header / label / disclosure hidden in a multi-line comment cannot pass'
+Ok (HasT (Invoke-Closer $hidden $factsEst) 'multiline-comment') 'C1 a section header / label / disclosure hidden in a multi-line comment cannot pass'
 $rv = Invoke-Closer ($head + "## Estimates (modeled)`n`nNot measured.`n`n### An estimated 176.7 (range 140.0 to 220.0) <!-- estimate:EST#2 -->`n`n" + $recs) $factsEst
 Ok (HasT $rv 'estimate-anchor-on-heading') 'C2 an estimate anchor on a heading is rejected'
 Ok (@($rv.violations | Where-Object { $_.type -eq 'estimates-not-surfaced' -and $_.snippet -eq 'EST#2' }).Count -eq 1) 'C2 ...and a heading does not count as presenting the estimate'
@@ -371,8 +371,8 @@ Ok (@($r.items | Where-Object { $_.metric -eq 'Conversion rate' }).Count -eq 1) 
 $f = NewFacts; $f.platforms[0].headline.'gads:a:clicks'.current = $null
 $r = Get-FcEstimates $f $led3 (NewSpec @{ actions=@() }) 3 3
 Ok ($null -eq (Method $r.items[0] 'ledger-rate') -and @($r.items | Where-Object { $_.metric -eq 'Conversion rate' }).Count -eq 0) 'M2 no current clicks: ledger-rate and the derived rate are both off'
-Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); metric='Conversion rate' }) } 'Only plain counts' 'M3 a rate is refused as the incomplete metric'
-Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); metric='Cost' }) } 'Only plain counts' 'M3 a money figure is refused as the incomplete metric'
+Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); metric='Conversion rate' }) } 'Only additive quantities' 'M3 a rate is refused as the incomplete metric'
+Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); metric='Cost' }) } 'Only additive quantities' 'M3 a money figure is refused as the incomplete metric'
 Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ partials=@(@{ action='Web forms'; value=9; start='2026-06-01'; end='2026-06-09'; source='x' }) }) } 'not a declared action' 'M4 a partial naming an undeclared action is an input error, not a silent fallback'
 Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); partials=@(@{ action='Conversions'; value=60; start='2026-06-01'; end='2026-06-09'; source='x' }) }) } 'omit "action"' 'M4 whole-metric mode: a partial that names an action is an input error'
 $r = Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); partials=@(@{ value=60; start='2026-06-01'; end='2026-06-10'; source='client count' }) }) 6 3
@@ -441,7 +441,7 @@ try {
   $run = RunTool (@('-Facts',$good,'-OutFile',(Join-Path $tmp2 'o6.json'),'-MinTrackedDays','0') + $std)
   Ok ($run.code -eq 2 -and $run.out -match 'at least 1') 'M8 -MinTrackedDays 0 is rejected'
   $run = RunTool @('-Facts',$good,'-OutFile',(Join-Path $tmp2 'o7.json'),'-DeclaredBy','user','-Metric','Conversion rate','-OutageStart','2026-06-11','-OutageEnd','2026-06-25')
-  Ok ($run.code -eq 2 -and $run.out -match 'Only plain counts') 'M3 CLI: a rate metric => exit 2'
+  Ok ($run.code -eq 2 -and $run.out -match 'Only additive quantities') 'M3 CLI: a rate metric => exit 2'
   # D6: a refused re-run must not leave the earlier run's block behind
   $re = Join-Path $tmp2 're.facts.json'; [IO.File]::WriteAllText($re,$script:FactsJson,$enc)
   $run = RunTool (@('-Facts',$re) + $std)
@@ -466,6 +466,47 @@ try {
   Ok (([IO.File]::ReadAllText((Join-Path $sub 'f.facts.json')) | ConvertFrom-Json).estimates.declared.declaredBy -eq 'user') 'M9 ...the file in the PowerShell location was updated'
   Ok ([IO.File]::ReadAllText((Join-Path $tmp2 'f.facts.json')) -eq $decoyBefore -and -not (Test-Path (Join-Path $tmp2 'f.facts.json.fc-tmp'))) 'M9 ...and the same-named file in the process directory was not touched'
 } finally { Remove-Item -LiteralPath $tmp2 -Recurse -Force -ErrorAction SilentlyContinue }
+
+Write-Host '== follow-ups: shared splicer (ANLZ-aModeledGap-4), summable money (ANLZ-aModeledGap-6) =='
+$fb = Set-FactsMember '{"a":1,"b":{"x":"} , \"q\""}}' 'zz' '{"k":[1,2]}'
+Ok ($fb -eq '{"a":1,"b":{"x":"} , \"q\""},"zz":{"k":[1,2]}}') 'Set-FactsMember appends a member and leaves the rest byte-identical'
+Ok ((Set-FactsMember $fb 'zz' '{"k":[1,2]}') -eq $fb) 'Set-FactsMember is idempotent'
+$fb2 = Set-FactsMember ($fb.Substring(0,$fb.Length-1) + ',"other":true}') 'zz' '3'
+Ok ((@(($fb2 | ConvertFrom-Json).PSObject.Properties | ForEach-Object { $_.Name }) -join ',') -eq 'a,b,other,zz') 'an existing member is replaced and re-appended last; other members keep their order'
+Ok ((Remove-FactsMember $fb2 'zz') -eq '{"a":1,"b":{"x":"} , \"q\""},"other":true}') 'Remove-FactsMember drops only that member'
+Ok ((Remove-FactsMember '{"a":{"zz":1},"s":"zz"}' 'zz') -eq '{"a":{"zz":1},"s":"zz"}') 'a nested key or a string value named like the member is left alone'
+Throws { Set-FactsMember '[1,2]' 'zz' '1' } 'not a JSON object' 'Set-FactsMember refuses a non-object'
+Ok ((Get-Command Find-FactsMember).ScriptBlock.File -like '*_FactsBlock.ps1') 'the splicer is defined in _FactsBlock.ps1, the one shared copy'
+Ok ((Get-Content "$PSScriptRoot\..\skill\scripts\Invoke-SwydoForecast.ps1" -Raw) -notmatch '\$inStr') 'the forecast tool keeps no private scanner'
+
+function NewFactsCov(){
+  # the fixture plus the analyzer's coverage record (aggClass decides what can be summed)
+  $f = NewFacts
+  $cov = New-Object PSObject
+  foreach($pair in @(@('gads:a:clicks','Clicks','number',$null,'sum'),@('gads:a:impressions','Impressions','number',$null,'sum'),@('gads:a:conversions','Conversions','number',$null,'sum'),
+                     @('gads:a:conversion_rate','Conversion rate','percent','fraction','ratio-recompute'),@('gads:a:cost_per_conversion','Cost / conversion','currency','micros','ratio-recompute'),
+                     @('gads:a:cost_micros','Cost','currency','micros','sum'))){
+    $cov | Add-Member -NotePropertyName $pair[0] -NotePropertyValue ([pscustomobject]@{ id=$pair[0]; metric=$pair[1]; type=$pair[2]; unit=$pair[3]; aggClass=$pair[4] })
+  }
+  $f.platforms[0] | Add-Member -NotePropertyName metrics -NotePropertyValue $cov
+  return $f
+}
+$r = Get-FcEstimates (NewFactsCov) $null (NewSpec @{ actions=@(); metric='Cost' }) 6 3
+$mi = $r.items[0]
+Ok ($mi.type -eq 'currency' -and $mi.metric -eq 'Cost') 'a summable money metric is accepted and typed currency'
+Eqd (Method $mi 'prior-rate-clicks').value 750 'money: prior-rate-clicks = 600/800*1000'
+Eqd (Method $mi 'run-rate').value 1300 'money: run-rate = 650/15*30'
+Ok ($mi.display -eq '$1,025.00' -and $mi.displayLow -eq '$750.00' -and $mi.displayHigh -eq '$1,300.00') 'money estimates display as money, never as a bare count'
+Ok ((Method $mi 'run-rate').display -eq '$1,300.00' -and $mi.statement -match '\$1,025\.00' -and $mi.uncertainty -match '\$750\.00') 'method displays and tool sentences use the money format too'
+Ok (@($r.items).Count -eq 1) 'no conversion-rate / cost-per-conversion is derived from a money target'
+Throws { Get-FcEstimates (NewFactsCov) $null (NewSpec @{ actions=@(); metric='Cost / conversion' }) } 'not summable' 'a per-unit price (ratio-recompute) is refused even though it is money'
+Throws { Get-FcEstimates (NewFactsCov) $null (NewSpec @{ actions=@(); metric='Conversion rate' }) } 'Only additive quantities' 'a rate is refused with a coverage record too'
+$r2 = Get-FcEstimates (NewFactsCov) $null (NewSpec $null) 6 3
+Ok ($r2.items[0].display -eq '56.7' -and $r2.items[0].type -eq 'number') 'a count target right after a money run is formatted as a count again (no state leaks between runs)'
+$moneyFacts = (Add-FcBlock $script:FactsJson $r) | ConvertFrom-Json
+$mSec = "## Estimates (modeled)`n`nThese figures are modeled, not measured.`n`n- Cost: an estimated `$1,025.00 (range `$750.00 to `$1,300.00), against the `$650.00 actually recorded. <!-- estimate:EST#1 -->`n`n"
+Ok ((Invoke-Closer ($head + $mSec + $recs) $moneyFacts).violations.Count -eq 0) 'the closer accepts a money estimate cited as the template shows'
+Ok (HasT (Invoke-Closer ($head + ($mSec -replace '\$1,025\.00','1,025.0') + $recs) $moneyFacts) 'untraceable-number') 'the same value written as a bare count does not trace (type must match)'
 
 Write-Host ''
 Write-Host ("Test-Forecast: {0} passed, {1} failed." -f $script:pass,$script:fail)
