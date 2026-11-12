@@ -9,7 +9,8 @@
                  heading ("### Record month: 999.9 conversions") was never traced.
                  Get-HeadingTraceLine hands the heading text to the per-line tracer, in the heading's
                  own section scope. A heading may quote the figures of a finding that its own section
-                 echoes (the finding anchors found in the section body are lent to the heading line).
+                 echoes (the finding anchors found in the section body are lent to the heading line;
+                 any other anchor written on a heading lends it nothing).
                  Not traced: the level-1 title (client and report names carry digits: "Studio 360"),
                  and any heading at or under a Recommendations heading (targets are not facts).
     2 comments   The client copy strips HTML comments ACROSS lines; every check reads line by line.
@@ -36,9 +37,13 @@ function Get-HeadingTraceLine($sec,$sections){
     if([object]::ReferenceEquals($x,$sec)){ break }
   }
   if($recLevel -gt 0){ return @() }
+  # Only FINDING anchors are lent to the heading (its own, and those of its section body). Every
+  # other anchor on a heading is dropped from the traced line: an estimate / derived / annotation
+  # anchor must sit on a body line to count, so a heading can never stand in for one.
   $anchors = @()
-  foreach($m in [regex]::Matches([string]$sec.text,'<!--\s*finding:[^\s]+?\s*-->')){ if($anchors -notcontains $m.Value){ $anchors += $m.Value } }
-  return @(([string]$sec.header) + ' ' + ($anchors -join ' '))
+  foreach($m in [regex]::Matches(([string]$sec.header + "`n" + [string]$sec.text),'<!--\s*finding:[^\s]+?\s*-->')){ if($anchors -notcontains $m.Value){ $anchors += $m.Value } }
+  $visible = ([string]$sec.header) -replace '<!--.*?-->',''
+  return @($visible + ' ' + ($anchors -join ' '))
 }
 
 function Test-MultilineComments($reportText){

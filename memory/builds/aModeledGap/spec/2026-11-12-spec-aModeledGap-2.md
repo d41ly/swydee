@@ -103,7 +103,7 @@ New: `skill/scripts/_CloserGaps.ps1`, `skill/scripts/_FactsBlock.ps1`. Edited:
 
 ## 7. Gates
 
-`bash tools/run-gates.sh`. `Test-Closer` rises from 129 to 144 and `Test-Forecast` from 194 to
+`bash tools/run-gates.sh`. `Test-Closer` rises from 129 to 145 and `Test-Forecast` from 194 to
 213. The other suites keep their counts.
 
 ## 8. Open questions

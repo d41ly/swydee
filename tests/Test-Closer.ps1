@@ -436,6 +436,8 @@ Ok ($rg.violations.Count -eq 0) ('R2-8 a heading may quote the figures of a find
 $rg = Invoke-Closer ("## Insights`n`n### Concentration: 777.7 conversions`n`n- 3 of 7 campaigns produced all 82.0 conversions. <!-- finding:WIN#1 -->`n") $gapFacts
 Ok (HasT $rg 'untraceable-number') 'R2-8 ...but not a figure the finding does not carry'
 
+$rg = Invoke-Closer ($gHead + "`n### The client counted 45 leads <!-- annotation:ANN#1 -->`n`nText.`n") $gapFacts
+Ok ((Get-HeadingTraceLine ([ordered]@{ header='Note 45 <!-- annotation:ANN#1 --> <!-- finding:WIN#1 -->'; level=3; kind='general'; text='' }) @())[0] -notmatch 'annotation') 'a heading lends only finding anchors to its traced line; other anchors are dropped'
 Write-Host ''
 Write-Host ("Test-Closer: {0} passed, {1} failed." -f $script:pass,$script:fail)
 if($script:fail -gt 0){ exit 1 }
