@@ -9,7 +9,13 @@
 - CLOSED - ANLZ-aModeledGap-4 - one shared facts-member splicer, `skill/scripts/_FactsBlock.ps1`, used by the forecast tool; merged dddfe20. The derived-metrics tool adopts it under its own id.
 - BLOCKED - ANLZ-aModeledGap-5 - a fair backtest of run-rate and the base weighting needs daily data: a Day-cut widget in the Swydo report or extractor work on the live API, plus a share link from the owner (review D3).
 - CLOSED - ANLZ-aModeledGap-6 - a summable money metric can be estimated (coverage record `aggClass` sum); rates and per-unit prices stay refused; merged dddfe20.
-- OPEN - ANLZ-aModeledGap-7 - `Split-Sections` treats any heading containing "recommend" as Recommendations, so that whole section goes untraced; classify on the heading's leading word instead (review aModeledGap-2 R10).
+- INPROGRESS - ANLZ-aModeledGap-7 - a heading merely containing "recommend" untraced its section; one Recommendations definition in `Split-Sections` fixes it, under ANLZ-aModeledGap-8.
+- INPROGRESS - ANLZ-aModeledGap-8 - fold-in of the follow-up build's review: Recommendations and title rules, name masking in headings, money and splicer hardening -> [spec](../builds/aModeledGap/spec/2026-11-12-spec-aModeledGap-3.md)
+- OPEN - ANLZ-aModeledGap-9 - digit labels ("Promo 2500", "401(k)", "365-day") are read as numbers in body and heading text; needs one label-masking rule for both, designed with ANLZ-aModeledGap-3.
+- OPEN - ANLZ-aModeledGap-10 - a line starting with `#` inside a fenced code block is treated as a heading by `Split-Sections`; ignore or refuse fences.
+- OPEN - ANLZ-aModeledGap-11 - the closer cannot read code-prefixed money ("SEK 1,025.00"); the forecast tool refuses such targets until it can, and a cost-per-conversion estimate there is unpublishable.
+- OPEN - ANLZ-aModeledGap-12 - negative money ("$-50.00") is not tokenised as currency by the closer; the forecast tool refuses negative money targets until it is.
+- OPEN - ANLZ-aModeledGap-13 - no gate checks that the violation names quoted in `skill/SKILL.md` exist as `type=` values in the scripts; a stale name passed a green bar once.
 - CLOSED - ANLZ-aDerivedMetric-1 - derived metrics computed by `Resolve-SwydoMetric.ps1` and policed by the closer; reviewed and merged to `main` (0c2360f) -> [spec](../builds/aDerivedMetric/spec/2026-11-12-spec-aDerivedMetric-1.md)
 - OPEN - ANLZ-aDerivedMetric-2 - breakdown rows carry display strings only; emitting raw cell values (`raw` / `rawPrevious`) from `Get-Breakdown` would make every filtered derived figure exact. The resolver already reads those keys.
 - OPEN - ANLZ-aDerivedMetric-3 - the resolver still has its own facts splicer; adopt `skill/scripts/_FactsBlock.ps1` (ANLZ-aModeledGap-4).

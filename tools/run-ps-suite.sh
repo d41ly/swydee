@@ -7,7 +7,7 @@
 # Widening the canary would fork an upstream file; wrapping the suite does not.
 #
 # Contract: propagate the suite's EXIT CODE untouched. swydee's suites are not uniform in what they
-# print — three end with `Test-<Name>: N passed, M failed.` and five with `RESULT: N passed, M failed`
+# print — five end with `Test-<Name>: N passed, M failed.` and five with `RESULT: N passed, M failed`
 # — so exit status is the only trustworthy signal. Never parse the prose.
 set -u
 top=$(git rev-parse --show-toplevel 2>/dev/null) || { echo "run-ps-suite: not a git repo"; exit 2; }

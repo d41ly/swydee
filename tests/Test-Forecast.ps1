@@ -372,7 +372,7 @@ $f = NewFacts; $f.platforms[0].headline.'gads:a:clicks'.current = $null
 $r = Get-FcEstimates $f $led3 (NewSpec @{ actions=@() }) 3 3
 Ok ($null -eq (Method $r.items[0] 'ledger-rate') -and @($r.items | Where-Object { $_.metric -eq 'Conversion rate' }).Count -eq 0) 'M2 no current clicks: ledger-rate and the derived rate are both off'
 Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); metric='Conversion rate' }) } 'Only additive quantities' 'M3 a rate is refused as the incomplete metric'
-Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); metric='Cost' }) } 'Only additive quantities' 'M3 a money figure is refused as the incomplete metric'
+Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); metric='Cost' }) } 'no coverage record' 'M3 a money figure the facts do not mark as summable is refused'
 Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ partials=@(@{ action='Web forms'; value=9; start='2026-06-01'; end='2026-06-09'; source='x' }) }) } 'not a declared action' 'M4 a partial naming an undeclared action is an input error, not a silent fallback'
 Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); partials=@(@{ action='Conversions'; value=60; start='2026-06-01'; end='2026-06-09'; source='x' }) }) } 'omit "action"' 'M4 whole-metric mode: a partial that names an action is an input error'
 $r = Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); partials=@(@{ value=60; start='2026-06-01'; end='2026-06-10'; source='client count' }) }) 6 3
@@ -507,6 +507,96 @@ $moneyFacts = (Add-FcBlock $script:FactsJson $r) | ConvertFrom-Json
 $mSec = "## Estimates (modeled)`n`nThese figures are modeled, not measured.`n`n- Cost: an estimated `$1,025.00 (range `$750.00 to `$1,300.00), against the `$650.00 actually recorded. <!-- estimate:EST#1 -->`n`n"
 Ok ((Invoke-Closer ($head + $mSec + $recs) $moneyFacts).violations.Count -eq 0) 'the closer accepts a money estimate cited as the template shows'
 Ok (HasT (Invoke-Closer ($head + ($mSec -replace '\$1,025\.00','1,025.0') + $recs) $moneyFacts) 'untraceable-number') 'the same value written as a bare count does not trace (type must match)'
+
+Write-Host '== review round 3 (2026-11-12-review-aModeledGap-3) =='
+# --- S1: the gate needs the metric's headline cell, in every mode ---
+$f = NewFacts; $f.platforms[0].headline.PSObject.Properties.Remove('gads:a:conversions')
+Throws { Get-FcEstimates $f $null (NewSpec $null) } 'without its headline cell' 'S1 per-action mode without a headline cell for the metric is refused (the gate cannot run)'
+Throws { Get-FcEstimates $f $null (NewSpec @{ actions=@() }) } 'without its headline cell' 'S1 ...and so is whole-metric mode'
+# --- T6 / S8: what counts as money that sums ---
+Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); metric='Cost' }) } 'no coverage record' 'T6 micros money without a coverage record is refused, and the message says why'
+$f = NewFactsCov; $f.platforms[0].headline.'gads:a:cost_micros'.unit = $null
+Throws { Get-FcEstimates $f $null (NewSpec @{ actions=@(); metric='Cost' }) } 'unknown unit' 'T6 currency-typed money that is not in micros is refused, never formatted as a count'
+$f = NewFactsCov; $f.platforms[0].headline.'gads:a:cost_per_conversion'.id = ''
+foreach($cp in $f.platforms[0].metrics.PSObject.Properties){ $cp.Value.id = '' }
+Throws { Get-FcEstimates $f $null (NewSpec @{ actions=@(); metric='Cost / conversion' }) } 'no coverage record' 'S8 a headline cell and coverage entries that both lack an id do not match each other'
+Ok ((Get-Content "$PSScriptRoot\..\skill\scripts\Invoke-SwydoForecast.ps1" -Raw) -notmatch 'non-count metric') 'T6 the tool header no longer says "non-count metric"'
+# --- S3 / S5: money the closer could never read is refused up front ---
+$f = NewFactsCov; $f.platforms[0].headline.'gads:a:cost_micros'.currency = 'SEK'
+Throws { Get-FcEstimates $f $null (NewSpec @{ actions=@(); metric='Cost' }) } 'closer cannot read' 'S3 a currency with no symbol the closer knows is refused'
+$f = NewFactsCov; $f.platforms[0].headline.'gads:a:cost_micros'.currency = 'EUR'
+$rEur = Get-FcEstimates $f $null (NewSpec @{ actions=@(); metric='Cost' }) 6 3
+$eur = [string][char]0x20AC
+Ok ($rEur.items[0].display -eq ($eur + '1,025.00') -and $rEur.items[0].displayLow -eq ($eur + '750.00')) 'T8 a euro target is formatted with the euro sign (the currency is carried, not assumed)'
+$eurFacts = (Add-FcBlock $script:FactsJson $rEur) | ConvertFrom-Json
+$eurSec = "## Estimates (modeled)`n`nThese figures are modeled, not measured.`n`n- Cost: an estimated " + $eur + "1,025.00 (range " + $eur + "750.00 to " + $eur + "1,300.00). <!-- estimate:EST#1 -->`n`n"
+Ok ((Invoke-Closer ($head + $eurSec + $recs) $eurFacts).violations.Count -eq 0) 'T8 ...and the closer accepts it'
+$f = NewFactsCov; $f.platforms[0].headline.'gads:a:cost_micros'.current = -50000000
+Throws { Get-FcEstimates $f $null (NewSpec @{ actions=@(); metric='Cost' }) } 'negative' 'S5 a negative money target is refused'
+# --- S6: count-scaled constants do not apply to money ---
+$f = NewFactsCov; $f.platforms[0].headline.'gads:a:cost_micros'.current = 25000000; $f.platforms[0].headline.'gads:a:cost_micros'.displayCurrent = '$25.00'
+$rSmall = Get-FcEstimates $f $null (NewSpec @{ actions=@(); metric='Cost' }) 6 3
+Ok ($rSmall.items[0].uncertainty -notmatch 'small sample') 'S6 money under 30 is not called a small sample'
+Ok ($e1.uncertainty -match 'small sample') 'S6 ...a count under 30 still is'
+function NewFactsMoneyRows($formRow){
+  # per-action money: the action breakdown also carries Cost rows
+  $f = NewFactsCov
+  $rows = $f.platforms[0].breakdowns[1].rows
+  $rows[0].values | Add-Member -NotePropertyName Cost -NotePropertyValue ([pscustomobject]@{ display='$400.00'; type='currency'; hasComparison=$true; displayPrevious='$350.00' })
+  $rows[1].values | Add-Member -NotePropertyName Cost -NotePropertyValue ([pscustomobject]@{ display=$formRow; type='currency'; hasComparison=$true; displayPrevious='$250.00' })
+  return $f
+}
+$rRows = Get-FcEstimates (NewFactsMoneyRows '$250.00') $null (NewSpec @{ metric='Cost' }) 6 3
+Ok (@($rRows.items).Count -eq 2 -and $rRows.items[0].kind -eq 'action' -and $rRows.items[1].kind -eq 'total') 'T8 per-action money: action + total, no dependents'
+Ok ($rRows.items[0].type -eq 'currency' -and $rRows.items[1].type -eq 'currency') 'T8 both the action and the TOTAL are typed currency'
+Ok (@(@($rRows.items[0].display,$rRows.items[0].displayLow,$rRows.items[0].displayHigh,$rRows.items[1].display,$rRows.items[1].displayLow,$rRows.items[1].displayHigh) | Where-Object { $_ -notmatch '^\$[\d,]+\.\d\d$' }).Count -eq 0) 'T8 every per-action money display is money-formatted'
+$rOff = Get-FcEstimates (NewFactsMoneyRows '$249.85') $null (NewSpec @{ metric='Cost' }) 6 3
+Ok (@($rOff.refused | Where-Object { $_.target -match 'account total' -and $_.reason -match 'rows sum' }).Count -eq 1) 'S6 money rows 15 cents off the headline do not reconcile (cent-scaled tolerance)'
+# --- S4: a partial far out of scale is refused, in the unit's own words ---
+Throws { Get-FcEstimates (NewFactsCov) $null (NewSpec @{ actions=@(); metric='Cost'; partials=@(@{ value=200000000; start='2026-06-01'; end='2026-06-10'; source='x' }) }) } 'dollars, not micros' 'S4 a money partial given in micros by mistake is refused and the message names the unit'
+Throws { Get-FcEstimates (NewFacts) $null (NewSpec @{ actions=@(); partials=@(@{ value=5000; start='2026-06-01'; end='2026-06-10'; source='x' }) }) } 'ten times' 'S4 a count partial wildly above every other method is refused too'
+$rAbove = Get-FcEstimates (NewFacts) $null (NewSpec @{ partials=@(@{ action='Web form'; value=14; start='2026-06-01'; end='2026-06-09'; source='client count' }) }) 6 3
+Ok ($null -ne (Method $rAbove.items[0] 'run-rate') -and @($rAbove.items | Where-Object { $_.kind -eq 'action' }).Count -eq 1) 'S4 a partial moderately above the recorded value is still accepted'
+Ok (@($rAbove.items[0].methods | Where-Object { $_.note -and $null -eq $_.valueBeforeFloor }).Count -eq 0) 'S4 a floored method records its value before the floor'
+# --- S7: no stale money flag ---
+try { Get-FcEstimates (NewFactsCov) $null (NewSpec @{ actions=@(); metric='Cost' }) 6 3 | Out-Null; Get-FcEstimates $null $null (NewSpec $null) | Out-Null } catch { }
+Ok ((Format-FcTarget 5) -eq '5.0') 'S7 a throw at the very start of a run does not leave the money flag set'
+
+# --- S2: money estimates written without their cents, or rounded ---
+$rm = Invoke-Closer ($head + $mSec + $recs + "- Plan for `$1,025 of spend next month.`n") $moneyFacts
+Ok (HasT $rm 'estimate-misuse') 'S2 a money estimate without its cents ("$1,025" for $1,025.00) is still the estimate'
+$rm = Invoke-Closer ($head + $mSec + $recs + "- Plan for about `$1,025 of spend next month.`n") $moneyFacts
+Ok (HasT $rm 'estimate-misuse') 'S2 ...also after an approximation word'
+$rm = Invoke-Closer ($head + $mSec + $recs + "- Spend was `$650.00; hold it under `$700 next month.`n") $moneyFacts
+Ok ($rm.violations.Count -eq 0) ('S2 a measured figure and an ordinary target stay legal in Recommendations (' + (@($rm.violations | ForEach-Object { $_.type + ':' + $_.snippet }) -join ' ; ') + ')')
+$rm = Invoke-Closer ($head + $sec + $recs + "- Hold cost per conversion at about `$4.`n") $factsEst
+Ok ($rm.violations.Count -eq 0) 'S2 "about $4" beside a $3.68 estimate is a target, not a rounded estimate'
+$handIdx = @{ 'EST#9' = @{ item=$null; cands=@([ordered]@{ value=1025.4; type='currency'; role='base'; ulp=0.01 }, [ordered]@{ value=3.68; type='currency'; role='low'; ulp=0.01 }) } }
+Ok ((@(Test-EstimateRounded 'Plan for about $1,025 of spend.' $handIdx 'x')).Count -eq 1) 'S2 "about $1,025" for an estimated $1,025.40 is a rounded estimate'
+Ok ((@(Test-EstimateRounded 'Plan for about $1,026 of spend.' $handIdx 'x')).Count -eq 1) 'S2 ...rounded up as well'
+Ok ((@(Test-EstimateRounded 'Hold it at about $4 or about $3.' $handIdx 'x')).Count -eq 0) 'S2 ...but only for estimates of 100 or more'
+Ok ((@(Test-EstimateRounded 'About 1,025 clicks.' $handIdx 'x')).Count -eq 0) 'S2 a count never matches a money estimate'
+
+# --- H4: estimates in a Recommendations heading or sub-heading ---
+$rh = Invoke-Closer ($head + $sec + "## Recommendations: plan on 176.7 conversions`n`n- Fix the form tracking.`n") $factsEst
+Ok (HasT $rh 'estimate-misuse') 'H4 an estimate in the Recommendations heading is misuse (the heading is not traced, but it is scanned)'
+$rh = Invoke-Closer ($head + $sec + $recs + "`n### Plan on 176.7 conversions`n`n- Do it.`n") $factsEst
+Ok (HasT $rh 'estimate-misuse') 'H4 ...and in a sub-heading under Recommendations'
+$rh = Invoke-Closer ($head + $sec + $recs + "`n### Aim for 1,000 clicks and 200 conversions`n`n- Do it.`n") $factsEst
+Ok ($rh.violations.Count -eq 0) ('H4 ordinary targets and measured facts in such a heading stay legal (' + (@($rh.violations | ForEach-Object { $_.type + ':' + $_.snippet }) -join ' ; ') + ')')
+
+# --- S10 / T7: the splicer ---
+Throws { Set-FactsMember '{"meta":{"m":1},"a":1}' 'estimates' '1,"meta":{"evil":true}' } 'not valid JSON' 'S10 a value carrying a second member cannot be smuggled in'
+Throws { Set-FactsMember '{"a":1}' 'zz' '1,2' } 'single JSON value' 'S10 a value that is two JSON values is refused'
+Throws { Set-FactsMember '{"a":1}' 'zz' '{oops' } 'not valid JSON' 'S10 a value that is not JSON is refused'
+Throws { Set-FactsMember '{"Estimates":1,"a":2}' 'estimates' '3' } '.' 'T7 a splice that would leave two members differing only by case is refused'
+Ok ((Remove-FactsMember '{"zz":1,"a":2,"b":3}' 'zz') -eq '{"a":2,"b":3}') 'T7 Remove: a FIRST member'
+Ok ((Remove-FactsMember '{"a":2,"zz":1,"b":3}' 'zz') -eq '{"a":2,"b":3}') 'T7 Remove: a MIDDLE member'
+Ok ((Remove-FactsMember '{"a":2,"b":3,"zz":1}' 'zz') -eq '{"a":2,"b":3}') 'T7 Remove: the LAST member'
+Ok ((Remove-FactsMember '{"zz":1,"a":2,"zz":{"k":[1,2]}}' 'zz') -eq '{"a":2}') 'S10 Remove: both of two duplicate members'
+Ok ((Set-FactsMember '{}' 'zz' '1') -eq '{"zz":1}') 'T7 Set into an empty object needs no separator'
+Ok ((Remove-FactsMember '{"zz":1}' 'zz') -eq '{}') 'T7 Remove down to an empty object'
+Ok ((Set-FactsMember '{"zz":1,"a":2}' 'zz' '9') -eq '{"a":2,"zz":9}') 'T7 Set replaces a first member and re-appends it last'
 
 Write-Host ''
 Write-Host ("Test-Forecast: {0} passed, {1} failed." -f $script:pass,$script:fail)

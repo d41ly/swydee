@@ -32,6 +32,7 @@ a note; never rewrite a row. Detail lives under `builds/<slug>/`.
 - ANLZ-aModeledGap-1 - a metric DECLARED incomplete gets a modeled estimate, never inferred and never mixed with measured figures; built on `main` before its spec at the owner's request -> [spec](builds/aModeledGap/spec/2026-11-12-spec-aModeledGap-1.md)
 - ANLZ-aModeledGap-2 - the closer traces heading text and rejects comments that span lines; a small-count phrase rule was built, reviewed and withdrawn rather than shipped half-working -> [spec](builds/aModeledGap/spec/2026-11-12-spec-aModeledGap-2.md)
 - ANLZ-aDerivedMetric-1 - a figure the dashboard does not report is computed by a tool from reported components; filtered values come only from reconciling breakdown rows, and request text is never citable -> [spec](builds/aDerivedMetric/spec/2026-11-12-spec-aDerivedMetric-1.md)
+- ANLZ-aModeledGap-8 - one definition in `Split-Sections`: the title is the first heading when level 1; a Recommendations section is opened by a heading that STARTS with "Recommendation(s)" and includes its sub-sections -> [spec](builds/aModeledGap/spec/2026-11-12-spec-aModeledGap-3.md)
 
 ## trend
 

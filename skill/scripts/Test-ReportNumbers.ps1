@@ -23,6 +23,9 @@
    4 hygiene        - the report must contain no share-key credential pattern (case-insensitive).
    + estimates      - modeled estimates (facts.estimates) trace only on their anchored, labelled lines
                       inside "Estimates (modeled)"; the rules are in _EstimateCheck.ps1.
+   + headings       - heading text is traced in its section's scope (the title and Recommendations
+                      headings excepted); a comment spanning lines is `multiline-comment`.
+                      Rules in _CloserGaps.ps1.
 
 .PARAMETER Report   Path to the generated report .md
 .PARAMETER Facts    Path to the *.facts.json produced by Analyze-SwydoReport.ps1
@@ -287,9 +290,17 @@ function Find-Candidates($tok,$cands){
 }
 
 function Split-Sections($reportText){
-  # -> list of @{ header; kind(platform|recommendations|general); platformId; platformIdCount; level; text }
+  # -> list of @{ header; kind(platform|recommendations|general); platformId; platformIdCount; level; text; isTitle }
+  #
+  # TITLE: the first heading of the document, and only when it is level 1. It is the only heading
+  # exempt from heading tracing for being a title, and it never opens a Recommendations section.
+  # RECOMMENDATIONS: opened by any heading other than the title whose VISIBLE text (comments removed)
+  # starts with "Recommendation(s)" - leading numbering/punctuation allowed ("## 5. Recommendations and
+  # next steps"). It runs to the next heading of the same or a higher level, and every sub-section
+  # inside it is kind 'recommendations' too. "## Recommended bid strategy", "## Google Ads
+  # recommendations" and a hidden <!-- recommend --> do NOT open one: their numbers are traced.
   $sections = New-Object System.Collections.ArrayList
-  $lines = ($reportText -replace "`r`n","`n") -split "`n"
+  $lines = ((([string]$reportText) -replace "`r`n","`n") -replace "`r","`n") -split "`n"
   $cur = [ordered]@{ header='(intro)'; level=0; lines=(New-Object System.Collections.ArrayList) }
   function _finalize($s){
     $txt = ($s.lines -join "`n")
@@ -298,9 +309,8 @@ function Split-Sections($reportText){
     $secpids = @(); foreach($pm in [regex]::Matches($hay,'<!--\s*platform:([^\s]+?)\s*-->')){ $secpids += $pm.Groups[1].Value }
     $secpid = if($secpids.Count -gt 0){ $secpids[0] } else { $null }
     $kind = 'general'
-    if($s.header -match '(?i)recommend'){ $kind='recommendations' }
-    elseif($secpid){ $kind='platform' }
-    return [ordered]@{ header=$s.header; kind=$kind; platformId=$secpid; platformIdCount=$secpids.Count; level=$s.level; text=$txt }
+    if($secpid){ $kind='platform' }
+    return [ordered]@{ header=$s.header; kind=$kind; platformId=$secpid; platformIdCount=$secpids.Count; level=$s.level; text=$txt; isTitle=$false }
   }
   foreach($ln in $lines){
     $hm = [regex]::Match($ln,'^(#{1,6})\s+(.*)$')
@@ -312,6 +322,15 @@ function Split-Sections($reportText){
     }
   }
   [void]$sections.Add((_finalize $cur))
+  $recLevel = 0; $seenHeading = $false
+  foreach($x in $sections){
+    if([int]$x.level -lt 1){ continue }
+    if(-not $seenHeading){ $seenHeading = $true; if([int]$x.level -eq 1){ $x.isTitle = $true } }
+    if($recLevel -gt 0 -and [int]$x.level -le $recLevel){ $recLevel = 0 }
+    $visibleHeader = ([string]$x.header) -replace '<!--.*?-->',''
+    if(-not $x.isTitle -and $visibleHeader -match '(?i)^[^A-Za-z]*recommendations?\b'){ $recLevel = [int]$x.level }
+    if($recLevel -gt 0){ $x.kind = 'recommendations' }
+  }
   return $sections
 }
 
@@ -504,14 +523,7 @@ function Test-DerivedSurfacing($reportText,$derIndex){
   # `formula`, verbatim - on a line carrying its anchor.
   $out = New-Object System.Collections.ArrayList
   if($derIndex.Count -eq 0){ return $out }
-  # a comment left open across a line break could hide the marker from the client while satisfying a
-  # per-line check; with derived metrics in play it is simply not allowed
-  foreach($ln in ((([string]$reportText) -replace "`r`n","`n") -split "`n")){
-    if((($ln -replace '<!--.*?-->','') -match '<!--|-->')){
-      [void]$out.Add([ordered]@{ type='multiline-comment'; section='(report)'; detail='an HTML comment is left open or spans more than one line; keep every anchor comment on a single line'; snippet=$(if($ln.Length -gt 60){ $ln.Substring(0,60) } else { $ln }) })
-      break
-    }
-  }
+  # (a comment spanning lines is rejected for every report by Test-MultilineComments in _CloserGaps.ps1)
   foreach($did in @($derIndex.Keys | Sort-Object)){
     $d = $derIndex[$did]
     if($d.stale){
@@ -538,6 +550,9 @@ function Test-DerivedSurfacing($reportText,$derIndex){
 function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   $violations = New-Object System.Collections.ArrayList
   $measured = 0; $traced = 0
+  # a lone CR is a line break to every Markdown renderer; without this, text after it rode on the
+  # previous line (e.g. on the untraced title)
+  $reportText = ((([string]$reportText) -replace "`r`n","`n") -replace "`r","`n")
   $index = Build-FactIndex $facts
   $estIndex = Build-EstimateIndex $facts
   $derIndex = Build-DerivedIndex $facts
@@ -549,8 +564,8 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   # sibling line from borrowing a co-located finding's number.
   $ctxPlatform = $null; $ctxLevel = 0   # last-seen platform section, for scoping unanchored subsections
   foreach($sec in $sections){
-    if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ foreach($ev in @(Test-EstimateUntraced $sec.text $index.global $estIndex $sec.header)){ [void]$violations.Add($ev) } }
-    if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ foreach($dv in @(Test-DerivedUntraced $sec.text $index.global $derIndex $sec.header)){ [void]$violations.Add($dv) } }
+    if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ foreach($ev in @(Test-EstimateUntraced ([string]$sec.header + "`n" + $sec.text) $index.global $estIndex $sec.header)){ [void]$violations.Add($ev) } }
+    if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ foreach($dv in @(Test-DerivedUntraced ([string]$sec.header + "`n" + $sec.text) $index.global $derIndex $sec.header)){ [void]$violations.Add($dv) } }
     if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ continue }
     # C1: more than one platform anchor in one section is ambiguous (silent-take-first would mis-scope)
     if($sec.platformIdCount -gt 1){
@@ -594,7 +609,7 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
     elseif($eff -eq ''){ $base = (New-Object System.Collections.ArrayList) }
     else { $base = $index.byPlatform[$eff] }
     # the heading text is traced too, in its own section's scope (it used to escape every check)
-    foreach($line in (@(Get-HeadingTraceLine $sec $sections) + @(($sec.text -replace "`r`n","`n") -split "`n"))){
+    foreach($line in (@(Get-HeadingTraceLine $sec $TraceRecs $facts) + @(($sec.text -replace "`r`n","`n") -split "`n"))){
       $fids = @(); foreach($fm in [regex]::Matches($line,'<!--\s*finding:([^\s]+?)\s*-->')){ $fids += $fm.Groups[1].Value }
       $anns = @(); foreach($am in [regex]::Matches($line,'<!--\s*annotation:([^\s]+?)\s*-->')){ $anns += $am.Groups[1].Value }
       $cands = New-Object System.Collections.ArrayList
@@ -734,7 +749,7 @@ function Strip-Anchors($text){
   # Produce the client-facing copy: remove the machine anchors (<!-- platform/finding/caveat:... -->,
   # and any HTML comment), trim the trailing whitespace they leave, and collapse the resulting blank
   # runs. Deterministic: the published file is the VERIFIED text minus comments - no number can change.
-  $t = ([string]$text) -replace "`r`n","`n"
+  $t = (([string]$text) -replace "`r`n","`n") -replace "`r","`n"
   $t = $t -replace '(?s)<!--.*?-->',''
   $t = ($t -split "`n" | ForEach-Object { $_ -replace '[ \t]+$','' }) -join "`n"
   return ($t -replace '\n{3,}', "`n`n")
