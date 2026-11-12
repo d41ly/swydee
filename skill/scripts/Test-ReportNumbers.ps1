@@ -21,6 +21,8 @@
                       caveats via <!-- caveat:<id> -->); a surfaced requiresDownstreamData
                       finding needs a downstream clause.
    4 hygiene        - the report must contain no share-key credential pattern (case-insensitive).
+   + estimates      - modeled estimates (facts.estimates) trace only on their anchored, labelled lines
+                      inside "Estimates (modeled)"; the rules are in _EstimateCheck.ps1.
 
 .PARAMETER Report   Path to the generated report .md
 .PARAMETER Facts    Path to the *.facts.json produced by Analyze-SwydoReport.ps1
@@ -313,10 +315,14 @@ function Split-Sections($reportText){
   return $sections
 }
 
+# modeled estimates (Invoke-SwydoForecast.ps1): rules live in _EstimateCheck.ps1, the closer only hooks them
+. "$PSScriptRoot\_EstimateCheck.ps1"
+
 function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   $violations = New-Object System.Collections.ArrayList
   $measured = 0; $traced = 0
   $index = Build-FactIndex $facts
+  $estIndex = Build-EstimateIndex $facts
   $sections = Split-Sections $reportText
 
   # 1 + 2: per-LINE number tracing + comparison guard. A finding's numbers (byFid) are in scope ONLY
@@ -325,6 +331,7 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   # sibling line from borrowing a co-located finding's number.
   $ctxPlatform = $null; $ctxLevel = 0   # last-seen platform section, for scoping unanchored subsections
   foreach($sec in $sections){
+    if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ foreach($ev in @(Test-EstimateUntraced $sec.text $index.global $estIndex $sec.header)){ [void]$violations.Add($ev) } }
     if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ continue }
     # C1: more than one platform anchor in one section is ambiguous (silent-take-first would mis-scope)
     if($sec.platformIdCount -gt 1){
@@ -374,6 +381,10 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
       foreach($c in $base){ [void]$cands.Add($c) }
       foreach($fid in $fids){ if($index.byFid.ContainsKey($fid)){ foreach($c in $index.byFid[$fid]){ [void]$cands.Add($c) } } }
       foreach($aid in $anns){ if($index.byAnnotation.ContainsKey($aid)){ foreach($c in $index.byAnnotation[$aid]){ [void]$cands.Add($c) } } }
+      # modeled estimates: in scope ONLY on a line echoing <!-- estimate:id --> inside 'Estimates (modeled)'
+      $ests = @(Get-EstimateAnchors $line)
+      foreach($c in @(Get-EstimateLineCandidates $ests $estIndex $sec.header)){ [void]$cands.Add($c) }
+      foreach($ev in @(Test-EstimateLine $line $ests $estIndex $sec.header)){ [void]$violations.Add($ev) }
       $cmpMatches = [regex]::Matches($line,$script:CmpRx)
       foreach($tok in @(Get-MeasureTokens $line)){
         $measured++
@@ -382,6 +393,7 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
           $traced++
         } else {
           [void]$violations.Add([ordered]@{ type='untraceable-number'; section=$sec.header; detail="'$($tok.raw)' ($($tok.type)) has no matching fact in scope"; snippet=$tok.raw })
+          foreach($ev in @(Test-EstimateStray $tok $estIndex $sec.header)){ [void]$violations.Add($ev) }
           continue
         }
         # comparison guard: signed token, or a comparative verb near it on the SAME clause (no
@@ -476,6 +488,9 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
     [void]$violations.Add([ordered]@{ type='incomplete-extraction'; section='(facts)'
       detail=("facts declare extractionComplete=false (" + @($incIds).Count + " widget(s) incomplete) - re-extract before publishing"); snippet=$sn })
   }
+
+  # modeled estimates - presented when produced, always with their range and a not-measured statement
+  foreach($ev in @(Test-EstimateSurfacing $reportText $estIndex)){ [void]$violations.Add($ev) }
 
   return [ordered]@{ measuresChecked=$measured; traced=$traced; violations=$violations }
 }

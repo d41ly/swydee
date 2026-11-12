@@ -7,6 +7,7 @@
   { "name": "Test-Sync (trend wrapper)", "argv": ["bash", "tools/run-ps-suite.sh", "tests/Test-Sync.ps1"] },
   { "name": "Test-TrendAnalyze (trend facts)", "argv": ["bash", "tools/run-ps-suite.sh", "tests/Test-TrendAnalyze.ps1"] },
   { "name": "Test-TrendFacts (facts shaping)", "argv": ["bash", "tools/run-ps-suite.sh", "tests/Test-TrendFacts.ps1"] },
+  { "name": "Test-Forecast (modeled estimates)", "argv": ["bash", "tools/run-ps-suite.sh", "tests/Test-Forecast.ps1"] },
 
   { "name": "ps source hygiene (case collisions + BOM-less non-ASCII)", "argv": ["python", "tools/gate-lint/ps-hygiene.py", "."] },
   { "name": "ps-hygiene self-test", "argv": ["python", "tools/gate-lint/ps-hygiene.py", "--selftest"],

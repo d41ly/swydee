@@ -1,6 +1,6 @@
 # /swydee report template
 
-Fill this from the facts JSON. **Every number must be copied verbatim from a facts display string** (`headline[].displayCurrent/displayPrevious/displayDelta`, `breakdowns[].rows[].values[].display/displayPrevious/delta`, `timeSeries[].buckets[].derived.*` and `pacing.*.display`, or a `findings[].evidence.*` string). No arithmetic, no re-rounding, no summing. `platforms[].metrics` is a COVERAGE record, not a number source: read it to know what a platform can and cannot be said to have measured, and NEVER quote its display strings. `breakdowns[].rows[].valuesById` is deliberately NOT quotable either: the closer does not index it, so a number taken from there cannot be traced and will block publish. Promoting it needs the closer and this file changed together (ANLZ-aCandidTally-1 S12).
+Fill this from the facts JSON. **Every number must be copied verbatim from a facts display string** (`headline[].displayCurrent/displayPrevious/displayDelta`, `breakdowns[].rows[].values[].display/displayPrevious/delta`, `timeSeries[].buckets[].derived.*` and `pacing.*.display`, or a `findings[].evidence.*` string). No arithmetic, no re-rounding, no summing. `platforms[].metrics` is a COVERAGE record, not a number source: read it to know what a platform can and cannot be said to have measured, and NEVER quote its display strings. `breakdowns[].rows[].valuesById` is deliberately NOT quotable either: the closer does not index it, so a number taken from there cannot be traced and will block publish. Promoting it needs the closer and this file changed together (ANLZ-aCandidTally-1 S12). One further source exists only when the facts carry an `estimates` block: its display strings are quotable ONLY under hard rule 6, inside `## Estimates (modeled)`.
 
 ## Voice
 **Persona (constant):** a senior practitioner writing to a client you have a good relationship with — warm, direct, honest about bad news. Role is category-derived from the dominant `meta.providers[].category`: `ads` → senior media buyer; `seo` → senior SEO strategist; `email-crm` → senior lifecycle/email marketer; mixed / `other` → senior performance marketer.
@@ -20,6 +20,7 @@ If `voice:<type>` names an unknown profile, fall back to `causal` and say so in 
 3. Reproduce **every** `meta.comparisonCaveats[]` at least once — write its `.text` and put its anchor `<!-- caveat:<id> -->` (e.g. `<!-- caveat:seasonality -->`) on that line so the verifier can confirm it. For every surfaced finding with `requiresDownstreamData:true`, its point/recommendation carries a "confirm downstream / lead-quality before acting" clause.
 4. Surface every `dataGaps`/`discrepancies` finding (sev ≥ major) and every `GAP_UNIT_UNCONFIRMED`.
 5. **Anchors** (machine-read verification scaffold; keep exactly in the draft). These are HTML comments the verifier uses to scope numbers and confirm surfacing — they are **stripped from the delivered client report** (the closer's `-PublishTo` writes the clean copy on PASS), so they never reach the client; include them in the draft anyway. Each platform gets its own `##` section header with `<!-- platform:<providerId> -->` immediately under it — **exactly one** platform anchor per section (two in one section is flagged, and an anchor whose id isn't in the facts is flagged). Put `<!-- finding:<fid> -->` on the **same line** as that finding's numbers (a finding's figures only trace on the line carrying its fid — don't split the comment onto its own line), and `<!-- caveat:<id> -->` on the caveat's line. The prose around them is free to paraphrase.
+6. **Estimates are modeled, never measured.** A number from the facts `estimates` block (written by `Invoke-SwydoForecast.ps1`) appears ONLY under a heading that reads exactly `## Estimates (modeled)` (no sub-headings inside it), on a body line that carries its `<!-- estimate:EST#n -->` anchor AND a visible word saying what it is ("estimated", "modeled", "projected") - the anchor is stripped from the client copy, the word is what the client sees. EVERY line in that section that carries a number needs both. Each action / total estimate in the facts must be presented, with its base (`display`) and its range (`displayLow` to `displayHigh`); the cost-per-conversion and conversion-rate estimates are optional. Quote the display strings verbatim - never round one ("about 57" for an estimated 56.7 is rejected anywhere in the report). Set an estimate beside what was recorded THIS period (`measuredDisplay`), never beside a previous period. Never show the id `EST#n` in visible text, and keep every HTML comment on one line. Measured sections keep the measured figures; do not restate a headline, a delta or a finding using an estimate, and do not put an estimate in Recommendations. You still do no arithmetic: not a midpoint, not a rounded range, not a difference between an estimate and a measured figure.
 
 ## Structure
 
@@ -66,6 +67,22 @@ refreshes, launches). Cite them ONLY as temporal co-occurrence — "coincided wi
 period" — NEVER as cause, regardless of the voice profile. A number inside a note is being quoted, not
 asserted, and traces only on its own anchored line.
 
+## Estimates (modeled)   [include ONLY if the facts have an `estimates` block with items; then it is required]
+Open with one or two sentences in plain words. Say, in these words, that the figures are "modeled, not
+measured"; who declared the data incomplete (`estimates.declared.declaredBy`), which metric / action(s),
+and the window (`outageStart` to `outageEnd`). Then the bullets below - each on ONE line, each ending with
+its anchor, each containing the word "estimated" (or "estimate" / "modeled" / "projected"):
+- <what>: an estimated <display> (range <displayLow> to <displayHigh>), against the <measuredDisplay> actually recorded.  <!-- estimate:EST#n -->
+- How this estimate was built, in a sentence a client can follow: the tracked-day pace gives an estimated <methods[run-rate].display>, last period's level gives <the prior-level methods[].display values>, and the base blends them, leaning on the tracked-day pace in proportion to how much of the period was tracked.  <!-- estimate:EST#n -->
+- The limit of this estimate: paraphrase `uncertainty` and keep its substance (a wide disagreement between the lines of evidence, a small sample, "indicative, not precise"); if `crossChecks[]` exists, say whether that check landed inside the estimated range.  <!-- estimate:EST#n -->
+Give the first bullet for every action estimate and for the total (the closer requires both); the "how it
+was built" and "limit" bullets at least once for the per-action estimate. Cost per conversion and
+conversion rate are optional, same first-bullet shape. If `estimates.refused[]` is non-empty, add one plain
+sentence (no numbers, no anchor) saying what could not be estimated and why.
+A line without an estimate anchor cannot carry an estimate number. No sub-headings in this section. Do not
+attribute the estimate to campaign performance, and do not set it beside a previous period ("last
+period's level" as a description of a method is fine; "down from <n> last period" is not).
+
 ## Recommendations
 Concrete next steps from the losses/anomalies. Any recommendation resting on a requiresDownstreamData
 finding says to confirm downstream/lead-quality first. State the seasonality caveat once.
@@ -75,4 +92,5 @@ finding says to confirm downstream/lead-quality first. State the seasonality cav
 - Prefer quoting a finding's `statement` as the basis for a win/loss/anomaly point, then paraphrase around it — this keeps the number anchored and the role/period correct.
 - Annotations (`meta.annotations`) are client-supplied CONTEXT, not measured facts: quote verbatim under "Context", anchor each with `<!-- annotation:<aid> -->`, and never let a note's presence become a causal claim ("the June 8 refresh drove the lift" is forbidden; "the lift coincided with a June 8 refresh" is fine).
 - If `meta.periodConfidence` is `unconfirmed`, add "period labels approximate" once.
+- Estimates (`estimates.items[]`) are the tool's model, not data: quote `display` / `displayLow` / `displayHigh` and method results verbatim, only under "Estimates (modeled)", each on its anchored line with the word "estimated" (or "modeled" / "projected"). When a client note asked for a projection, the "Context" section still quotes the note verbatim; the projection itself goes in "Estimates (modeled)".
 - Keep the client copy free of internal ids, share links, and the facts filename.

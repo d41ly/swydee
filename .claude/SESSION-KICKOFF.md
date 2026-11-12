@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-11-11T17:10:48+02:00 @ 94dc7491d7ba3b3de61a82e56eaaef5a78e72533
+last-audit: 2026-11-12T05:21:16+02:00 @ 0283552969a9a62499e099f29d37450060d03e6e
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -92,7 +92,7 @@ bash tools/run-gates.sh                # every leg below, per-leg pass/fail; thi
 bash scripts/manifest-check.sh         # manifest ratchet — standing line; path = check-script: above
 ```
 
-Legs: the 8 PowerShell suites · ps source hygiene (+ its self-test) · memory hygiene (kit 2.2: 19 checks, 12 armed here)
+Legs: the 9 PowerShell suites · ps source hygiene (+ its self-test) · memory hygiene (kit 2.2: 19 checks, 12 armed here)
 (+ self-test) · the manifest ratchet (+ self-test) · memory-recall kit selftest + skill-drift ·
 agent-instructions wiring (+ self-test) · agent-cap self-test · check-wiring self-test · the
 run-gates canary.
@@ -104,9 +104,10 @@ from the repo root).
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1484 assertions across the 8 suites after EXTR-aStrictSchema-1 + the ANOM_BUDGET_CONSTRAINED impression-share fix --
+1678 assertions across the 9 suites after ANLZ-aModeledGap-1 (which added the Forecast suite) --
 the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 365,
-Analyze 742, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
+Analyze 742, Forecast 194, Closer 129, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
+Was 1484 across 8 suites after EXTR-aStrictSchema-1 + the ANOM_BUDGET_CONSTRAINED impression-share fix.
 Was 1473 after EXTR-aStrictSchema-1 alone (1446 after the impression-share fix alone),
 1435 after ANLZ-aUniformLattice-9, 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +
 ANLZ-aCandidTally-1, 1276 after
@@ -236,7 +237,7 @@ true. Keep each to one line; link out for detail.*
   and `Analyze-SwydoReport` may open raw extractions.
 - The model does no arithmetic: all numbers are computed in PS and must trace through the
   closer (`Test-ReportNumbers.ps1`); an untraceable number blocks publish.
-- Suite output is **not uniform** — three suites print `Test-<Name>: N passed, M failed.` and five
+- Suite output is **not uniform** — four suites print `Test-<Name>: N passed, M failed.` and five
   print `RESULT: N passed, M failed`. Assert the **exit code**, never parse the prose.
 - In PowerShell, bare `bash` resolves to **WSL**, not git-bash. Every kit script here is git-bash;
   use `& "C:/Program Files/Git/bin/bash.exe" <script>` from a PS wrapper.
