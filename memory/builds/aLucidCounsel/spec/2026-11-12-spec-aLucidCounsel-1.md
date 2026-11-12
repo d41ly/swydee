@@ -1,6 +1,6 @@
 # ORCH-aLucidCounsel-1 — the report is analysis and advice, not an inventory of the dashboard
 
-**Status:** INPROGRESS · rev-2 · 2026-11-12 · node a · Tier-2 · base 243c00b8 · streams orchestration · review 2026-11-12-review-aLucidCounsel-2
+**Status:** CLOSED · rev-2 · 2026-11-12 · node a · Tier-2 · base 243c00b8 · streams orchestration · review 2026-11-12-review-aLucidCounsel-2 · landed 409c388
 
 ## 1. Goal
 
