@@ -1,6 +1,6 @@
 # ANLZ-aDerivedMetric-1 — derived metrics computed by a tool from reported components
 
-**Status:** INPROGRESS · rev-1 · 2026-11-12 · node a · Tier-2 · base c1dbe13e · streams analysis+orchestration · review 2026-11-12-review-aDerivedMetric-1
+**Status:** CLOSED · rev-1 · 2026-11-12 · node a · Tier-2 · base c1dbe13e · streams analysis+orchestration · review 2026-11-12-review-aDerivedMetric-1 · ratified 2026-11-12 · landed 0c2360f
 
 ## 1. Goal
 
