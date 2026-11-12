@@ -1,6 +1,6 @@
 # ORCH-aLucidCounsel-1 — the report is analysis and advice, not an inventory of the dashboard
 
-**Status:** CLOSED · rev-2 · 2026-11-12 · node a · Tier-2 · base 243c00b8 · streams orchestration · review 2026-11-12-review-aLucidCounsel-2 · landed 409c388
+**Status:** CLOSED · rev-3 · 2026-11-12 · node a · Tier-2 · base 243c00b8 · streams orchestration · review 2026-11-12-review-aLucidCounsel-2 · landed 409c388
 
 ## 1. Goal
 
@@ -152,6 +152,9 @@ none
 - rev-1 · 2026-11-12 · initial draft, written alongside the build.
 - rev-2 · 2026-11-12 · build review folded in (review-2): S5 added, design step 4 and section 5
   updated, deferred items listed in section 3, the default-OFF flag deviation recorded.
+- rev-3 · 2026-11-12 · owner correction after landing: the per-platform summary of main metrics
+  is restored as a required "Key numbers" list opening each platform section; the narrative rules
+  are unchanged and the reviewer's value check exempts that list.
 
 ## 10. Reuse audit
 

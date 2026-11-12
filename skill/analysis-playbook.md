@@ -12,12 +12,14 @@ accurate. The report is an analyst advising a client on how to run their account
 - It answers four questions, in this order: **what happened, why, what it means for the business,
   and what we do about it.**
 - **Every number earns its place.** A figure appears only as evidence for a point. If you cannot
-  finish the sentence "this matters because ...", the figure does not go in the report.
+  finish the sentence "this matters because ...", the figure does not go in the narrative. The one
+  exception is the "Key numbers" summary that opens each platform section: it states the main
+  metrics plainly so the client has the month's figures in one place (template, Structure).
 - **Every point lands somewhere.** An observation leads to a recommendation, a decision the client
   must make, or an explicit "no action, and here is why".
 - It is one argument in one voice, read top to bottom. It is not a list of findings.
 
-A useful test for any paragraph: could the client have written it themselves from the dashboard?
+A useful test for any paragraph outside "Key numbers": could the client have written it themselves from the dashboard?
 If yes, it is description. Add the interpretation or cut it.
 
 ## Ground rules that still bind the analysis

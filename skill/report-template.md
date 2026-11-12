@@ -29,13 +29,16 @@ The client already has the dashboard. The report is an analyst advising them on 
 account or channel: what happened, why, what it means for their business, and what to do next. It is read
 top to bottom as one argument in one voice.
 
-- **Every number earns its place.** A figure appears only as evidence for a point, and the sentence
-  or the one after it says what the figure means. Never list a metric because the dashboard has it.
+- **One summary of the main numbers, then the argument.** Each platform section opens with a short
+  "Key numbers" list of its main metrics (below). It orients the reader and is the only list of
+  metrics in the report.
+- **Outside that summary, every number earns its place.** A figure appears only as evidence for a
+  point, and the sentence or the one after it says what the figure means.
 - **Interpret, then advise.** Each part of the narrative ends in a consequence: a recommendation, a
   decision for the client, or a stated reason for leaving things alone.
-- **No inventory sections.** There is no list of headline metrics and no list of findings. A finding
-  that carries no argument is not in the narrative (see Data notes for the few that must be on
-  record).
+- **No inventory of findings.** There is no list of findings, and no second list of metrics after
+  "Key numbers". A finding that carries no argument is not in the narrative (see Data notes for the
+  few that must be on record).
 - **Honest about limits.** Say what the data shows, what it suggests, and what it cannot tell us.
   Confidence words follow the worksheet's confidence levels and the voice profile.
 - **Plain, fluent prose.** Short paragraphs that connect ("because", "which means", "so"). Bullets
@@ -67,6 +70,26 @@ not its title. Keep `## Data notes` and `## Context (unverified, client-supplied
  model), and the period. Name the comparison period (meta.previousPeriod, in words) only when
  meta.compareBasis is not `untrusted`; otherwise say there is no trusted comparison this period.>
 
+### Key numbers
+- <Metric> was/were <displayCurrent> in <period in words> against <displayPrevious> in <previous period in words> (an increase / a decrease of <displayDelta>, sign dropped).
+- ...one bullet per main headline metric, each on ONE physical line...
+<REQUIRED for every platform, in every voice. The main points of the account at a glance, from
+ `platforms[].headline` only: what the account reached (impressions, and impression share where the
+ platform has it), the response (clicks, click-through rate), what it cost (cost, cost per click)
+ and what it produced (conversions, conversion rate, cost per conversion, and revenue or return
+ where reported), in that order. For SEO or email use that channel's equivalents. Normally six to
+ ten bullets; leave out metrics that are zero, do not apply to the account, or repeat another
+ bullet. Rules:
+ * the against-last-period clause only when the metric has `hasComparison:true` and
+   meta.compareBasis is not `untrusted`; otherwise state the level alone;
+ * plain statements, no interpretation: the insights below carry the meaning. A qualifier word
+   ("strong", "concerning") is allowed where the voice calls for it, never on a `neutral` metric;
+ * when a figure is known to be compromised (a declared outage, a major gap or discrepancy on that
+   metric), say so in a short clause on the same bullet, so the list cannot be read without it;
+ * NO derived and NO estimate figure here, and no finding figure: headline display strings only;
+ * the delta of a rate is a relative change: write "a relative decrease of <displayDelta>".
+ The insights may quote the same figures again where they are evidence; they do not walk the list.>
+
 ### <Insight 1, as a plain-sentence heading with NO figures, e.g. "Clicks cost more, and the rise sits in one keyword">
 <The argument, in prose: what moved or what stands out (with the figures that prove it), where it
  sits (the breakdown rows that carry it), why we think it happened and how sure we are, and what it
@@ -77,7 +100,7 @@ not its title. Keep `## Data notes` and `## Context (unverified, client-supplied
 <Up to five insights, in order of importance to the client, not in dashboard order; fewer, and a
  short report, when little moved. Include what is working when it is real - a client needs to know
  what to protect - and say plainly when nothing improved. Length guide: the insight narrative for
- one platform runs to roughly 800 to 1,200 words. Past that, cut the hedges and the rivals that do
+ one platform runs to roughly 800 to 1,200 words, not counting "Key numbers". Past that, cut the hedges and the rivals that do
  not change the action before cutting evidence.>
 ```
 
@@ -100,7 +123,8 @@ not its title. Keep `## Data notes` and `## Context (unverified, client-supplied
   comparison): write "budget ran out for `<N>` of eligible impressions".
 
 **Narrate every comparison as prose - never a table, chart, or other structured format.** The client
-already sees the tabular layer as Swydo widgets. Do not emit markdown tables anywhere in the report.
+already sees the tabular layer as Swydo widgets. Do not emit markdown tables anywhere in the report;
+"Key numbers" is a bullet list of sentences, not a table.
 
 **Derived metrics** [include ONLY if the facts have a `derivedMetrics` block; then every entry is required].
 Put each entry in its platform's section (`platformId`), inside the insight paragraph it supports. That
