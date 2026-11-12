@@ -9,8 +9,8 @@
 - CLOSED - ANLZ-aModeledGap-4 - one shared facts-member splicer, `skill/scripts/_FactsBlock.ps1`, used by the forecast tool; merged dddfe20. The derived-metrics tool adopts it under its own id.
 - BLOCKED - ANLZ-aModeledGap-5 - a fair backtest of run-rate and the base weighting needs daily data: a Day-cut widget in the Swydo report or extractor work on the live API, plus a share link from the owner (review D3).
 - CLOSED - ANLZ-aModeledGap-6 - a summable money metric can be estimated (coverage record `aggClass` sum); rates and per-unit prices stay refused; merged dddfe20.
-- INPROGRESS - ANLZ-aModeledGap-7 - a heading merely containing "recommend" untraced its section; one Recommendations definition in `Split-Sections` fixes it, under ANLZ-aModeledGap-8.
-- INPROGRESS - ANLZ-aModeledGap-8 - fold-in of the follow-up build's review: Recommendations and title rules, name masking in headings, money and splicer hardening -> [spec](../builds/aModeledGap/spec/2026-11-12-spec-aModeledGap-3.md)
+- CLOSED - ANLZ-aModeledGap-7 - a heading merely containing "recommend" untraced its section; one Recommendations definition in `Split-Sections` fixes it, under ANLZ-aModeledGap-8; merged 145eb44.
+- CLOSED - ANLZ-aModeledGap-8 - fold-in of the follow-up build's review: Recommendations and title rules, name masking in headings, money and splicer hardening; merged 145eb44 -> [spec](../builds/aModeledGap/spec/2026-11-12-spec-aModeledGap-3.md)
 - OPEN - ANLZ-aModeledGap-9 - digit labels ("Promo 2500", "401(k)", "365-day") are read as numbers in body and heading text; needs one label-masking rule for both, designed with ANLZ-aModeledGap-3.
 - OPEN - ANLZ-aModeledGap-10 - a line starting with `#` inside a fenced code block is treated as a heading by `Split-Sections`; ignore or refuse fences.
 - OPEN - ANLZ-aModeledGap-11 - the closer cannot read code-prefixed money ("SEK 1,025.00"); the forecast tool refuses such targets until it can, and a cost-per-conversion estimate there is unpublishable.

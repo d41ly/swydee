@@ -1,6 +1,6 @@
 # ANLZ-aModeledGap-8 — review fold-in: one Recommendations definition, heading rules, money and splicer hardening
 
-**Status:** INPROGRESS · rev-1 · 2026-11-12 · node a · Tier-2 · base 0946539c · streams analysis+orchestration · review 2026-11-12-review-aModeledGap-3
+**Status:** CLOSED · rev-1 · 2026-11-12 · node a · Tier-2 · base 0946539c · streams analysis+orchestration · review 2026-11-12-review-aModeledGap-3 · ratified 2026-11-12 · landed 145eb44
 
 ## 1. Goal
 
