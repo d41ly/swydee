@@ -1,6 +1,6 @@
 # ANLZ-aModeledGap-2 — closer traces headings and rejects comments that span lines
 
-**Status:** INPROGRESS · rev-2 · 2026-11-12 · node a · Tier-2 · base d7f015b1 · streams analysis+orchestration · review 2026-11-12-review-aModeledGap-2
+**Status:** CLOSED · rev-2 · 2026-11-12 · node a · Tier-2 · base d7f015b1 · streams analysis+orchestration · review 2026-11-12-review-aModeledGap-2 · ratified 2026-11-12 · landed dddfe20
 
 ## 1. Goal
 

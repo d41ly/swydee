@@ -1,6 +1,6 @@
 # ANLZ-aModeledGap-1 — modeled estimates for a metric declared incomplete
 
-**Status:** INPROGRESS · rev-2 · 2026-11-12 · node a · Tier-2 · base 02835529 · streams analysis+orchestration · review 2026-11-12-review-aModeledGap-1
+**Status:** CLOSED · rev-2 · 2026-11-12 · node a · Tier-2 · base 02835529 · streams analysis+orchestration · review 2026-11-12-review-aModeledGap-1 · ratified 2026-11-12 · landed dddfe20
 
 ## 1. Goal
 
