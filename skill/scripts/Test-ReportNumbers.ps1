@@ -315,6 +315,221 @@ function Split-Sections($reportText){
   return $sections
 }
 
+# ===================== derived metrics (Resolve-SwydoMetric.ps1) =====================
+# facts.derivedMetrics.entries[] are figures the PLATFORM DOES NOT REPORT: a tool computed them from
+# reported components. They trace ONLY on a body line of their own platform's section that echoes
+# <!-- derived:<id> -->, and that line must say so in text the client still sees after the anchors are
+# stripped. Everything here is inert when the facts carry no derivedMetrics block and the report no
+# derived anchor, so every pre-existing facts file verifies exactly as before.
+#
+# Trust rule: the model writes the REQUEST as well as the report, so nothing the request can spell
+# (label, source, and the refusal reasons that echo request text) is ever a tracing candidate. Only
+# tool-computed displays, facts values, the tool's own notes and the facts-built formula are.
+$script:DerAnchorRx   = '<!--\s*derived:([^\s]+?)\s*-->'
+$script:DerMinVersion = 2      # v1 entries could rest on a request-asserted widget total
+$script:DerApos       = "['" + [char]0x2019 + "]"
+# the approximation word must sit DIRECTLY before the figure ("about $42.26"), optionally with a bracket
+$script:DerApproxEndRx = '(?i)(?:\b(?:about|approximately|approx\.?|roughly|around|circa|nearly|almost)\s+|[~' + [char]0x2248 + ']\s?)[(\[]?$'
+$script:DerRefuseRx   = '(?i)\b(could not|cannot|can' + $script:DerApos + 't|couldn' + $script:DerApos + 't|unable to)\b.{0,40}\b(calculat\w*|deriv\w*|comput\w*|work(ed)? out)\b'
+
+function Get-DerivedMarkRx($platformName){
+  # The ONE accepted family of wording, as a closed grammar: a derived word (not itself negated),
+  # immediately followed by a statement that the platform does not report the figure:
+  #   derived - not a figure <P> reports | calculated, not reported by <P> | computed: <P> does not / doesn't report it
+  # <P> is the entry's platform name, "the platform" or "the dashboard".
+  $p = '(?:' + $(if($platformName){ [regex]::Escape([string]$platformName) + '|' } else { '' }) + 'the platform|the dashboard)'
+  $neg = '(?<!(?:\bnot|\bnever|n' + $script:DerApos + 't)\s+(?:\w+\s+){0,2})'
+  $sep = '\s*[,;:(' + [char]0x2014 + [char]0x2013 + '-]?\s*'
+  $tail = '(?:not\s+a\s+(?:figure|number|metric)\s+(?:that\s+)?' + $p + '\s+reports' +
+          '|not\s+reported\s+by\s+' + $p +
+          '|' + $p + '\s+(?:does\s+not|doesn' + $script:DerApos + 't)\s+report\s+(?:it|this(?:\s+(?:figure|number|metric))?))'
+  return ('(?i)' + $neg + '\b(?:derived|calculated|computed)\b' + $sep + $tail)
+}
+function Add-DerivedCandidate($list,$disp,$hasCmp,$type,$flags){
+  # $flags: der (entry id), fig (a figure of the entry itself), approx (needs approximate wording),
+  #         bound (an end of the range), neg (a negative VALUE, so its minus sign is not a comparison)
+  $v = Normalize-Num $disp
+  if($null -eq $v){ return }
+  if($type){ $ty = Map-CellType $type } else { $ty = Type-FromDisplay $disp }
+  $c = [ordered]@{ value=$v; type=$ty; hasComparison=[bool]$hasCmp; ulp=(Get-Ulp $disp); der=$null; fig=$false; approx=$false; bound=$false; neg=$false }
+  if($flags){ foreach($k in $flags.Keys){ $c[$k] = $flags[$k] } }
+  [void]$list.Add($c)
+}
+function Build-DerivedIndex($facts){
+  # -> @{ id -> @{ entry; resolved; stale; cands; ranges; markRx; seen; formulaSeen } }
+  $idx = @{}
+  if(-not $facts -or -not ($facts.PSObject.Properties.Name -contains 'derivedMetrics') -or -not $facts.derivedMetrics){ return $idx }
+  foreach($e in @($facts.derivedMetrics.entries)){
+    $id = [string]$e.id
+    if(-not $id){ continue }
+    $cands = New-Object System.Collections.ArrayList
+    $ranges = New-Object System.Collections.ArrayList
+    $resolved = ([string]$e.status -eq 'resolved')
+    # an entry from an older tool version, or one resting on a request-asserted widget, lends nothing
+    $stale = (-not ($e.PSObject.Properties.Name -contains 'v')) -or ([int]$e.v -lt $script:DerMinVersion)
+    foreach($pn in @('current','previous')){ if($e.$pn){ foreach($in in @($e.$pn.inputs)){ if($in -and $in.source -and ([string]$in.source.basis -eq 'request-asserted')){ $stale = $true } } } }
+    if($resolved -and -not $stale){
+      $hasCmp = [bool]($e.comparison -and $e.comparison.hasComparison -eq $true)
+      foreach($pn in @('current','previous')){
+        $pb = $e.$pn
+        if(-not $pb -or -not ($pb.PSObject.Properties.Name -contains 'display')){ continue }
+        $isNeg = ((Normalize-Num $pb.display) -lt 0)
+        Add-DerivedCandidate $cands $pb.display     $hasCmp $e.type @{ der=$id; fig=$true; approx=($pb.approximate -eq $true); neg=$isNeg }
+        Add-DerivedCandidate $cands $pb.displayLow  $hasCmp $e.type @{ der=$id; fig=$true; bound=$true }
+        Add-DerivedCandidate $cands $pb.displayHigh $hasCmp $e.type @{ der=$id; fig=$true; bound=$true }
+        if($pb.displayLow -and $pb.displayHigh){ [void]$ranges.Add(@([string]$pb.displayLow,[string]$pb.displayHigh)) }
+        foreach($in in @($pb.inputs)){
+          if(-not $in){ continue }
+          # inputs and their rows are facts or subtotals, never comparison evidence: a comparison claim
+          # on a headline input still passes through the platform's own pool, with the headline's own flag
+          $sub = [bool]($in.source -and [string]$in.source.kind -ne 'headline')
+          Add-DerivedCandidate $cands $in.display $false $in.type @{ der=$id; fig=$sub }
+          if($in.source){
+            foreach($r in (@($in.source.rows) + @($in.source.otherRows))){ if($r){ Add-DerivedCandidate $cands $r.display $false $in.type @{ der=$id } } }
+            foreach($cb in @($in.source.corroboratedBy)){ if($cb){ Add-DerivedCandidate $cands $cb.display $false $in.type @{ der=$id } } }
+            if($in.source.reconciledWith){ Add-DerivedCandidate $cands $in.source.reconciledWith.allRows $false $in.type @{ der=$id }; Add-DerivedCandidate $cands $in.source.reconciledWith.account $false $in.type @{ der=$id } }
+          }
+        }
+      }
+      if($hasCmp){
+        Add-DerivedCandidate $cands $e.comparison.displayDelta     $true 'percent' @{ der=$id; fig=$true; approx=($e.comparison.approximate -eq $true) }
+        Add-DerivedCandidate $cands $e.comparison.displayDeltaLow  $true 'percent' @{ der=$id; fig=$true; bound=$true }
+        Add-DerivedCandidate $cands $e.comparison.displayDeltaHigh $true 'percent' @{ der=$id; fig=$true; bound=$true }
+        if($e.comparison.displayDeltaLow -and $e.comparison.displayDeltaHigh){ [void]$ranges.Add(@([string]$e.comparison.displayDeltaLow,[string]$e.comparison.displayDeltaHigh)) }
+      }
+      # (the reported counterpart is NOT indexed: a derived line sits in its platform's own section, where
+      #  the headline already traces with its own comparison flag)
+      # the tool's own caveats, and the formula (which quotes facts row labels that may hold digits -
+      # "Promo 2500"): quotable on the anchored line, never comparison evidence
+      foreach($s in (@($e.notes) + @($e.formula))){
+        if(-not $s){ continue }
+        foreach($t in @(Get-MeasureTokens ([string]$s))){ [void]$cands.Add([ordered]@{ value=$t.value; type=$t.type; hasComparison=$false; ulp=(Get-Ulp $t.raw); der=$id; fig=$false; approx=$false; bound=$false; neg=$false }) }
+      }
+    }
+    # NOT indexed, by design: label, requestSource, and (for a refused entry) reasons - request text.
+    $idx[$id] = @{ entry=$e; resolved=$resolved; stale=$stale; cands=$cands; ranges=$ranges; markRx=(Get-DerivedMarkRx $e.platformName); seen=$false; formulaSeen=$false }
+  }
+  return $idx
+}
+function Get-DerivedVisible($s){
+  # what the client sees of a line: comments out, curly quotes straightened, whitespace collapsed
+  $t = ([string]$s) -replace '<!--.*?-->',''
+  $t = $t -replace ('[' + [char]0x2018 + [char]0x2019 + ']'),"'"
+  return ($t -replace '\s+',' ')
+}
+function Test-DerivedLine($line,$ders,$derIndex,$sectionHeader,$effPlatform,$tokHits,$sectionKind){
+  # Runs once per TRACED body line, after its tokens were matched ($tokHits = @{tok;hits} per token).
+  # Marks each anchored entry as seen - an anchor in a heading, in Recommendations or split across
+  # lines never gets here as a counted anchor, so it never counts as surfacing.
+  $out = New-Object System.Collections.ArrayList
+  if(@($ders).Count -eq 0){ return $out }
+  $visible = Get-DerivedVisible $line
+  $norm = ([string]$line) -replace $script:DashRx,'-'      # the text the tokenizer indexed (same length)
+  $add = { param($type,$did,$detail) [void]$out.Add([ordered]@{ type=$type; section=$sectionHeader; detail=$detail; snippet=[string]$did }) }
+  if($sectionKind -eq 'recommendations'){
+    foreach($did in @($ders | Select-Object -Unique)){ & $add 'derived-in-recommendations' $did "derived metric '$did' is anchored in Recommendations; cite derived figures in the platform section and refer to them here by name only" }
+    return $out
+  }
+  if($visible -match '<[A-Za-z/][^>]*>'){ & $add 'derived-line-html' ($ders -join ',') 'a line citing a derived metric must not contain HTML tags (text inside a tag can be hidden from the client)' }
+  foreach($did in @($ders | Select-Object -Unique)){
+    if(-not $derIndex.ContainsKey($did)){ & $add 'unknown-derived-anchor' $did "derived anchor '$did' is not in facts.derivedMetrics"; continue }
+    $d = $derIndex[$did]; $e = $d.entry
+    $want = [string]$e.platformId
+    if(($want -and ([string]$effPlatform -ne $want)) -or (-not $want -and $effPlatform)){
+      & $add 'derived-wrong-platform' $did $(if($want){ "derived metric '$did' belongs to platform '$want': cite it in that platform's own section" } else { "derived metric '$did' has no platform: state it outside the platform sections" })
+      continue
+    }
+    $d.seen = $true
+    if($d.stale){ continue }      # reported once, by Test-DerivedSurfacing
+    if(-not $d.resolved){
+      # a refusal is STATED, in words, with no figure standing in for the metric that was refused
+      if($visible -notmatch $script:DerRefuseRx){ & $add 'derived-refusal-unstated' $did "derived metric '$did' was refused: its line must say it could not be calculated" }
+      if(@($tokHits).Count -gt 0){ & $add 'derived-refused-figure' $did "derived metric '$did' was refused: its line must not carry a figure" }
+      continue
+    }
+    $mine = @($tokHits | Where-Object { @($_.hits | Where-Object { $_.der -eq $did }).Count -gt 0 })
+    # the marker is owed by any line with a number that traces ONLY through this entry
+    $only = @($mine | Where-Object { @($_.hits | Where-Object { -not $_.der }).Count -eq 0 })
+    if($only.Count -gt 0 -and ($visible -notmatch $d.markRx)){
+      & $add 'derived-marker-missing' $did "line citing derived metric '$did' must say so in one phrase: 'derived - not a figure $($e.platformName) reports', 'calculated, not reported by $($e.platformName)' or 'computed: $($e.platformName) does not report it'"
+    }
+    if($e.formula -and $visible.ToLowerInvariant().Contains((Get-DerivedVisible $e.formula).ToLowerInvariant())){ $d.formulaSeen = $true }
+    # spans of a properly written range: "between <low> and <high>" / "from <low> to <high>"
+    $spans = @()
+    foreach($rg in $d.ranges){
+      $lo = [regex]::Escape($rg[0]); $hi = [regex]::Escape($rg[1])
+      foreach($m in [regex]::Matches($norm,('(?i)\bbetween\s+' + $lo + '\s+and\s+' + $hi + '|\bfrom\s+' + $lo + '\s+to\s+' + $hi))){ $spans += ,@($m.Index,($m.Index+$m.Length)) }
+    }
+    foreach($th in $mine){
+      $fig = @($th.hits | Where-Object { $_.der -eq $did -and $_.fig })
+      if($fig.Count -eq 0){ continue }
+      $tokUlp = Get-Ulp $th.tok.raw
+      # quoted at the figure's own precision - a rounder number ("$42" for $42.27) is not the figure
+      if(@($fig | Where-Object { [double]$_.ulp -ge ([double]$tokUlp - 1e-12) }).Count -eq 0 -and @($th.hits | Where-Object { -not $_.der }).Count -eq 0){
+        & $add 'derived-rounded' $did "'$($th.tok.raw)' is a rounded form of a derived figure; quote the figure as given"
+        continue
+      }
+      if(@($fig | Where-Object { $_.approx -or $_.bound }).Count -eq 0){ continue }
+      $ti = [int]$th.tok.index
+      if(@($spans | Where-Object { $ti -ge $_[0] -and $ti -lt $_[1] }).Count -gt 0){ continue }
+      if($norm.Substring(0,$ti) -match $script:DerApproxEndRx){ continue }
+      & $add 'derived-approximation-missing' $did "'$($th.tok.raw)' is an approximate derived figure (its inputs are rounded): put 'about' directly before each such figure, or give its range as 'between <low> and <high>'"
+    }
+  }
+  return $out
+}
+function Test-DerivedUntraced($text,$globalCands,$derIndex,$sectionHeader){
+  # Recommendations is not traced, so a derived figure could be written there with no anchor and no
+  # marker. A number there that matches a derived figure and no measured fact is refused, and so is a
+  # derived anchor (it would otherwise look like surfacing).
+  $out = New-Object System.Collections.ArrayList
+  if($derIndex.Count -eq 0){ return $out }
+  $figs = New-Object System.Collections.ArrayList
+  foreach($k in $derIndex.Keys){ foreach($c in $derIndex[$k].cands){ if($c.fig){ [void]$figs.Add($c) } } }
+  foreach($ln in ((([string]$text) -replace "`r`n","`n") -split "`n")){
+    foreach($m in [regex]::Matches($ln,$script:DerAnchorRx)){
+      [void]$out.Add([ordered]@{ type='derived-in-recommendations'; section=$sectionHeader; detail="derived metric '$($m.Groups[1].Value)' is anchored in Recommendations; cite derived figures in the platform section and refer to them here by name only"; snippet=$m.Groups[1].Value })
+    }
+    foreach($tok in @(Get-MeasureTokens $ln)){
+      if(@(Find-Candidates $tok $figs).Count -gt 0 -and @(Find-Candidates $tok $globalCands).Count -eq 0){
+        [void]$out.Add([ordered]@{ type='derived-misuse'; section=$sectionHeader; detail="'$($tok.raw)' is a derived figure; it may be cited only on its anchored line in the platform section, not in Recommendations"; snippet=$tok.raw })
+      }
+    }
+  }
+  return $out
+}
+function Test-DerivedSurfacing($reportText,$derIndex){
+  # Every requested derived metric is surfaced on a traced body line of its platform section (a refusal
+  # is stated, not silently dropped), and a surfaced resolved one states its formula - the facts
+  # `formula`, verbatim - on a line carrying its anchor.
+  $out = New-Object System.Collections.ArrayList
+  if($derIndex.Count -eq 0){ return $out }
+  # a comment left open across a line break could hide the marker from the client while satisfying a
+  # per-line check; with derived metrics in play it is simply not allowed
+  foreach($ln in ((([string]$reportText) -replace "`r`n","`n") -split "`n")){
+    if((($ln -replace '<!--.*?-->','') -match '<!--|-->')){
+      [void]$out.Add([ordered]@{ type='multiline-comment'; section='(report)'; detail='an HTML comment is left open or spans more than one line; keep every anchor comment on a single line'; snippet=$(if($ln.Length -gt 60){ $ln.Substring(0,60) } else { $ln }) })
+      break
+    }
+  }
+  foreach($did in @($derIndex.Keys | Sort-Object)){
+    $d = $derIndex[$did]
+    if($d.stale){
+      [void]$out.Add([ordered]@{ type='derived-stale-entry'; section='(facts)'; detail="derived metric '$did' was written by an older version of the tool (or rests on a request-asserted widget) - re-run Resolve-SwydoMetric.ps1"; snippet=[string]$did })
+      continue
+    }
+    if(-not $d.seen){
+      $why = if($d.resolved){ 'requested derived metric not surfaced' } else { 'requested derived metric was REFUSED and the report does not say so' }
+      [void]$out.Add([ordered]@{ type='unsurfaced-derived'; section='(report)'; detail="$why (no body line of its platform section carries <!-- derived:$did -->)"; snippet=[string]$did })
+      continue
+    }
+    if($d.resolved -and $d.entry.formula -and -not $d.formulaSeen){
+      [void]$out.Add([ordered]@{ type='derived-formula-missing'; section='(report)'; detail="derived metric '$did' is cited but its formula is never stated on a line carrying its anchor; quote it once verbatim: $($d.entry.formula)"; snippet=[string]$did })
+    }
+  }
+  return $out
+}
+
 # modeled estimates (Invoke-SwydoForecast.ps1): rules live in _EstimateCheck.ps1, the closer only hooks them
 . "$PSScriptRoot\_EstimateCheck.ps1"
 # headings traced, comments on one line (ANLZ-aModeledGap-2)
@@ -325,6 +540,7 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   $measured = 0; $traced = 0
   $index = Build-FactIndex $facts
   $estIndex = Build-EstimateIndex $facts
+  $derIndex = Build-DerivedIndex $facts
   $sections = Split-Sections $reportText
 
   # 1 + 2: per-LINE number tracing + comparison guard. A finding's numbers (byFid) are in scope ONLY
@@ -334,6 +550,7 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
   $ctxPlatform = $null; $ctxLevel = 0   # last-seen platform section, for scoping unanchored subsections
   foreach($sec in $sections){
     if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ foreach($ev in @(Test-EstimateUntraced $sec.text $index.global $estIndex $sec.header)){ [void]$violations.Add($ev) } }
+    if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ foreach($dv in @(Test-DerivedUntraced $sec.text $index.global $derIndex $sec.header)){ [void]$violations.Add($dv) } }
     if($sec.kind -eq 'recommendations' -and -not $TraceRecs){ continue }
     # C1: more than one platform anchor in one section is ambiguous (silent-take-first would mis-scope)
     if($sec.platformIdCount -gt 1){
@@ -384,6 +601,10 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
       foreach($c in $base){ [void]$cands.Add($c) }
       foreach($fid in $fids){ if($index.byFid.ContainsKey($fid)){ foreach($c in $index.byFid[$fid]){ [void]$cands.Add($c) } } }
       foreach($aid in $anns){ if($index.byAnnotation.ContainsKey($aid)){ foreach($c in $index.byAnnotation[$aid]){ [void]$cands.Add($c) } } }
+      # derived metrics: in scope ONLY on the line echoing <!-- derived:id -->, which must carry the marker
+      $ders = @(); foreach($dm in [regex]::Matches($line,$script:DerAnchorRx)){ $ders += $dm.Groups[1].Value }
+      foreach($did in $ders){ if($derIndex.ContainsKey($did)){ foreach($c in $derIndex[$did].cands){ [void]$cands.Add($c) } } }
+      $derHits = New-Object System.Collections.ArrayList   # this line's traced tokens, judged below by Test-DerivedLine
       # modeled estimates: in scope ONLY on a line echoing <!-- estimate:id --> inside 'Estimates (modeled)'
       $ests = @(Get-EstimateAnchors $line)
       foreach($c in @(Get-EstimateLineCandidates $ests $estIndex $sec.header)){ [void]$cands.Add($c) }
@@ -394,7 +615,9 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
         $hits = @(Find-Candidates $tok $cands)   # @() -> real array so .Count is reliable (PS 5.1 unwrap)
         if($hits.Count -gt 0){
           $traced++
+          if($ders.Count -gt 0){ [void]$derHits.Add(@{ tok=$tok; hits=$hits }) }
         } else {
+          if($ders.Count -gt 0){ [void]$derHits.Add(@{ tok=$tok; hits=@() }) }
           [void]$violations.Add([ordered]@{ type='untraceable-number'; section=$sec.header; detail="'$($tok.raw)' ($($tok.type)) has no matching fact in scope"; snippet=$tok.raw })
           foreach($ev in @(Test-EstimateStray $tok $estIndex $sec.header)){ [void]$violations.Add($ev) }
           continue
@@ -402,7 +625,8 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
         # comparison guard: signed token, or a comparative verb near it on the SAME clause (no
         # sentence/clause punctuation between the verb and the number - avoids tainting an unrelated
         # no-comparison metric mentioned later in the same sentence).
-        $isCmp = $tok.signed
+        # (a leading minus on a NEGATIVE derived value is the value itself, not a comparison claim)
+        $isCmp = ($tok.signed -and (@($hits | Where-Object { $_.neg }).Count -eq 0))
         if(-not $isCmp){
           $tEnd = if($null -ne $tok.end){ [int]$tok.end } else { $tok.index + $tok.raw.Length }
           foreach($cm in $cmpMatches){
@@ -423,6 +647,8 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
           }
         }
       }
+      # derived metrics: marker, refusal wording, approximate wording, platform - judged on the traced line
+      foreach($dv in @(Test-DerivedLine $line $ders $derIndex $sec.header $eff $derHits $sec.kind)){ [void]$violations.Add($dv) }
     }
   }
 
@@ -495,7 +721,10 @@ function Invoke-Closer($reportText, $facts, [switch]$TraceRecs){
       detail=("facts declare extractionComplete=false (" + @($incIds).Count + " widget(s) incomplete) - re-extract before publishing"); snippet=$sn })
   }
 
-  # modeled estimates - presented when produced, always with their range and a not-measured statement
+  # 6: derived metrics - every requested one surfaced, and a cited one states its formula once
+  foreach($dv in @(Test-DerivedSurfacing $reportText $derIndex)){ [void]$violations.Add($dv) }
+
+  # 7: modeled estimates - presented when produced, always with their range and a not-measured statement
   foreach($ev in @(Test-EstimateSurfacing $reportText $estIndex)){ [void]$violations.Add($ev) }
 
   return [ordered]@{ measuresChecked=$measured; traced=$traced; violations=$violations }

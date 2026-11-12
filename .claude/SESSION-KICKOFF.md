@@ -2,7 +2,7 @@
 
 <!-- kickoff-manifest: v1.1 · instantiated from coding-governance skills/session-kickoff/MANIFEST-TEMPLATE.md -->
 <!-- manifest-audit
-last-audit: 2026-11-12T06:41:39+02:00 @ 9025729e70bb80313d5ec83bc30d92972f8c7844
+last-audit: 2026-11-12T06:58:01+02:00 @ 0283552969a9a62499e099f29d37450060d03e6e
 watch: AGENTS.md; skill; tests; tools; scripts; memory-tree; memory-recall; .memory-tree.conf
 verify-paths: AGENTS.md; memory/builds/aCanonicalClient/spec/2026-07-07-spec-aCanonicalClient-1.md; tools/gate-legs.json
 check-script: scripts/manifest-check.sh
@@ -92,7 +92,7 @@ bash tools/run-gates.sh                # every leg below, per-leg pass/fail; thi
 bash scripts/manifest-check.sh         # manifest ratchet — standing line; path = check-script: above
 ```
 
-Legs: the 9 PowerShell suites · ps source hygiene (+ its self-test) · memory hygiene (kit 2.2: 19 checks, 12 armed here)
+Legs: the 10 PowerShell suites · ps source hygiene (+ its self-test) · memory hygiene (kit 2.2: 19 checks, 12 armed here)
 (+ self-test) · the manifest ratchet (+ self-test) · memory-recall kit selftest + skill-drift ·
 agent-instructions wiring (+ self-test) · agent-cap self-test · check-wiring self-test · the
 run-gates canary.
@@ -104,9 +104,9 @@ from the repo root).
 
 ALL suites re-run green on every unit, not just the touched one (green-count contract: a unit is
 additive on its suite's count; other suites' counts stay unchanged). Baseline at adoption:
-1713 assertions across the 9 suites after ANLZ-aModeledGap-2 (ANLZ-aModeledGap-1 added the Forecast suite) --
+1977 assertions across the 10 suites after ANLZ-aDerivedMetric-1 (which added the ResolveMetric suite) --
 the total is the SUM of the per-suite figures, so an arithmetic slip is self-evident: Extractor 365,
-Analyze 742, Forecast 213, Closer 145, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
+Analyze 742, ResolveMetric 264, Forecast 213, Closer 145, TrendAnalyze 76, TrendFacts 24, Archive 94, Ledger 50, Sync 4.
 Was 1678 after ANLZ-aModeledGap-1 alone, and 1484 across 8 suites after EXTR-aStrictSchema-1 + the ANOM_BUDGET_CONSTRAINED impression-share fix.
 Was 1473 after EXTR-aStrictSchema-1 alone (1446 after the impression-share fix alone),
 1435 after ANLZ-aUniformLattice-9, 1413 after ANLZ-aUniformLattice-10, 1405 after EXTR-aUniformLattice-1 +

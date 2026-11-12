@@ -21,6 +21,7 @@ If `voice:<type>` names an unknown profile, fall back to `causal` and say so in 
 4. Surface every `dataGaps`/`discrepancies` finding (sev ≥ major) and every `GAP_UNIT_UNCONFIRMED`.
 5. **Anchors** (machine-read verification scaffold; keep exactly in the draft). These are HTML comments the verifier uses to scope numbers and confirm surfacing — they are **stripped from the delivered client report** (the closer's `-PublishTo` writes the clean copy on PASS), so they never reach the client; include them in the draft anyway. Each platform gets its own `##` section header with `<!-- platform:<providerId> -->` immediately under it — **exactly one** platform anchor per section (two in one section is flagged, and an anchor whose id isn't in the facts is flagged). Put `<!-- finding:<fid> -->` on the **same line** as that finding's numbers (a finding's figures only trace on the line carrying its fid — don't split the comment onto its own line), and `<!-- caveat:<id> -->` on the caveat's line. The prose around them is free to paraphrase.
 6. **Estimates are modeled, never measured.** A number from the facts `estimates` block (written by `Invoke-SwydoForecast.ps1`) appears ONLY under a heading that reads exactly `## Estimates (modeled)` (no sub-headings inside it), on a body line that carries its `<!-- estimate:EST#n -->` anchor AND a visible word saying what it is ("estimated", "modeled", "projected") - the anchor is stripped from the client copy, the word is what the client sees. EVERY line in that section that carries a number needs both. Each action / total estimate in the facts must be presented, with its base (`display`) and its range (`displayLow` to `displayHigh`); the cost-per-conversion and conversion-rate estimates are optional. Quote the display strings verbatim - never round one ("about 57" for an estimated 56.7 is rejected anywhere in the report). Set an estimate beside what was recorded THIS period (`measuredDisplay`), never beside a previous period. Never show the id `EST#n` in visible text, and keep every HTML comment on one line. Measured sections keep the measured figures; do not restate a headline, a delta or a finding using an estimate, and do not put an estimate in Recommendations. You still do no arithmetic: not a midpoint, not a rounded range, not a difference between an estimate and a measured figure.
+7. **Derived metrics are calculated, not reported by the platform.** A number from the facts `derivedMetrics` block (written by `Resolve-SwydoMetric.ps1`) appears ONLY in its own platform's section, on a body line (not a heading) that carries its `<!-- derived:<id> -->` anchor and says so in words the client still sees once the anchor is stripped. Exactly three wordings are accepted, where `<P>` is the platform's name as in the facts, "the platform" or "the dashboard": **"derived — not a figure `<P>` reports"**, **"calculated, not reported by `<P>`"**, or **"computed: `<P>` does not report it"** ("derived", "calculated" and "computed" are interchangeable; "doesn't" is accepted). Quote the entry's `formula` verbatim on an anchored line, once per entry. When `approximate` is true, put "about" (or approximately / roughly / around) **directly before each such figure**, or give the range as "between `<displayLow>` and `<displayHigh>`"; quote every derived figure at the precision given, never rounder. Compare with the previous period only when `comparison.hasComparison` is true. A `refused` entry gets one line saying it could not be calculated, with the reason in plain words and **no number at all**. **No derived figure and no derived anchor in Recommendations** - refer to the metric there by name. Do not put figures in a request `label`: nothing typed into a request can be cited. See **Derived metrics** under Structure.
 
 ## Structure
 
@@ -49,6 +50,37 @@ job is the narrative. Use bullets or sentences, one point per featured metric, e
 (`displayCurrent`, `displayPrevious`, `displayDelta` — drop the delta's sign in prose, the increase/decrease
 word carries direction). Only include the against-last-period clause for metrics whose fact has
 `hasComparison:true`. Do not emit markdown tables anywhere in the report.
+
+**Derived metrics** [include ONLY if the facts have a `derivedMetrics` block; then every entry is required].
+Put each entry in its platform's section (`platformId`), next to the reported metric it qualifies. One
+bullet per entry, written on ONE physical line (the closer reads line by line - never wrap it):
+```
+- <label> was <current.display> in <current.period> (derived — not a figure <platformName> reports: <formula>, <numerator input display> over <denominator input display>), alongside the reported <reported.displayCurrent> <reported.metric>.  <!-- derived:<id> -->
+```
+- When `current.approximate` is true write "was about <current.display>", or "was between <displayLow> and
+  <displayHigh>", and say in a few words that the dashboard rounds the inputs. When it is false, write the
+  figure plainly - it is exact.
+- The formula is quoted from `formula` exactly, on a line carrying the anchor, once per entry. A later
+  mention of the figure needs the anchor and the "derived — not a figure <platform> reports" wording again,
+  but not the formula.
+- Input figures on that line come from `current.inputs[].display`. A filtered input's subtotal can show more
+  decimals than the dashboard's own cells (for example 97.59): quote it as given.
+- Previous period: only when `comparison.hasComparison` is true, e.g. "up 70.7% from $24.76" - with "about"
+  directly before any figure whose block says `approximate`. When it is false, say there is no like-for-like
+  comparison and give the reason from `comparison.reason` in plain words; do not reach for a previous figure
+  from a widget yourself.
+- `notes[]` are the tool's caveats (a cross-check that could not be used, a rounded input). Carry the ones that
+  change how far the figure can be trusted, on the anchored line itself. A separate follow-on sentence may
+  carry the anchor too; it needs the "derived — not reported" wording only if it quotes a number that appears
+  nowhere else in that platform's data.
+- A `refused` entry: one line saying the figure could not be calculated from this dashboard and why
+  (`reasons[]`, in plain words), with the anchor and **no number of any kind** - not the reported figure, not
+  a number from the reason. If the entry has a `platformId`, the line goes in that platform's section;
+  otherwise in the intro, above the first platform section.
+- A negative result is quoted with its minus sign, as given.
+- A derived figure is still measured data rearranged: every caveat on its inputs (incomplete tracking, the
+  seasonality caveat, a major discrepancy) applies to it too - say so where it matters.
+- Recommendations: name the metric ("cost per lead without Directions"), never its figure, and no anchor.
 
 Then:
 
@@ -93,5 +125,6 @@ finding says to confirm downstream/lead-quality first. State the seasonality cav
 - Annotations (`meta.annotations`) are client-supplied CONTEXT, not measured facts: quote verbatim under "Context", anchor each with `<!-- annotation:<aid> -->`, and never let a note's presence become a causal claim ("the June 8 refresh drove the lift" is forbidden; "the lift coincided with a June 8 refresh" is fine).
 - If `meta.periodConfidence` is `unconfirmed`, add "period labels approximate" once.
 - Estimates (`estimates.items[]`) are the tool's model, not data: quote `display` / `displayLow` / `displayHigh` and method results verbatim, only under "Estimates (modeled)", each on its anchored line with the word "estimated" (or "modeled" / "projected"). When a client note asked for a projection, the "Context" section still quotes the note verbatim; the projection itself goes in "Estimates (modeled)".
+- Derived metrics (`derivedMetrics.entries[]`) are the tool's arithmetic over reported components: quote `display` strings verbatim, in the platform's own section, on one line with `<!-- derived:<id> -->`; say "derived — not a figure <platform> reports"; state the `formula` once; put "about" directly before anything `approximate`; keep them out of Recommendations. If you want a figure the block does not hold, request it from the tool (SKILL.md step 2a); never work it out yourself.
 - Headings are verified too: a number in a heading must be a facts display string in that section's scope, so keep figures in the body unless the heading quotes one verbatim. Keep every anchor comment on one line. Small whole numbers under 100 are not machine-checked, which makes them the one place a slip can pass: quote them from the facts exactly like any other figure.
 - Keep the client copy free of internal ids, share links, and the facts filename.

@@ -9,3 +9,7 @@
 - INPROGRESS - ANLZ-aModeledGap-4 - one shared facts-member splicer, `skill/scripts/_FactsBlock.ps1`, used by the forecast tool; committed, awaiting merge. Left: the unmerged derived-metrics tool adopts it when it lands.
 - BLOCKED - ANLZ-aModeledGap-5 - a fair backtest of run-rate and the base weighting needs daily data: a Day-cut widget in the Swydo report or extractor work on the live API, plus a share link from the owner (review D3).
 - INPROGRESS - ANLZ-aModeledGap-6 - a summable money metric can be estimated (coverage record `aggClass` sum); rates and per-unit prices stay refused; committed, awaiting merge.
+- INPROGRESS - ANLZ-aDerivedMetric-1 - derived metrics computed by `Resolve-SwydoMetric.ps1` and policed by the closer; reviewed, on `branch/derived-metrics`, awaiting the merge to `main` -> [spec](../builds/aDerivedMetric/spec/2026-11-12-spec-aDerivedMetric-1.md)
+- OPEN - ANLZ-aDerivedMetric-2 - breakdown rows carry display strings only; emitting raw cell values (`raw` / `rawPrevious`) from `Get-Breakdown` would make every filtered derived figure exact. The resolver already reads those keys.
+- OPEN - ANLZ-aDerivedMetric-3 - the resolver still has its own facts splicer; adopt `skill/scripts/_FactsBlock.ps1` (ANLZ-aModeledGap-4).
+- OPEN - ANLZ-aDerivedMetric-4 - `tools/Verify-DerivedMetrics.ps1` shares two readings with the tool (integer displays are exact; a row with no cell counts as zero) and does not model the widget cross-check -> [review](../builds/aDerivedMetric/reviews/2026-11-12-review-aDerivedMetric-1.md)
